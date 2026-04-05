@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team - Story Board View</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f3f4f6; color: #1f2937; }
+
+  /* Top bar */
+  .topbar { background: #fff; border-bottom: 1px solid #e5e7eb; padding: 0 24px; display: flex; align-items: center; height: 52px; }
+  .topbar-logo { font-weight: 700; font-size: 16px; color: #111827; margin-right: 32px; }
+  .topbar-logo .accent { color: #2563eb; margin-right: 4px; }
+  .topbar-nav { display: flex; height: 100%; }
+  .topbar-nav a { display: flex; align-items: center; padding: 0 14px; font-size: 13px; font-weight: 500; color: #6b7280; text-decoration: none; border-bottom: 2px solid transparent; transition: all 0.15s; }
+  .topbar-nav a:hover { color: #374151; }
+  .topbar-nav a.active { color: #2563eb; border-bottom-color: #2563eb; }
+
+  /* Breadcrumb bar */
+  .breadcrumb-bar { background: #fff; border-bottom: 1px solid #e5e7eb; padding: 12px 24px; display: flex; align-items: center; gap: 8px; }
+  .breadcrumb-bar a { font-size: 13px; color: #2563eb; text-decoration: none; }
+  .breadcrumb-bar a:hover { text-decoration: underline; }
+  .breadcrumb-bar .sep { color: #d1d5db; font-size: 12px; }
+  .breadcrumb-bar .current { font-size: 13px; color: #374151; font-weight: 600; }
+
+  /* Request header */
+  .req-header { background: #fff; border-bottom: 1px solid #e5e7eb; padding: 20px 24px; }
+  .req-header-top { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .req-id { font-size: 13px; font-weight: 700; color: #2563eb; }
+  .req-title { font-size: 18px; font-weight: 700; color: #111827; }
+  .type-badge { padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; }
+  .type-badge.feature { background: #eff6ff; color: #2563eb; }
+  .req-meta { font-size: 12px; color: #9ca3af; display: flex; gap: 16px; margin-top: 4px; }
+
+  /* Pipeline overview */
+  .pipeline-overview { background: #fff; border-bottom: 1px solid #e5e7eb; padding: 16px 24px; }
+  .pipeline-row { display: flex; align-items: center; gap: 6px; }
+  .pipe-stage { display: flex; align-items: center; gap: 6px; }
+  .pipe-dot { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
+  .pipe-dot.done { background: #16a34a; color: #fff; }
+  .pipe-dot.active { background: #2563eb; color: #fff; animation: pulse-ring 2s ease-in-out infinite; }
+  .pipe-dot.waiting { background: #e5e7eb; color: #9ca3af; }
+  @keyframes pulse-ring { 0%,100% { box-shadow: 0 0 0 0 rgba(37,99,235,0.3); } 50% { box-shadow: 0 0 0 6px rgba(37,99,235,0); } }
+  .pipe-label { font-size: 11px; color: #6b7280; }
+  .pipe-label.done { color: #16a34a; }
+  .pipe-label.active { color: #2563eb; font-weight: 600; }
+  .pipe-connector { width: 40px; height: 2px; background: #e5e7eb; }
+  .pipe-connector.done { background: #16a34a; }
+  .pipe-connector.active { background: #2563eb; }
+
+  /* Stats row */
+  .stats-row { display: flex; gap: 24px; margin-top: 12px; }
+  .stat-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #6b7280; }
+  .stat-value { font-weight: 700; color: #111827; font-size: 14px; }
+  .stat-value.green { color: #16a34a; }
+  .stat-value.blue { color: #2563eb; }
+
+  /* Tab bar */
+  .tab-bar { background: #fff; border-bottom: 1px solid #e5e7eb; padding: 0 24px; display: flex; gap: 4px; }
+  .tab { padding: 12px 16px; font-size: 13px; font-weight: 500; color: #6b7280; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
+  .tab:hover { color: #374151; }
+  .tab.active { color: #2563eb; border-bottom-color: #2563eb; }
+  .tab .count { background: #eff6ff; color: #2563eb; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 8px; margin-left: 6px; }
+
+  /* Board container */
+  .board { display: flex; gap: 16px; padding: 20px 24px; overflow-x: auto; min-height: calc(100vh - 280px); align-items: flex-start; }
+
+  /* Kanban column */
+  .column { min-width: 280px; max-width: 320px; flex: 1; background: #f9fafb; border-radius: 12px; border: 1px solid #e5e7eb; }
+  .col-header { padding: 14px 16px 10px; display: flex; align-items: center; gap: 8px; }
+  .col-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .col-dot.todo { background: #6b7280; }
+  .col-dot.progress { background: #2563eb; }
+  .col-dot.review { background: #8b5cf6; }
+  .col-dot.testing { background: #f59e0b; }
+  .col-dot.done { background: #16a34a; }
+  .col-title { font-size: 13px; font-weight: 600; color: #374151; }
+  .col-count { font-size: 12px; color: #9ca3af; margin-left: auto; }
+  .col-body { padding: 4px 8px 12px; display: flex; flex-direction: column; gap: 8px; }
+
+  /* Story card */
+  .story-card { background: #fff; border-radius: 10px; padding: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); border: 1px solid #e5e7eb; cursor: pointer; transition: all 0.15s; }
+  .story-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-color: #d1d5db; }
+  .story-card.active-card { border-left: 3px solid #2563eb; }
+  .story-id { font-size: 11px; font-weight: 600; color: #2563eb; margin-bottom: 4px; }
+  .story-title { font-size: 13px; font-weight: 600; color: #111827; line-height: 1.4; margin-bottom: 8px; }
+  .story-desc { font-size: 12px; color: #6b7280; line-height: 1.5; margin-bottom: 10px; }
+
+  /* Agent badge */
+  .agent-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 500; margin-bottom: 8px; }
+  .agent-badge.backend { background: #ecfdf5; color: #059669; }
+  .agent-badge.frontend { background: #fdf2f8; color: #db2777; }
+  .agent-badge.tester { background: #fffbeb; color: #d97706; }
+  .agent-badge.reviewer { background: #eff6ff; color: #2563eb; }
+  .agent-dot-sm { width: 6px; height: 6px; border-radius: 50%; }
+  .agent-dot-sm.active { background: currentColor; animation: blink 1.5s ease-in-out infinite; }
+  @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  /* Test cases */
+  .tests-section { margin-top: 8px; }
+  .tests-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .tests-label { font-size: 11px; font-weight: 600; color: #374151; text-transform: uppercase; letter-spacing: 0.5px; }
+  .tests-count { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 6px; }
+  .tests-count.all-pass { background: #f0fdf4; color: #16a34a; }
+  .tests-count.partial { background: #fffbeb; color: #d97706; }
+  .tests-count.failing { background: #fef2f2; color: #dc2626; }
+  .tests-count.pending { background: #f3f4f6; color: #6b7280; }
+
+  .test-list { list-style: none; }
+  .test-item { display: flex; align-items: flex-start; gap: 6px; padding: 3px 0; font-size: 11px; line-height: 1.4; }
+  .test-icon { flex-shrink: 0; margin-top: 1px; font-size: 12px; }
+  .test-icon.pass { color: #16a34a; }
+  .test-icon.fail { color: #dc2626; }
+  .test-icon.running { color: #2563eb; animation: spin 1s linear infinite; }
+  .test-icon.pending { color: #d1d5db; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .test-name { color: #6b7280; }
+  .test-name.pass { color: #4b5563; }
+  .test-name.fail { color: #dc2626; }
+
+  /* PR badge */
+  .pr-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 6px; background: #f3f4f6; font-size: 11px; color: #6b7280; margin-top: 8px; }
+  .pr-badge.merged { background: #f0fdf4; color: #16a34a; }
+  .pr-badge.open { background: #eff6ff; color: #2563eb; }
+
+  /* Coverage bar */
+  .coverage-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .coverage-label { font-size: 11px; color: #6b7280; }
+  .coverage-bar { flex: 1; height: 4px; background: #e5e7eb; border-radius: 2px; overflow: hidden; }
+  .coverage-fill { height: 100%; border-radius: 2px; }
+  .coverage-fill.good { background: #16a34a; }
+  .coverage-fill.warn { background: #f59e0b; }
+  .coverage-fill.bad { background: #dc2626; }
+  .coverage-value { font-size: 11px; font-weight: 600; }
+  .coverage-value.good { color: #16a34a; }
+  .coverage-value.warn { color: #f59e0b; }
+
+  /* Acceptance criteria */
+  .ac-list { list-style: none; margin-top: 6px; }
+  .ac-item { display: flex; align-items: flex-start; gap: 6px; padding: 2px 0; font-size: 11px; color: #6b7280; }
+  .ac-check { width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid #d1d5db; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; font-size: 9px; }
+  .ac-check.checked { background: #16a34a; border-color: #16a34a; color: #fff; }
+
+  /* Separator */
+  .card-sep { height: 1px; background: #f3f4f6; margin: 8px 0; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-logo"><span class="accent">&#x25C6;</span> Agent Team</div>
+  <div class="topbar-nav">
+    <a href="#">Command Center</a>
+    <a href="#">History</a>
+    <a href="#">Releases</a>
+    <a href="#">Team</a>
+  </div>
+</div>
+
+<div class="breadcrumb-bar">
+  <a href="#">Command Center</a>
+  <span class="sep">&#x25B8;</span>
+  <span class="current">REQ-042: Login page with JWT authentication</span>
+</div>
+
+<div class="req-header">
+  <div class="req-header-top">
+    <span class="req-id">REQ-042</span>
+    <span class="req-title">Login page with JWT authentication</span>
+    <span class="type-badge feature">Feature</span>
+  </div>
+  <div class="req-meta">
+    <span>Submitted by Chandramouli</span>
+    <span>12 minutes ago</span>
+    <span>Priority: High</span>
+  </div>
+</div>
+
+<div class="pipeline-overview">
+  <div class="pipeline-row">
+    <div class="pipe-stage">
+      <div class="pipe-dot done">&#x2713;</div>
+      <span class="pipe-label done">PRD</span>
+    </div>
+    <div class="pipe-connector done"></div>
+    <div class="pipe-stage">
+      <div class="pipe-dot done">&#x2713;</div>
+      <span class="pipe-label done">Stories</span>
+    </div>
+    <div class="pipe-connector done"></div>
+    <div class="pipe-stage">
+      <div class="pipe-dot active">3</div>
+      <span class="pipe-label active">Development</span>
+    </div>
+    <div class="pipe-connector active"></div>
+    <div class="pipe-stage">
+      <div class="pipe-dot active">1</div>
+      <span class="pipe-label active">Review</span>
+    </div>
+    <div class="pipe-connector"></div>
+    <div class="pipe-stage">
+      <div class="pipe-dot waiting">0</div>
+      <span class="pipe-label">Testing</span>
+    </div>
+    <div class="pipe-connector"></div>
+    <div class="pipe-stage">
+      <div class="pipe-dot done">1</div>
+      <span class="pipe-label done">Done</span>
+    </div>
+  </div>
+  <div class="stats-row">
+    <div class="stat-item">Stories: <span class="stat-value">5</span></div>
+    <div class="stat-item">Tests: <span class="stat-value blue">14/22</span> passing</div>
+    <div class="stat-item">Coverage: <span class="stat-value green">84%</span></div>
+    <div class="stat-item">PRs: <span class="stat-value">3</span> open</div>
+  </div>
+</div>
+
+<div class="tab-bar">
+  <div class="tab active">Story Board <span class="count">5</span></div>
+  <div class="tab">Agent Timeline</div>
+  <div class="tab">Outputs</div>
+  <div class="tab">Test Report</div>
+</div>
+
+<!-- KANBAN BOARD -->
+<div class="board">
+
+  <!-- TO DO Column -->
+  <div class="column">
+    <div class="col-header">
+      <div class="col-dot todo"></div>
+      <span class="col-title">To Do</span>
+      <span class="col-count">0</span>
+    </div>
+    <div class="col-body">
+      <div style="padding: 20px; text-align: center; font-size: 12px; color: #9ca3af;">
+        All stories have been picked up
+      </div>
+    </div>
+  </div>
+
+  <!-- IN PROGRESS Column -->
+  <div class="column">
+    <div class="col-header">
+      <div class="col-dot progress"></div>
+      <span class="col-title">In Progress</span>
+      <span class="col-count">3</span>
+    </div>
+    <div class="col-body">
+
+      <!-- Story: JWT Auth API -->
+      <div class="story-card active-card">
+        <div class="story-id">US-001</div>
+        <div class="story-title">JWT Authentication API Endpoints</div>
+        <div class="story-desc">
+          As a user, I want to register and login via REST API so that I receive a JWT token for authentication.
+        </div>
+        <div class="agent-badge backend"><span class="agent-dot-sm active"></span> Backend Specialist</div>
+
+        <div class="card-sep"></div>
+
+        <div class="tests-section">
+          <div class="tests-header">
+            <span class="tests-label">Test Cases</span>
+            <span class="tests-count partial">3/5</span>
+          </div>
+          <ul class="test-list">
+            <li class="test-item"><span class="test-icon pass">&#x2713;</span> <span class="test-name pass">POST /auth/register creates user and returns token</span></li>
+            <li class="test-item"><span class="test-icon pass">&#x2713;</span> <span class="test-name pass">POST /auth/login returns valid JWT for correct credentials</span></li>
+            <li class="test-item"><span class="test-icon pass">&#x2713;</span> <span class="test-name pass">POST /auth/login returns 401 for wrong password</span></li>
+            <li class="test-item"><span class="test-icon running">&#x25CB;</span> <span class="test-name">GET /auth/me returns user profile with valid token</span></li>
+            <li class="test-item"><span class="test-icon pending">&#x25CB;</span> <span class="test-name">GET /auth/me returns 401 with expired token</span></li>
+          </ul>
+        </div>
+
+        <div class="coverage-row">
+          <span class="coverage-label">Coverage</span>
+          <div class="coverage-bar"><div class="coverage-fill good" style="width:87%;"></div></div>
+          <span class="coverage-value good">87%</span>
+        </div>
+
+        <div class="pr-badge open">&#x1F517; PR #44 — Open</div>
+      </div>
+
+      <!-- Story: Login Page UI -->
+      <div class="story-card active-card">
+        <div class="story-id">US-002</div>
+        <div class="story-title">Login Page UI</div>
+        <div class="story-desc">
+          As a user, I want a login page with email and password fields so that I can authenticate.
+        </div>
+        <div class="agent-badge frontend"><span class="agent-dot-sm active"></span> Frontend Specialist</div>
+
+        <div class="card-sep"></div>
+
+        <div class="tests-section">
+          <div class="tests-header">
+            <span class="tests-label">Test Cases</span>
+            <span class="tests-count partial">2/4</span>
+          </div>
+          <ul class="test-list">
+            <li class="test-item"><span class="test-icon pass">&#x2713;</span> <span class="test-name pass">Renders email and password input fields</span></li>
+            <li class="test-item"><span class="test-icon pass">&#x2713;</span> <span class="test-name pass">Shows validation error for empty email</span></li>
+            <li class="test-item"><span class="test-icon running">&#x25CB;</span> <span class="test-name">Calls login API on form submit</span></li>
+            <li class="test-item"><span class="test-icon pending">&#x25CB;</span> <span class="test-name">Redirects to dashboard after successful login</span></li>
+          </ul>
+        </div>
+
+        <div class="coverage-row">
+          <span class="coverage-label">Coverage</span>
+          <div class="coverage-bar"><div class="coverage-fill warn" style="width:72%;"></div></div>
+          <span class="coverage-value warn">72%</span>
+        </div>
+
+        <div class="pr-badge open">&#x1F517; PR #45 — Open</div>
+      </div>
+
+      <!-- Story: Registration Page -->
+      <div class="story-card active-card">
+        <div class="story-id">US-003</div>
+        <div class="story-title">Registration Page UI</div>
+        <div class="story-desc">
+          As a new user, I want a registration form with name, email, and password so I can create an account.
+        </div>
+        <div class="agent-badge frontend"><span class="agent-dot-sm active"></span> Frontend Specialist</div>
+
+        <div class="card-sep"></div>
+
+        <div class="tests-section">
+          <div class="tests-header">
+            <span class="tests-label">Test Cases</span>
+            <span class="tests-count pending">0/5</span>
+          </div>
+          <ul class="test-list">
+            <li class="test-item"><span class="test-icon pending">&#x25CB;</span> <span class="test-name">Renders name, email, password fields</span></li>
+            <li class="test-item"><span class="test-icon pending">&#x25CB;</span> <span class="test-name">Validates password minimum 8 characters</span></li>
+            <li class="test-item"><span class="test-icon pending">&#x25CB;</span> <span class="test-name">Shows error if email already exists</span></li>
+            <li class="test-item"><span class="test-icon pending">&#x25CB;</span> <span class="test-name">Calls register API on submit</span></li>
+            <li class="test-item"><span class="test-icon pending">&#x25CB;</span> <span class="test-name">Redirects to login after registration</span></li>
+          </ul>
+        </div>
+
+        <div class="pr-badge" style="color:#9ca3af;">No PR yet</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- REVIEW Column -->
+  <div class="column">
+    <div class="col-header">
+      <div class="col-dot review"></div>
+      <span class="col-title">Review</span>
+      <span class="col-count">1</span>
+    </div>
+    <div class="col-body">
+
+      <div class="story-card">
+        <div class="story-id">US-004</div>
+        <div class="story-title">Protected Route Middleware</div>
+        <div class="story-desc">
+          As a developer, I want a route guard that redirects unauthenticated users to login.
+        </div>
+        <div class="agent-badge reviewer"><span class="agent-dot-sm active"></span> Code Reviewer</div>
+
+        <div class="card-sep"></div>
+
+        <div class="tests-section">
+          <div class="tests-header">
+            <span class="tests-label">Test Cases</span>
+            <span class="tests-count all-pass">4/4</span>
+          </div>
+          <ul class="test-list">
+            <li class="test-item"><span class="test-icon pass">&#x2713;</span> <span class="test-name pass">Redirects to /login when not authenticated</span></li>
+            <li class="test-item"><span class="test-icon pass">&#x2713;</span> <span class="test-name pass">Renders child component when authenticated</span></li>
+            <li class="test-item"><span class="test-icon pass">&#x2713;</span> <span class="test-name pass">Handles expired token by redirecting</span></li>
+            <li class="test-item"><span class="test-icon pass">&#x2713;</span> <span class="test-name pass">Preserves original URL for post-login redirect</span></li>
+          </ul>
+        </div>
+
+        <div class="coverage-row">
+          <span class="coverage-label">Coverage</span>
+          <div class="coverage-bar"><div class="coverage-fill good" style="width:93%;"></div></div>
+          <span class="coverage-value good">93%</span>
+        </div>
+
+        <div class="pr-badge open">&#x1F517; PR #46 — Under Review</div>
+
+        <div class="card-sep"></div>
+
+        <div style="font-size: 11px; color: #8b5cf6; margin-top: 4px;">
+          &#x1F50D; Code Reviewer: "Clean implementation. Checking edge case for token refresh..."
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- TESTING Column -->
+  <div class="column">
+    <div class="col-header">
+      <div class="col-dot testing"></div>
+      <span class="col-title">Testing</span>
+      <span class="col-count">0</span>
+    </div>
+    <div class="col-body">
+      <div style="padding: 20px; text-align: center; font-size: 12px; color: #9ca3af;">
+        Stories move here after code review approval
+      </div>
+    </div>
+  </div>
+
+  <!-- DONE Column -->
+  <div class="column">
+    <div class="col-header">
+      <div class="col-dot done"></div>
+      <span class="col-title">Done</span>
+      <span class="col-count">1</span>
+    </div>
+    <div class="col-body">
+
+      <div class="story-card" style="opacity: 0.85;">
+        <div class="story-id" style="color:#16a34a;">&#x2713; US-005</div>
+        <div class="story-title">JWT Token Refresh</div>
+        <div class="story-desc">
+          As a user, I want my session to auto-refresh so I don't get logged out unexpectedly.
+        </div>
+
+        <div class="card-sep"></div>
+
+        <div class="tests-section">
+          <div class="tests-header">
+            <span class="tests-label">Test Cases</span>
+            <span class="tests-count all-pass">4/4</span>
+          </div>
+          <ul class="test-list">
+            <li class="test-item"><span class="test-icon pass">&#x2713;</span> <span class="test-name pass">Refreshes token before expiry</span></li>
+            <li class="test-item"><span class="test-icon pass">&#x2713;</span> <span class="test-name pass">Returns new token with extended expiry</span></li>
+            <li class="test-item"><span class="test-icon pass">&#x2713;</span> <span class="test-name pass">Rejects refresh with invalid refresh token</span></li>
+            <li class="test-item"><span class="test-icon pass">&#x2713;</span> <span class="test-name pass">Rotates refresh token on use</span></li>
+          </ul>
+        </div>
+
+        <div class="coverage-row">
+          <span class="coverage-label">Coverage</span>
+          <div class="coverage-bar"><div class="coverage-fill good" style="width:91%;"></div></div>
+          <span class="coverage-value good">91%</span>
+        </div>
+
+        <div class="pr-badge merged">&#x2713; PR #43 — Merged</div>
+
+        <ul class="ac-list" style="margin-top: 8px;">
+          <li class="ac-item"><span class="ac-check checked">&#x2713;</span> Token refreshes automatically 5 min before expiry</li>
+          <li class="ac-item"><span class="ac-check checked">&#x2713;</span> Refresh token is rotated on each use</li>
+          <li class="ac-item"><span class="ac-check checked">&#x2713;</span> Invalid refresh token returns 401</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

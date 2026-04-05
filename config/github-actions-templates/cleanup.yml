@@ -1,0 +1,30 @@
+name: Cleanup
+on:
+  schedule:
+    - cron: "0 3 * * 0"
+
+permissions:
+  contents: write
+
+jobs:
+  stale-branches:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Delete merged branches older than 7 days
+        run: |
+          git branch -r --merged origin/main | \
+            grep -v 'main' | \
+            sed 's/origin\///' | \
+            while read branch; do
+              last_commit=$(git log -1 --format="%ci" "origin/$branch" 2>/dev/null)
+              if [ -n "$last_commit" ]; then
+                age_days=$(( ($(date +%s) - $(date -d "$last_commit" +%s)) / 86400 ))
+                if [ "$age_days" -gt 7 ]; then
+                  echo "Deleting $branch (merged $age_days days ago)"
+                  git push origin --delete "$branch" || true
+                fi
+              fi
+            done

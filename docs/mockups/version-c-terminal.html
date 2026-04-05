@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team - Version C: Terminal Style</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace; background: #0a0a0a; color: #e5e7eb; min-height: 100vh; }
+
+  /* Top bar */
+  .topbar { display: flex; align-items: center; padding: 0 24px; height: 48px; background: #111111; border-bottom: 1px solid #1f1f1f; }
+  .topbar-logo { font-weight: 700; font-size: 14px; color: #fff; margin-right: 32px; letter-spacing: 0.5px; }
+  .topbar-logo .accent { color: #3b82f6; }
+  .topbar-nav { display: flex; gap: 4px; height: 100%; }
+  .topbar-nav a { display: flex; align-items: center; padding: 0 14px; font-size: 13px; color: #6b7280; text-decoration: none; border-bottom: 2px solid transparent; transition: all 0.15s; }
+  .topbar-nav a:hover { color: #9ca3af; }
+  .topbar-nav a.active { color: #e5e7eb; border-bottom-color: #3b82f6; }
+
+  .container { max-width: 900px; margin: 0 auto; padding: 24px; }
+
+  /* Input section */
+  .input-section { margin-bottom: 32px; padding-bottom: 24px; border-bottom: 1px solid #1f1f1f; }
+  .prompt-label { font-size: 13px; color: #6b7280; margin-bottom: 8px; }
+  .prompt-label .gt { color: #3b82f6; }
+  .input-row { display: flex; gap: 10px; align-items: flex-start; }
+  .input-field { flex: 1; background: #111111; border: 1px solid #262626; border-radius: 8px; padding: 12px 14px; font-size: 14px; font-family: inherit; color: #e5e7eb; outline: none; resize: none; min-height: 44px; transition: border-color 0.2s; }
+  .input-field:focus { border-color: #3b82f6; }
+  .input-field::placeholder { color: #4b5563; }
+  .input-controls { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+  .tag { padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 500; border: 1px solid #262626; color: #9ca3af; background: #111111; cursor: pointer; transition: all 0.15s; font-family: inherit; }
+  .tag:hover { border-color: #3b82f6; color: #3b82f6; }
+  .tag.selected { border-color: #3b82f6; color: #3b82f6; background: rgba(59,130,246,0.1); }
+  .submit-btn { margin-left: auto; padding: 8px 20px; border-radius: 8px; border: 1px solid #3b82f6; background: transparent; color: #3b82f6; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; font-family: inherit; }
+  .submit-btn:hover { background: #3b82f6; color: #fff; }
+
+  /* Request block */
+  .request-block { margin-bottom: 24px; }
+  .request-header { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
+  .req-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .req-dot.active { background: #3b82f6; animation: glow 2s ease-in-out infinite; }
+  .req-dot.done { background: #22c55e; }
+  @keyframes glow { 0%,100% { box-shadow: 0 0 4px rgba(59,130,246,0.5); } 50% { box-shadow: 0 0 12px rgba(59,130,246,0.8); } }
+  .req-id { font-weight: 700; color: #e5e7eb; font-size: 13px; }
+  .req-title { color: #9ca3af; font-size: 13px; }
+  .req-meta { font-size: 11px; color: #4b5563; margin-left: auto; }
+  .req-type { padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-left: 8px; }
+  .req-type.feature { background: rgba(59,130,246,0.15); color: #60a5fa; }
+  .req-type.bugfix { background: rgba(239,68,68,0.15); color: #f87171; }
+
+  .req-divider { height: 1px; background: #1f1f1f; margin: 4px 0; }
+
+  /* Pipeline bars */
+  .pipeline-bars { padding: 12px 0; }
+  .p-row { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
+  .p-label { width: 110px; text-align: right; font-size: 12px; color: #4b5563; }
+  .p-label.done { color: #22c55e; }
+  .p-label.active { color: #3b82f6; }
+  .p-bar { flex: 1; height: 6px; background: #1a1a1a; border-radius: 3px; overflow: hidden; }
+  .p-fill { height: 100%; border-radius: 3px; }
+  .p-fill.done { background: #22c55e; width: 100%; }
+  .p-fill.active { background: #3b82f6; animation: flow 2.5s ease-in-out infinite; }
+  .p-fill.waiting { width: 0; }
+  @keyframes flow { 0%,100% { opacity: 0.7; } 50% { opacity: 1; } }
+  .p-status { font-size: 11px; color: #4b5563; width: 80px; }
+  .p-status.done { color: #22c55e; }
+  .p-status.active { color: #3b82f6; }
+
+  /* Log entries */
+  .log-entries { padding: 8px 0; }
+  .log-entry { display: flex; gap: 12px; padding: 5px 0; font-size: 12px; line-height: 1.6; }
+  .log-time { color: #4b5563; min-width: 70px; font-variant-numeric: tabular-nums; }
+  .log-agent { color: #a78bfa; min-width: 160px; }
+  .log-agent.backend { color: #34d399; }
+  .log-agent.frontend { color: #f472b6; }
+  .log-agent.reviewer { color: #60a5fa; }
+  .log-agent.tester { color: #fbbf24; }
+  .log-agent.prd { color: #fb923c; }
+  .log-agent.stories { color: #c084fc; }
+  .log-agent.lead { color: #94a3b8; }
+  .log-msg { color: #9ca3af; }
+  .log-msg .file { color: #67e8f9; }
+  .log-msg .check { color: #22c55e; }
+
+  .view-link { display: inline-block; margin: 4px 0 0 82px; font-size: 12px; color: #3b82f6; text-decoration: none; }
+  .view-link:hover { text-decoration: underline; }
+
+  /* Completed one-liner */
+  .completed-line { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 12px; color: #6b7280; }
+  .completed-line .check { color: #22c55e; }
+  .completed-line .stats { color: #4b5563; margin-left: auto; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-logo"><span class="accent">&#x258C;</span>Agent Team</div>
+  <div class="topbar-nav">
+    <a href="#" class="active">Command Center</a>
+    <a href="#">History</a>
+    <a href="#">Releases</a>
+    <a href="#">Team</a>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Input -->
+  <div class="input-section">
+    <div class="prompt-label"><span class="gt">&gt;</span> What would you like to build?</div>
+    <div class="input-row">
+      <textarea class="input-field" placeholder="Build a user profile page with name, email, avatar and edit form" rows="1"></textarea>
+    </div>
+    <div class="input-controls">
+      <span class="tag selected">feature</span>
+      <span class="tag">bugfix</span>
+      <span class="tag">docs</span>
+      <span class="tag">demo</span>
+      <span class="tag">spike</span>
+      <span style="color:#262626;margin:0 4px;">|</span>
+      <span class="tag selected">high</span>
+      <span class="tag">medium</span>
+      <span class="tag">low</span>
+      <button class="submit-btn">Submit &#x23CE;</button>
+    </div>
+  </div>
+
+  <!-- Active Request 1 -->
+  <div class="request-block">
+    <div class="request-header">
+      <div class="req-dot active"></div>
+      <span class="req-id">REQ-042</span>
+      <span class="req-title">Login page with JWT authentication</span>
+      <span class="req-type feature">feature</span>
+      <span class="req-meta">12m ago</span>
+    </div>
+    <div class="req-divider"></div>
+
+    <div class="pipeline-bars">
+      <div class="p-row">
+        <span class="p-label done">planning</span>
+        <div class="p-bar"><div class="p-fill done"></div></div>
+        <span class="p-status done">done</span>
+      </div>
+      <div class="p-row">
+        <span class="p-label active">development</span>
+        <div class="p-bar"><div class="p-fill active" style="width:65%;"></div></div>
+        <span class="p-status active">building</span>
+      </div>
+      <div class="p-row">
+        <span class="p-label">review</span>
+        <div class="p-bar"><div class="p-fill waiting"></div></div>
+        <span class="p-status">waiting</span>
+      </div>
+      <div class="p-row">
+        <span class="p-label">testing</span>
+        <div class="p-bar"><div class="p-fill waiting"></div></div>
+        <span class="p-status">waiting</span>
+      </div>
+      <div class="p-row">
+        <span class="p-label">deploy</span>
+        <div class="p-bar"><div class="p-fill waiting"></div></div>
+        <span class="p-status">waiting</span>
+      </div>
+    </div>
+
+    <div class="log-entries">
+      <div class="log-entry">
+        <span class="log-time">12:06:12</span>
+        <span class="log-agent backend">backend-specialist</span>
+        <span class="log-msg">writing <span class="file">src/auth/routes.py</span></span>
+      </div>
+      <div class="log-entry">
+        <span class="log-time">12:06:08</span>
+        <span class="log-agent frontend">frontend-specialist</span>
+        <span class="log-msg">creating <span class="file">src/pages/Login.tsx</span></span>
+      </div>
+      <div class="log-entry">
+        <span class="log-time">12:05:23</span>
+        <span class="log-agent reviewer">code-reviewer</span>
+        <span class="log-msg">decomposed &rarr; backend + frontend (parallel)</span>
+      </div>
+      <div class="log-entry">
+        <span class="log-time">12:03:05</span>
+        <span class="log-agent stories">user-story-author</span>
+        <span class="log-msg"><span class="check">&#x2713;</span> 5 stories created</span>
+      </div>
+      <div class="log-entry">
+        <span class="log-time">12:01:23</span>
+        <span class="log-agent prd">prd-specialist</span>
+        <span class="log-msg"><span class="check">&#x2713;</span> <span class="file">prd-login-feature.md</span></span>
+      </div>
+      <div class="log-entry">
+        <span class="log-time">12:00:21</span>
+        <span class="log-agent lead">engineering-lead</span>
+        <span class="log-msg"><span class="check">&#x2713;</span> analyzed &rarr; dev-team, delivery-team</span>
+      </div>
+    </div>
+    <a href="#" class="view-link">[details]</a>
+  </div>
+
+  <div style="height:1px;background:#1f1f1f;margin:8px 0 16px;"></div>
+
+  <!-- Active Request 2 -->
+  <div class="request-block">
+    <div class="request-header">
+      <div class="req-dot active"></div>
+      <span class="req-id">REQ-041</span>
+      <span class="req-title">Fix broken pagination on search results</span>
+      <span class="req-type bugfix">bugfix</span>
+      <span class="req-meta">28m ago</span>
+    </div>
+    <div class="req-divider"></div>
+
+    <div class="pipeline-bars">
+      <div class="p-row">
+        <span class="p-label done">triage</span>
+        <div class="p-bar"><div class="p-fill done"></div></div>
+        <span class="p-status done">done</span>
+      </div>
+      <div class="p-row">
+        <span class="p-label done">fix</span>
+        <div class="p-bar"><div class="p-fill done"></div></div>
+        <span class="p-status done">done</span>
+      </div>
+      <div class="p-row">
+        <span class="p-label active">review+test</span>
+        <div class="p-bar"><div class="p-fill active" style="width:75%;"></div></div>
+        <span class="p-status active">in progress</span>
+      </div>
+      <div class="p-row">
+        <span class="p-label">deploy</span>
+        <div class="p-bar"><div class="p-fill waiting"></div></div>
+        <span class="p-status">waiting</span>
+      </div>
+    </div>
+
+    <div class="log-entries">
+      <div class="log-entry">
+        <span class="log-time">12:32:45</span>
+        <span class="log-agent reviewer">code-reviewer</span>
+        <span class="log-msg">reviewing PR #67</span>
+      </div>
+      <div class="log-entry">
+        <span class="log-time">12:32:30</span>
+        <span class="log-agent tester">tester-specialist</span>
+        <span class="log-msg">regression suite 42/47 passing</span>
+      </div>
+    </div>
+    <a href="#" class="view-link">[details]</a>
+  </div>
+
+  <div style="height:1px;background:#1f1f1f;margin:8px 0 16px;"></div>
+
+  <!-- Completed -->
+  <div class="completed-line">
+    <span class="check">&#x2713;</span>
+    <span class="req-id" style="color:#6b7280;">REQ-040</span>
+    <span>Add dark mode toggle</span>
+    <span class="stats">91% &middot; #63,#64 &middot; production &middot; 2h ago</span>
+  </div>
+  <div class="completed-line">
+    <span class="check">&#x2713;</span>
+    <span class="req-id" style="color:#6b7280;">REQ-039</span>
+    <span>Update API rate limiting</span>
+    <span class="stats">88% &middot; #61 &middot; production &middot; 5h ago</span>
+  </div>
+  <div class="completed-line">
+    <span class="check">&#x2713;</span>
+    <span class="req-id" style="color:#6b7280;">REQ-038</span>
+    <span>Fix login token expiry</span>
+    <span class="stats">85% &middot; #59 &middot; production &middot; 1d ago</span>
+  </div>
+  <div class="completed-line" style="color:#dc2626;">
+    <span>&#x2717;</span>
+    <span class="req-id" style="color:#6b7280;">REQ-037</span>
+    <span style="color:#dc2626;">Add email notification system</span>
+    <span class="stats" style="color:#dc2626;">72% &middot; coverage gate failed &middot; 1d ago &nbsp; <a href="#" style="color:#3b82f6;text-decoration:none;">[retry]</a></span>
+  </div>
+
+</div>
+
+</body>
+</html>

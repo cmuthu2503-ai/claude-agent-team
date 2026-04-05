@@ -1,0 +1,31 @@
+teams:
+  engineering:
+    display_name: "Engineering"
+    lead: engineering_lead
+    sub_teams: [planning, development, delivery]
+    domain: [all]
+
+  planning:
+    display_name: "Planning Team"
+    lead: prd_specialist
+    members: [prd_specialist, user_story_author]
+    domain: [requirements, documentation, user-stories, acceptance-criteria]
+    parent_team: engineering
+
+  development:
+    display_name: "Development Team"
+    lead: code_reviewer
+    members: [code_reviewer, backend_specialist, frontend_specialist]
+    domain: [backend, frontend, api, database, ui, components, code-review]
+    parent_team: engineering
+
+  delivery:
+    display_name: "Delivery Team"
+    lead: devops_specialist
+    members: [devops_specialist, tester_specialist]
+    domain: [testing, deployment, ci-cd, infrastructure, monitoring, e2e]
+    parent_team: engineering
+
+hierarchy:
+  root: engineering
+  delegation_direction: top_down

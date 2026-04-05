@@ -1,0 +1,9 @@
+{
+  "requests": [
+    {"id": "REQ-001", "description": "Build login page with JWT authentication", "type": "feature_request", "priority": "high"},
+    {"id": "REQ-002", "description": "Fix user profile image upload timeout", "type": "bug_report", "priority": "critical"},
+    {"id": "REQ-003", "description": "Add dark mode support to dashboard", "type": "feature_request", "priority": "medium"},
+    {"id": "REQ-004", "description": "Update API documentation for v2 endpoints", "type": "doc_request", "priority": "low"},
+    {"id": "REQ-005", "description": "Build user settings page with profile editing", "type": "feature_request", "priority": "high"}
+  ]
+}

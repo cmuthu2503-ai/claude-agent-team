@@ -1,0 +1,91 @@
+# Production Environment
+# Ports: backend=8020, frontend=3020
+# Network: prod-net
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: prod
+    container_name: agent-team-prod-backend
+    ports:
+      - "8020:8000"
+    volumes:
+      - agent-team-prod-data:/app/data
+      - agent-team-prod-reports:/app/reports
+      - agent-team-prod-backups:/app/backups
+    environment:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=WARNING
+    secrets:
+      - anthropic_api_key
+      - github_token
+      - jwt_secret
+    networks:
+      - prod-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      target: prod
+    container_name: agent-team-prod-frontend
+    ports:
+      - "3020:3000"
+    networks:
+      - prod-net
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+volumes:
+  agent-team-prod-data:
+  agent-team-prod-reports:
+  agent-team-prod-backups:
+
+networks:
+  prod-net:
+    name: agent-team-prod
+
+secrets:
+  anthropic_api_key:
+    file: ./secrets/anthropic_api_key.txt
+  github_token:
+    file: ./secrets/github_token.txt
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt

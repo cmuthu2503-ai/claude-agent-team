@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team Command Center — Vercel Theme</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif; background: #000; color: #ededed; min-height: 100vh; }
+
+  /* Theme Banner */
+  .theme-banner { background: #0070f3; color: #fff; text-align: center; padding: 6px 0; font-size: 13px; font-weight: 500; letter-spacing: 0.3px; }
+  .theme-banner span { opacity: 0.8; font-weight: 400; margin-left: 8px; }
+
+  /* Top Nav */
+  .topnav { display: flex; align-items: center; height: 52px; border-bottom: 1px solid #333; padding: 0 24px; background: #000; position: sticky; top: 0; z-index: 50; }
+  .topnav-logo { font-size: 14px; font-weight: 600; color: #fff; letter-spacing: -0.3px; display: flex; align-items: center; gap: 8px; margin-right: 36px; }
+  .topnav-logo .triangle { display: inline-block; width: 0; height: 0; border-left: 8px solid transparent; border-right: 8px solid transparent; border-bottom: 14px solid #fff; }
+  .topnav-links { display: flex; gap: 4px; flex: 1; }
+  .topnav-link { padding: 6px 12px; font-size: 14px; color: #888; text-decoration: none; border-radius: 4px; cursor: pointer; transition: color 0.15s; }
+  .topnav-link:hover { color: #ededed; }
+  .topnav-link.active { color: #fff; }
+  .topnav-right { display: flex; align-items: center; gap: 16px; }
+  .notification-bell { position: relative; cursor: pointer; color: #888; transition: color 0.15s; }
+  .notification-bell:hover { color: #ededed; }
+  .notification-bell .bell-icon { font-size: 17px; }
+  .notification-bell .badge { position: absolute; top: -8px; right: -10px; background: #0070f3; color: #fff; font-size: 10px; font-weight: 700; width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid #000; }
+  .topnav-avatar { width: 28px; height: 28px; border-radius: 50%; border: 1px solid #333; background: #111; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: #888; }
+
+  /* Container */
+  .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+  /* Page Header */
+  .page-header { padding: 40px 0 32px; border-bottom: 1px solid #222; }
+  .page-header h1 { font-size: 32px; font-weight: 700; letter-spacing: -1px; color: #fff; }
+
+  /* Request Input */
+  .request-input { padding: 32px 0; border-bottom: 1px solid #222; }
+  .request-input textarea { width: 100%; background: #000; border: 1px solid #333; border-radius: 4px; color: #ededed; padding: 12px 14px; font-size: 14px; font-family: 'Geist Mono', 'SF Mono', 'Consolas', monospace; resize: none; height: 80px; outline: none; transition: border-color 0.2s; }
+  .request-input textarea::placeholder { color: #555; }
+  .request-input textarea:focus { border-color: #555; }
+  .input-controls { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+  .type-select { background: #000; border: 1px solid #333; border-radius: 4px; color: #999; padding: 7px 12px; font-size: 13px; font-family: inherit; outline: none; cursor: pointer; }
+  .priority-pills { display: flex; gap: 1px; background: #333; border-radius: 4px; overflow: hidden; }
+  .priority-pill { padding: 6px 14px; font-size: 12px; font-weight: 500; border: none; background: #111; color: #666; cursor: pointer; transition: all 0.15s; font-family: inherit; }
+  .priority-pill:hover { color: #aaa; }
+  .priority-pill.selected { background: #222; color: #fff; }
+  .submit-btn { margin-left: auto; background: #fff; color: #000; border: none; padding: 8px 20px; border-radius: 4px; font-size: 14px; font-weight: 500; cursor: pointer; transition: background 0.15s; font-family: inherit; }
+  .submit-btn:hover { background: #ccc; }
+
+  /* Section */
+  .section { padding: 32px 0 0; }
+  .section-title { font-size: 14px; font-weight: 400; color: #888; margin-bottom: 16px; }
+
+  /* Request Table */
+  .request-table { border: 1px solid #222; border-radius: 4px; overflow: hidden; }
+  .request-row { display: flex; align-items: center; padding: 14px 18px; border-bottom: 1px solid #222; transition: background 0.1s; gap: 16px; }
+  .request-row:last-child { border-bottom: none; }
+  .request-row:hover { background: #0a0a0a; }
+  .status-indicator { display: flex; align-items: center; gap: 8px; min-width: 110px; }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .status-dot.in-progress { background: #0070f3; }
+  .status-dot.analyzing { background: #0070f3; opacity: 0.6; }
+  .status-dot.completed { background: #50e3c2; }
+  .status-text { font-size: 13px; color: #888; font-family: 'Geist Mono', 'SF Mono', 'Consolas', monospace; }
+  .request-id { font-family: 'Geist Mono', 'SF Mono', 'Consolas', monospace; font-size: 13px; color: #555; min-width: 100px; }
+  .request-title { flex: 1; font-size: 14px; color: #ededed; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta-tags { display: flex; gap: 8px; flex-shrink: 0; }
+  .meta-tag { font-size: 12px; color: #666; font-family: 'Geist Mono', 'SF Mono', 'Consolas', monospace; padding: 2px 8px; border: 1px solid #222; border-radius: 4px; }
+  .meta-tag.priority-high { color: #ff6369; border-color: #331a1a; }
+  .meta-tag.priority-medium { color: #f5a623; border-color: #332a11; }
+
+  /* Completed section */
+  .completed-section { padding-bottom: 48px; }
+  .completed-row .request-title { color: #666; }
+  .completed-row .request-id { color: #444; }
+  .completed-row .status-text { color: #50e3c2; }
+
+  /* Pulsing animation for active dots */
+  @keyframes pulse-blue { 0%, 100% { box-shadow: 0 0 0 0 rgba(0,112,243,0.3); } 50% { box-shadow: 0 0 0 4px rgba(0,112,243,0); } }
+  .status-dot.in-progress, .status-dot.analyzing { animation: pulse-blue 2s ease-in-out infinite; }
+</style>
+</head>
+<body>
+
+<!-- Theme Banner -->
+<div class="theme-banner">Theme 2: Vercel<span>-- Ultra-minimal black and white aesthetic with sparse blue accents</span></div>
+
+<!-- Top Navigation -->
+<nav class="topnav">
+  <div class="topnav-logo">
+    <span class="triangle"></span>
+    Agent Team
+  </div>
+  <div class="topnav-links">
+    <span class="topnav-link active">Command Center</span>
+    <span class="topnav-link">History</span>
+    <span class="topnav-link">Releases</span>
+    <span class="topnav-link">Team</span>
+    <span class="topnav-link">Cost</span>
+  </div>
+  <div class="topnav-right">
+    <div class="notification-bell">
+      <span class="bell-icon">&#128276;</span>
+      <span class="badge">3</span>
+    </div>
+    <div class="topnav-avatar">CL</div>
+  </div>
+</nav>
+
+<div class="container">
+
+  <!-- Page Header -->
+  <div class="page-header">
+    <h1>Command Center</h1>
+  </div>
+
+  <!-- Request Input -->
+  <div class="request-input">
+    <textarea placeholder="Describe what you want the agent team to build..."></textarea>
+    <div class="input-controls">
+      <select class="type-select">
+        <option>Feature</option>
+        <option>Bug Fix</option>
+        <option>Refactor</option>
+        <option>Docs</option>
+      </select>
+      <div class="priority-pills">
+        <button class="priority-pill">Low</button>
+        <button class="priority-pill selected">Medium</button>
+        <button class="priority-pill">High</button>
+        <button class="priority-pill">Critical</button>
+      </div>
+      <button class="submit-btn">Submit Request</button>
+    </div>
+  </div>
+
+  <!-- Active Requests -->
+  <div class="section">
+    <div class="section-title">Active Requests</div>
+    <div class="request-table">
+      <div class="request-row">
+        <div class="status-indicator">
+          <div class="status-dot in-progress"></div>
+          <span class="status-text">in_progress</span>
+        </div>
+        <span class="request-id">REQ-A1B2C3</span>
+        <span class="request-title">Build login page with JWT authentication</span>
+        <div class="meta-tags">
+          <span class="meta-tag">feature</span>
+          <span class="meta-tag priority-high">high</span>
+        </div>
+      </div>
+      <div class="request-row">
+        <div class="status-indicator">
+          <div class="status-dot analyzing"></div>
+          <span class="status-text">analyzing</span>
+        </div>
+        <span class="request-id">REQ-D4E5F6</span>
+        <span class="request-title">Add dark mode support</span>
+        <div class="meta-tags">
+          <span class="meta-tag">feature</span>
+          <span class="meta-tag priority-medium">medium</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Completed Requests -->
+  <div class="section completed-section">
+    <div class="section-title">Completed</div>
+    <div class="request-table">
+      <div class="request-row completed-row">
+        <div class="status-indicator">
+          <div class="status-dot completed"></div>
+          <span class="status-text">completed</span>
+        </div>
+        <span class="request-id">REQ-001</span>
+        <span class="request-title">Fix image upload timeout</span>
+      </div>
+      <div class="request-row completed-row">
+        <div class="status-indicator">
+          <div class="status-dot completed"></div>
+          <span class="status-text">completed</span>
+        </div>
+        <span class="request-id">REQ-002</span>
+        <span class="request-title">Update API docs</span>
+      </div>
+      <div class="request-row completed-row">
+        <div class="status-indicator">
+          <div class="status-dot completed"></div>
+          <span class="status-text">completed</span>
+        </div>
+        <span class="request-id">REQ-003</span>
+        <span class="request-title">Setup CI/CD pipeline</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team Command Center — Discord Theme</title>
+<style>
+  /* Reset */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* Base */
+  body { font-family: 'gg sans', 'Noto Sans', Helvetica, Arial, sans-serif; background: #313338; color: #f2f3f5; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+  /* Theme Banner */
+  .theme-banner { background: #5865f2; color: #fff; text-align: center; padding: 6px 0; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; flex-shrink: 0; }
+  .theme-banner span { opacity: 0.8; font-weight: 400; }
+
+  /* App Shell */
+  .app-shell { display: flex; flex: 1; overflow: hidden; }
+
+  /* Sidebar */
+  .sidebar { width: 240px; background: #2b2d31; display: flex; flex-direction: column; flex-shrink: 0; }
+  .sidebar-header { padding: 12px 16px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #949ba4; border-bottom: 1px solid #1e1f22; }
+  .channel-list { flex: 1; padding: 8px 8px 0; overflow-y: auto; }
+  .channel-category { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #949ba4; padding: 16px 8px 4px; }
+  .channel { display: flex; align-items: center; padding: 7px 10px; border-radius: 4px; color: #949ba4; font-size: 15px; cursor: pointer; margin-bottom: 1px; transition: background 0.12s, color 0.12s; }
+  .channel:hover { background: #35373c; color: #dbdee1; }
+  .channel.active { background: #404249; color: #f2f3f5; font-weight: 500; }
+  .channel .hash { margin-right: 6px; font-size: 18px; font-weight: 400; opacity: 0.7; }
+  .sidebar-divider { height: 1px; background: #3f4147; margin: 8px 16px; }
+
+  /* User Area */
+  .user-area { padding: 10px 12px; background: #1e1f22; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .user-avatar { width: 32px; height: 32px; border-radius: 50%; background: #5865f2; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; position: relative; }
+  .online-dot { position: absolute; bottom: -1px; right: -1px; width: 10px; height: 10px; background: #23a55a; border-radius: 50%; border: 2.5px solid #1e1f22; }
+  .user-info { flex: 1; }
+  .user-name { font-size: 13px; font-weight: 600; color: #f2f3f5; }
+  .user-status { font-size: 11px; color: #23a55a; }
+
+  /* Main Content */
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* Top Bar */
+  .top-bar { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #1e1f22; flex-shrink: 0; }
+  .top-bar h1 { font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .top-bar h1 .hash-icon { color: #949ba4; font-size: 20px; }
+  .top-bar-desc { font-size: 12px; color: #949ba4; margin-left: 12px; border-left: 1px solid #3f4147; padding-left: 12px; }
+  .header-right { display: flex; align-items: center; gap: 14px; }
+  .bell-wrapper { position: relative; cursor: pointer; }
+  .bell-icon { font-size: 20px; color: #b5bac1; transition: color 0.15s; }
+  .bell-wrapper:hover .bell-icon { color: #f2f3f5; }
+  .bell-badge { position: absolute; top: -6px; right: -8px; background: #f23f43; color: #fff; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 8px; min-width: 16px; text-align: center; }
+  .header-avatar { width: 28px; height: 28px; border-radius: 50%; background: #5865f2; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; cursor: pointer; }
+
+  /* Scrollable Content */
+  .content-body { flex: 1; overflow-y: auto; padding: 16px; }
+  .content-body::-webkit-scrollbar { width: 6px; }
+  .content-body::-webkit-scrollbar-track { background: transparent; }
+  .content-body::-webkit-scrollbar-thumb { background: #1e1f22; border-radius: 3px; }
+
+  /* Input Area */
+  .input-area { padding: 0 16px 16px; flex-shrink: 0; }
+  .input-box { background: #383a40; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .input-box textarea { background: transparent; border: none; color: #f2f3f5; font-size: 14px; font-family: inherit; resize: none; outline: none; width: 100%; line-height: 1.4; }
+  .input-box textarea::placeholder { color: #6d6f78; }
+  .input-controls { display: flex; align-items: center; gap: 8px; }
+  .control-select { background: #1e1f22; color: #b5bac1; border: none; border-radius: 4px; padding: 5px 10px; font-size: 12px; font-family: inherit; cursor: pointer; outline: none; transition: color 0.15s; }
+  .control-select:hover { color: #f2f3f5; }
+  .control-select option { background: #1e1f22; }
+  .send-btn { margin-left: auto; background: #5865f2; color: #fff; border: none; border-radius: 4px; padding: 6px 18px; font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; transition: background 0.15s; }
+  .send-btn:hover { background: #4752c4; }
+
+  /* Section Labels */
+  .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #949ba4; margin: 20px 0 10px; }
+  .section-label:first-child { margin-top: 0; }
+
+  /* Request Cards */
+  .req-card { background: #2b2d31; border: 1px solid #3f4147; border-radius: 8px; padding: 12px 14px; margin-bottom: 8px; border-left: 3px solid transparent; display: flex; flex-direction: column; gap: 6px; transition: box-shadow 0.2s, border-color 0.2s; }
+  .req-card:hover { border-color: #4e5058; }
+  .req-card.active { border-left-color: #5865f2; box-shadow: 0 0 10px rgba(88,101,242,0.15); }
+  .req-card.complete { border-left-color: #23a55a; }
+  .req-top { display: flex; align-items: center; justify-content: space-between; }
+  .req-id { font-size: 12px; font-weight: 600; color: #949ba4; font-family: 'Consolas', 'Courier New', monospace; }
+  .req-title { font-size: 14px; font-weight: 500; color: #f2f3f5; line-height: 1.3; }
+  .req-desc { font-size: 12px; color: #b5bac1; line-height: 1.35; }
+  .req-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+  /* Badges */
+  .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
+  .badge-progress { background: rgba(88,101,242,0.2); color: #8b9ff5; }
+  .badge-analyzing { background: rgba(240,178,50,0.15); color: #f0b232; }
+  .badge-done { background: rgba(35,165,90,0.15); color: #23a55a; }
+  .badge-feature { background: rgba(88,101,242,0.12); color: #949ba4; }
+  .badge-bug { background: rgba(242,63,67,0.12); color: #f23f43; }
+  .badge-refactor { background: rgba(240,178,50,0.1); color: #f0b232; }
+  .badge-test { background: rgba(35,165,90,0.1); color: #949ba4; }
+
+  /* Priority & Status */
+  .priority-high { color: #f23f43; font-size: 11px; font-weight: 600; }
+  .priority-med { color: #f0b232; font-size: 11px; font-weight: 600; }
+  .priority-low { color: #23a55a; font-size: 11px; font-weight: 600; }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+  .status-dot.pulse { animation: pulse 1.8s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .dot-blurple { background: #5865f2; }
+  .dot-yellow { background: #f0b232; }
+  .dot-green { background: #23a55a; }
+  .req-agents { font-size: 12px; color: #949ba4; }
+  .timestamp { font-size: 11px; color: #6d6f78; }
+</style>
+</head>
+<body>
+
+  <!-- Theme Identification Banner -->
+  <div class="theme-banner">
+    Theme 5: Discord <span>— Dark sidebar-heavy chat aesthetic with blurple accents</span>
+  </div>
+
+  <div class="app-shell">
+
+    <!-- ===== Sidebar ===== -->
+    <aside class="sidebar">
+      <div class="sidebar-header">Agent Team</div>
+
+      <nav class="channel-list">
+        <div class="channel-category">Workspace</div>
+        <div class="channel active">
+          <span class="hash">#</span> command-center
+        </div>
+        <div class="channel">
+          <span class="hash">#</span> history
+        </div>
+        <div class="channel">
+          <span class="hash">#</span> releases
+        </div>
+        <div class="channel">
+          <span class="hash">#</span> team-status
+        </div>
+        <div class="channel">
+          <span class="hash">#</span> cost
+        </div>
+
+        <div class="sidebar-divider"></div>
+
+        <div class="channel-category">Agents</div>
+        <div class="channel">
+          <span class="hash">#</span> agent-alpha
+        </div>
+        <div class="channel">
+          <span class="hash">#</span> agent-beta
+        </div>
+        <div class="channel">
+          <span class="hash">#</span> agent-gamma
+        </div>
+      </nav>
+
+      <!-- User Area with Online Status -->
+      <div class="user-area">
+        <div class="user-avatar">
+          O
+          <div class="online-dot"></div>
+        </div>
+        <div class="user-info">
+          <div class="user-name">Operator</div>
+          <div class="user-status">Online</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ===== Main Content ===== -->
+    <main class="main">
+
+      <!-- Top Bar with Channel Name and Notification Bell -->
+      <div class="top-bar">
+        <h1>
+          <span class="hash-icon">#</span> Command Center
+          <span class="top-bar-desc">Orchestrate your AI agent team</span>
+        </h1>
+        <div class="header-right">
+          <div class="bell-wrapper">
+            <span class="bell-icon">&#128276;</span>
+            <span class="bell-badge">3</span>
+          </div>
+          <div class="header-avatar">OP</div>
+        </div>
+      </div>
+
+      <!-- Scrollable Content Area -->
+      <div class="content-body">
+
+        <!-- Active Requests Section -->
+        <div class="section-label">Active Requests &mdash; 2</div>
+
+        <!-- Active Card 1: in_progress -->
+        <div class="req-card active">
+          <div class="req-top">
+            <span class="req-id">REQ-A1B2C3</span>
+            <span class="timestamp">2 min ago</span>
+          </div>
+          <div class="req-title">Build login page with JWT auth</div>
+          <div class="req-desc">
+            Create responsive login form, integrate JWT token flow, add remember-me checkbox
+          </div>
+          <div class="req-meta">
+            <span>
+              <span class="status-dot dot-blurple pulse"></span>
+              <span class="badge badge-progress">in_progress</span>
+            </span>
+            <span class="badge badge-feature">feature</span>
+            <span class="priority-high">HIGH</span>
+            <span class="req-agents">Agents: alpha, beta</span>
+          </div>
+        </div>
+
+        <!-- Active Card 2: analyzing -->
+        <div class="req-card active">
+          <div class="req-top">
+            <span class="req-id">REQ-D4E5F6</span>
+            <span class="timestamp">8 min ago</span>
+          </div>
+          <div class="req-title">Add dark mode support</div>
+          <div class="req-desc">
+            Implement theme toggle, CSS custom properties, persist user preference
+          </div>
+          <div class="req-meta">
+            <span>
+              <span class="status-dot dot-yellow pulse"></span>
+              <span class="badge badge-analyzing">analyzing</span>
+            </span>
+            <span class="badge badge-feature">feature</span>
+            <span class="priority-med">MEDIUM</span>
+            <span class="req-agents">Agent: gamma</span>
+          </div>
+        </div>
+
+        <!-- Completed Requests Section -->
+        <div class="section-label">Completed &mdash; 3</div>
+
+        <!-- Completed Card 1 -->
+        <div class="req-card complete">
+          <div class="req-top">
+            <span class="req-id">REQ-G7H8I9</span>
+            <span class="timestamp">1 hr ago</span>
+          </div>
+          <div class="req-title">Fix password reset email delivery</div>
+          <div class="req-meta">
+            <span>
+              <span class="status-dot dot-green"></span>
+              <span class="badge badge-done">done</span>
+            </span>
+            <span class="badge badge-bug">bug</span>
+            <span class="priority-high">HIGH</span>
+          </div>
+        </div>
+
+        <!-- Completed Card 2 -->
+        <div class="req-card complete">
+          <div class="req-top">
+            <span class="req-id">REQ-J0K1L2</span>
+            <span class="timestamp">3 hr ago</span>
+          </div>
+          <div class="req-title">Refactor database connection pooling</div>
+          <div class="req-meta">
+            <span>
+              <span class="status-dot dot-green"></span>
+              <span class="badge badge-done">done</span>
+            </span>
+            <span class="badge badge-refactor">refactor</span>
+            <span class="priority-med">MEDIUM</span>
+          </div>
+        </div>
+
+        <!-- Completed Card 3 -->
+        <div class="req-card complete">
+          <div class="req-top">
+            <span class="req-id">REQ-M3N4O5</span>
+            <span class="timestamp">5 hr ago</span>
+          </div>
+          <div class="req-title">Add unit tests for user service</div>
+          <div class="req-meta">
+            <span>
+              <span class="status-dot dot-green"></span>
+              <span class="badge badge-done">done</span>
+            </span>
+            <span class="badge badge-test">test</span>
+            <span class="priority-low">LOW</span>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Message-style Input Area (Discord-inspired) -->
+      <div class="input-area">
+        <div class="input-box">
+          <textarea rows="2" placeholder="Describe a new request for the agent team..."></textarea>
+          <div class="input-controls">
+            <select class="control-select">
+              <option>feature</option>
+              <option>bug</option>
+              <option>refactor</option>
+              <option>test</option>
+            </select>
+            <select class="control-select">
+              <option>high</option>
+              <option>medium</option>
+              <option>low</option>
+            </select>
+            <button class="send-btn">Send</button>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,77 @@
+agent_id: backend_specialist
+display_name: "Backend Specialist"
+role: "Backend Specialist"
+team: development
+reports_to: code_reviewer
+
+model: claude-sonnet-4-6
+
+system_prompt: |
+  You are the Backend Specialist. You implement server-side code based on user
+  stories and acceptance criteria.
+
+  When you receive a development task:
+  1. Read the user stories and acceptance criteria carefully.
+  2. Implement RESTful API endpoints, business logic, and data models.
+  3. Write unit and integration tests for all code you produce.
+  4. Create database migrations if schema changes are needed.
+  5. Document API endpoints with request/response formats.
+  6. Commit your work to the assigned sub-branch and create a PR.
+
+  Follow project conventions: Python with FastAPI, Pydantic models, async/await,
+  type hints on all functions. Target the code coverage threshold.
+
+responsibilities:
+  - id: BE-001
+    description: "Design and implement RESTful APIs based on user stories"
+    category: development
+  - id: BE-002
+    description: "Create and maintain database schemas, migrations, and seed data"
+    category: development
+  - id: BE-003
+    description: "Implement server-side business logic, validation, and data processing"
+    category: development
+  - id: BE-004
+    description: "Write unit and integration tests for all backend code"
+    category: testing
+  - id: BE-005
+    description: "Document API endpoints, request/response formats, and error codes"
+    category: development
+  - id: BE-006
+    description: "Optimize queries, caching, and server-side performance"
+    category: development
+
+tools:
+  - file_read
+  - file_write
+  - git_operations
+  - code_exec
+  - test_runner
+  - code_analysis
+  - database_operations
+  - web_search
+
+outputs:
+  - name: "API Endpoints"
+    format: code
+  - name: "Database Migrations"
+    format: code
+  - name: "Backend Services"
+    format: code
+  - name: "Server-Side Tests"
+    format: code
+  - name: "API Documentation"
+    format: markdown
+
+delegation:
+  can_delegate_to: []
+  max_concurrent_tasks: 3
+
+quality_gates:
+  - gate_id: coverage_check
+    description: "Backend code coverage must meet minimum threshold"
+    threshold: code_coverage_minimum
+
+metadata:
+  created: "2026-04-05"
+  version: "1.0"

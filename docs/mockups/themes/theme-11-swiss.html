@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team Command Center — Swiss / International Typographic Style</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  html { font-size: 16px; }
+  body {
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    background: #ffffff;
+    color: #000000;
+    line-height: 1.7;
+    background-image:
+      linear-gradient(to right, #f0f0f0 1px, transparent 1px),
+      linear-gradient(to bottom, #f0f0f0 1px, transparent 1px);
+    background-size: 80px 80px;
+    min-height: 100vh;
+  }
+  /* BANNER */
+  .theme-banner {
+    background: #ff0000;
+    color: #ffffff;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 6px 60px;
+    font-weight: 700;
+  }
+  /* NAVBAR */
+  nav {
+    padding: 40px 60px 20px;
+    border-bottom: 3px solid #000000;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+  }
+  nav .brand {
+    font-size: 14px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+  }
+  nav .nav-links { display: flex; gap: 40px; align-items: baseline; }
+  nav .nav-links a {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    text-decoration: none;
+    color: #000000;
+    font-weight: 500;
+    padding-bottom: 4px;
+  }
+  nav .nav-links a.active {
+    color: #ff0000;
+    border-bottom: 3px solid #ff0000;
+  }
+  nav .nav-right {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 500;
+  }
+  nav .nav-right .notif-count {
+    color: #ff0000;
+    font-weight: 700;
+    margin-left: 4px;
+  }
+  /* MAIN GRID */
+  .container { padding: 0 60px 60px; max-width: 1200px; }
+  /* PAGE HEADING */
+  .page-heading {
+    padding: 60px 0 20px;
+    border-bottom: 3px solid #000000;
+  }
+  .page-heading h1 {
+    font-size: 56px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    text-transform: uppercase;
+  }
+  .page-heading p {
+    font-size: 14px;
+    letter-spacing: 0.04em;
+    margin-top: 8px;
+    text-transform: uppercase;
+  }
+  /* REQUEST INPUT */
+  .request-input {
+    padding: 40px 0;
+    border-bottom: 2px solid #000000;
+    display: grid;
+    grid-template-columns: 1fr 160px;
+    gap: 20px;
+    align-items: end;
+  }
+  .request-input label {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-weight: 700;
+    margin-bottom: 10px;
+  }
+  .request-input input {
+    width: 100%;
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    padding: 12px 0;
+    border: none;
+    border-bottom: 2px solid #000000;
+    outline: none;
+    background: transparent;
+    border-radius: 0;
+  }
+  .request-input button {
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 700;
+    padding: 14px 0;
+    background: #000000;
+    color: #ffffff;
+    border: none;
+    border-radius: 0;
+    cursor: pointer;
+  }
+  /* SECTION */
+  .section { padding-top: 50px; }
+  .section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding-bottom: 14px;
+    border-bottom: 3px solid #000000;
+  }
+  .section-header h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    font-weight: 700;
+  }
+  .section-header .count {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 36px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  /* REQUEST ROW */
+  .request-row {
+    display: grid;
+    grid-template-columns: 100px 1fr 140px 160px;
+    gap: 20px;
+    padding: 24px 0;
+    border-bottom: 2px solid #000000;
+    align-items: baseline;
+  }
+  .request-row .req-id {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .request-row .req-title {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .request-row .req-desc {
+    font-size: 13px;
+    margin-top: 4px;
+    line-height: 1.5;
+  }
+  .request-row .req-status {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 700;
+  }
+  .request-row .req-status .status-square {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .status-active { background: #ff0000; }
+  .status-complete { background: #000000; }
+  .status-pending { background: #999999; }
+  .request-row .req-time {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 12px;
+    text-align: right;
+  }
+  /* AGENTS ROW */
+  .agents-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    margin-top: 6px;
+  }
+  .agents-label span {
+    font-weight: 700;
+    margin-right: 12px;
+  }
+  /* FOOTER */
+  .footer {
+    margin-top: 60px;
+    padding: 20px 0;
+    border-top: 3px solid #000000;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    display: flex;
+    justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+
+<div class="theme-banner">Theme 11: Swiss / International Typographic Style</div>
+
+<nav>
+  <div class="brand">Agent Team Command Center</div>
+  <div class="nav-links">
+    <a href="#" class="active">Dashboard</a>
+    <a href="#">Agents</a>
+    <a href="#">History</a>
+    <a href="#">Settings</a>
+  </div>
+  <div class="nav-right">
+    Notifications<span class="notif-count">3</span>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="page-heading">
+    <h1>Command<br>Center</h1>
+    <p>Multi-agent orchestration dashboard &mdash; real-time monitoring</p>
+  </div>
+
+  <!-- REQUEST INPUT -->
+  <div class="request-input">
+    <div>
+      <label>New Request</label>
+      <input type="text" placeholder="Describe the task for the agent team..." />
+    </div>
+    <button>Submit Request</button>
+  </div>
+
+  <!-- ACTIVE REQUESTS -->
+  <div class="section">
+    <div class="section-header">
+      <h2>Active Requests</h2>
+      <div class="count">02</div>
+    </div>
+
+    <div class="request-row">
+      <div class="req-id">REQ-0042</div>
+      <div>
+        <div class="req-title">Refactor Authentication Module</div>
+        <div class="req-desc">Migrate legacy session-based auth to JWT with refresh token rotation. Update all middleware and integration tests.</div>
+        <div class="agents-label"><span>Architect</span><span>Coder-1</span><span>Tester</span></div>
+      </div>
+      <div class="req-status"><span class="status-square status-active"></span>In Progress</div>
+      <div class="req-time">12 min elapsed</div>
+    </div>
+
+    <div class="request-row">
+      <div class="req-id">REQ-0043</div>
+      <div>
+        <div class="req-title">Performance Audit: API Endpoints</div>
+        <div class="req-desc">Profile all API endpoints, identify bottlenecks exceeding 200ms p95, and propose optimizations with benchmarks.</div>
+        <div class="agents-label"><span>Analyzer</span><span>Coder-2</span></div>
+      </div>
+      <div class="req-status"><span class="status-square status-active"></span>In Progress</div>
+      <div class="req-time">4 min elapsed</div>
+    </div>
+  </div>
+
+  <!-- COMPLETED REQUESTS -->
+  <div class="section">
+    <div class="section-header">
+      <h2>Completed Requests</h2>
+      <div class="count">03</div>
+    </div>
+
+    <div class="request-row">
+      <div class="req-id">REQ-0041</div>
+      <div>
+        <div class="req-title">Database Schema Migration v3</div>
+        <div class="req-desc">Added composite indexes, normalized user_preferences, created rollback scripts for all changes.</div>
+        <div class="agents-label"><span>Architect</span><span>Coder-1</span><span>Reviewer</span></div>
+      </div>
+      <div class="req-status"><span class="status-square status-complete"></span>Complete</div>
+      <div class="req-time">2026-04-05 09:14</div>
+    </div>
+
+    <div class="request-row">
+      <div class="req-id">REQ-0040</div>
+      <div>
+        <div class="req-title">CI Pipeline Optimization</div>
+        <div class="req-desc">Parallelized test stages, added build caching, reduced pipeline duration from 18 min to 7 min.</div>
+        <div class="agents-label"><span>DevOps</span><span>Tester</span></div>
+      </div>
+      <div class="req-status"><span class="status-square status-complete"></span>Complete</div>
+      <div class="req-time">2026-04-05 08:31</div>
+    </div>
+
+    <div class="request-row">
+      <div class="req-id">REQ-0039</div>
+      <div>
+        <div class="req-title">Error Handling Standardization</div>
+        <div class="req-desc">Implemented unified error response format across 14 microservices with structured logging and correlation IDs.</div>
+        <div class="agents-label"><span>Architect</span><span>Coder-2</span><span>Reviewer</span></div>
+      </div>
+      <div class="req-status"><span class="status-square status-complete"></span>Complete</div>
+      <div class="req-time">2026-04-04 17:52</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div>Agent Team Command Center v2.1</div>
+    <div>5 Agents Online &mdash; System Nominal</div>
+    <div>2026-04-05 14:22 UTC</div>
+  </div>
+</div>
+
+</body>
+</html>

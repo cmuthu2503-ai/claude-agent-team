@@ -1,0 +1,158 @@
+"""Abstract StateStore interface — swappable backend (SQLite, Redis, etc.)."""
+
+from abc import ABC, abstractmethod
+
+from src.models.base import (
+    AgentTrace,
+    Artifact,
+    Deployment,
+    Metric,
+    Notification,
+    Request,
+    Story,
+    Subtask,
+    TokenUsage,
+    User,
+)
+
+
+class StateStore(ABC):
+    """Abstract interface for all state persistence operations."""
+
+    # ── Requests ─────────────────────────────────
+
+    @abstractmethod
+    async def create_request(self, request: Request) -> str: ...
+
+    @abstractmethod
+    async def get_request(self, request_id: str) -> Request | None: ...
+
+    @abstractmethod
+    async def update_request(self, request: Request) -> None: ...
+
+    @abstractmethod
+    async def list_requests(
+        self, status: str | None = None, limit: int = 20, offset: int = 0
+    ) -> list[Request]: ...
+
+    # ── Subtasks ─────────────────────────────────
+
+    @abstractmethod
+    async def create_subtask(self, subtask: Subtask) -> str: ...
+
+    @abstractmethod
+    async def get_subtask(self, subtask_id: str) -> Subtask | None: ...
+
+    @abstractmethod
+    async def update_subtask(self, subtask: Subtask) -> None: ...
+
+    @abstractmethod
+    async def get_subtasks_for_request(self, request_id: str) -> list[Subtask]: ...
+
+    # ── Artifacts ────────────────────────────────
+
+    @abstractmethod
+    async def save_artifact(self, artifact: Artifact) -> str: ...
+
+    @abstractmethod
+    async def get_artifacts_for_subtask(self, subtask_id: str) -> list[Artifact]: ...
+
+    # ── Stories ──────────────────────────────────
+
+    @abstractmethod
+    async def create_story(self, story: Story) -> str: ...
+
+    @abstractmethod
+    async def get_stories_for_request(self, request_id: str) -> list[Story]: ...
+
+    @abstractmethod
+    async def update_story(self, story: Story) -> None: ...
+
+    # ── Users ────────────────────────────────────
+
+    @abstractmethod
+    async def create_user(self, user: User, password_hash: str) -> str: ...
+
+    @abstractmethod
+    async def get_user_by_username(self, username: str) -> tuple[User, str] | None: ...
+
+    @abstractmethod
+    async def get_user(self, user_id: str) -> User | None: ...
+
+    @abstractmethod
+    async def list_users(self) -> list[User]: ...
+
+    @abstractmethod
+    async def update_user(self, user: User) -> None: ...
+
+    @abstractmethod
+    async def update_password(self, user_id: str, password_hash: str) -> None: ...
+
+    # ── Deployments ──────────────────────────────
+
+    @abstractmethod
+    async def create_deployment(self, deployment: Deployment) -> str: ...
+
+    @abstractmethod
+    async def get_deployment(self, deploy_id: str) -> Deployment | None: ...
+
+    @abstractmethod
+    async def update_deployment(self, deployment: Deployment) -> None: ...
+
+    @abstractmethod
+    async def list_deployments(
+        self, environment: str | None = None, limit: int = 20
+    ) -> list[Deployment]: ...
+
+    # ── Notifications ────────────────────────────
+
+    @abstractmethod
+    async def create_notification(self, notification: Notification) -> str: ...
+
+    @abstractmethod
+    async def get_notifications(
+        self, user_id: str | None = None, unread_only: bool = False, limit: int = 50
+    ) -> list[Notification]: ...
+
+    @abstractmethod
+    async def mark_notification_read(self, notification_id: str) -> None: ...
+
+    @abstractmethod
+    async def mark_all_notifications_read(self, user_id: str) -> None: ...
+
+    # ── Token Usage ──────────────────────────────
+
+    @abstractmethod
+    async def record_token_usage(self, usage: TokenUsage) -> None: ...
+
+    @abstractmethod
+    async def get_token_usage_for_request(self, request_id: str) -> list[TokenUsage]: ...
+
+    @abstractmethod
+    async def get_daily_cost(self) -> float: ...
+
+    @abstractmethod
+    async def get_monthly_cost(self) -> float: ...
+
+    # ── Metrics & Traces ─────────────────────────
+
+    @abstractmethod
+    async def record_metric(self, metric: Metric) -> None: ...
+
+    @abstractmethod
+    async def record_agent_trace(self, trace: AgentTrace) -> None: ...
+
+    @abstractmethod
+    async def update_agent_trace(self, trace: AgentTrace) -> None: ...
+
+    # ── Lifecycle ────────────────────────────────
+
+    @abstractmethod
+    async def initialize(self) -> None:
+        """Create tables and initialize the store."""
+        ...
+
+    @abstractmethod
+    async def close(self) -> None:
+        """Close connections and clean up."""
+        ...

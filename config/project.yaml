@@ -1,0 +1,66 @@
+project:
+  name: "claude-agent-team"
+  display_name: "Agent Team"
+  version: "0.1.0"
+
+  github:
+    org: "agent-team-projects"
+    repo_name: "claude-agent-team"
+    default_branch: "main"
+
+  tech_stack: "python-react"         # templates: python-react, node-react, python-only
+
+  environments:
+    local:
+      backend_url: "http://localhost:8000"
+      frontend_url: "http://localhost:3000"
+      compose_file: "docker-compose.yml"
+    staging:
+      backend_url: "http://localhost:8010"
+      frontend_url: "http://localhost:3010"
+      compose_file: "docker-compose.staging.yml"
+    production:
+      backend_url: "http://localhost:8020"
+      frontend_url: "http://localhost:3020"
+      compose_file: "docker-compose.prod.yml"
+    demo:
+      backend_url: "http://localhost:8030"
+      frontend_url: "http://localhost:3030"
+      compose_file: "docker-compose.demo.yml"
+
+# ── Auth Configuration ──────────────────────────
+# See cross-cutting-concerns.md Area 1
+auth:
+  jwt_secret_ref: "jwt_secret"       # Docker secret name or env var
+  access_token_lifetime_minutes: 30
+  refresh_token_lifetime_days: 7
+  algorithm: "HS256"
+
+  roles:
+    viewer:
+      description: "Read-only access to all screens"
+      permissions:
+        - "requests:read"
+        - "agents:read"
+        - "releases:read"
+        - "reports:read"
+        - "notifications:read"
+        - "cost:read"
+    developer:
+      description: "Standard user — submit requests, view cost"
+      inherits: viewer
+      permissions:
+        - "requests:create"
+        - "requests:retry"
+    admin:
+      description: "Full access — manage users, deployments, budgets"
+      inherits: developer
+      permissions:
+        - "users:manage"
+        - "releases:rollback"
+        - "cost:manage"
+        - "system:configure"
+
+  first_run:
+    default_admin_username: "admin"
+    force_password_change: true

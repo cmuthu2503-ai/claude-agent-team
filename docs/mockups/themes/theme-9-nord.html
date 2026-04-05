@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team Command Center — Theme 9: Nord</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    background: #2e3440;
+    color: #eceff4;
+    min-height: 100vh;
+    display: flex;
+  }
+  /* Sidebar */
+  .sidebar {
+    width: 220px; min-height: 100vh; background: #3b4252; padding: 0;
+    border-right: 1px solid #434c5e; display: flex; flex-direction: column; flex-shrink: 0;
+  }
+  .sidebar-brand {
+    padding: 20px 18px; font-size: 15px; font-weight: 700; color: #eceff4;
+    border-bottom: 1px solid #434c5e;
+  }
+  .sidebar-brand span { color: #88c0d0; }
+  .sidebar-nav { padding: 12px 0; flex: 1; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; padding: 10px 18px;
+    font-size: 13px; color: #d8dee9; cursor: pointer; border-left: 3px solid transparent;
+    transition: background 0.15s, color 0.15s;
+  }
+  .nav-item:hover { background: rgba(136,192,208,0.06); }
+  .nav-item.active {
+    background: rgba(136,192,208,0.1); color: #88c0d0;
+    border-left-color: #88c0d0; font-weight: 600;
+  }
+  .nav-item .icon { width: 18px; text-align: center; font-size: 14px; }
+  .nav-section {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px;
+    color: #4c566a; padding: 18px 18px 6px; font-weight: 600;
+  }
+  .sidebar-footer { padding: 14px 18px; border-top: 1px solid #434c5e; }
+  .sidebar-user { display: flex; align-items: center; gap: 10px; }
+  .sidebar-avatar {
+    width: 30px; height: 30px; border-radius: 50%; background: #5e81ac;
+    display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #eceff4;
+  }
+  .sidebar-name { font-size: 13px; color: #d8dee9; }
+  /* Main area */
+  .main { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
+  /* Theme banner */
+  .theme-banner {
+    text-align: center; padding: 8px; font-size: 11px; letter-spacing: 1.5px;
+    text-transform: uppercase; color: #4c566a; background: #3b4252; border-bottom: 1px solid #434c5e;
+  }
+  /* Top bar */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 28px; border-bottom: 1px solid #434c5e; background: #2e3440;
+  }
+  .topbar-title { font-size: 17px; font-weight: 600; }
+  .topbar-actions { display: flex; align-items: center; gap: 16px; }
+  .bell { position: relative; font-size: 16px; color: #d8dee9; cursor: pointer; }
+  .bell-badge {
+    position: absolute; top: -4px; right: -6px; width: 15px; height: 15px; border-radius: 50%;
+    background: #bf616a; font-size: 9px; color: #eceff4; display: flex; align-items: center; justify-content: center;
+  }
+  /* Content */
+  .content { padding: 24px 28px; flex: 1; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  /* Stat cards */
+  .card {
+    background: #3b4252; border: 1px solid #434c5e; border-radius: 8px; padding: 20px;
+  }
+  .stat-label { font-size: 11px; color: #4c566a; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; font-weight: 600; }
+  .stat-value { font-size: 30px; font-weight: 700; letter-spacing: -0.5px; }
+  .stat-value.blue { color: #88c0d0; }
+  .stat-value.green { color: #a3be8c; }
+  .stat-value.purple { color: #b48ead; }
+  .stat-sub { font-size: 11px; color: #4c566a; margin-top: 4px; }
+  /* Section headers */
+  .section-title { font-size: 14px; font-weight: 600; margin-bottom: 14px; color: #d8dee9; }
+  /* Request input */
+  .request-box { margin-bottom: 24px; }
+  .request-box h3 { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+  .nord-textarea {
+    width: 100%; min-height: 76px; padding: 12px 14px; border-radius: 8px; resize: vertical;
+    background: #2e3440; border: 1px solid #434c5e; color: #eceff4;
+    font-size: 13px; font-family: inherit; outline: none; transition: border-color 0.2s;
+  }
+  .nord-textarea:focus { border-color: #88c0d0; }
+  .nord-textarea::placeholder { color: #4c566a; }
+  .input-row { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
+  .priority-pills { display: flex; gap: 6px; }
+  .pill {
+    padding: 4px 12px; border-radius: 8px; font-size: 12px; cursor: pointer;
+    background: #2e3440; border: 1px solid #434c5e; color: #d8dee9; transition: all 0.15s;
+  }
+  .pill.active { background: rgba(136,192,208,0.15); border-color: #88c0d0; color: #88c0d0; }
+  .btn-submit {
+    padding: 8px 24px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600;
+    background: #5e81ac; color: #eceff4; cursor: pointer; transition: background 0.15s;
+  }
+  .btn-submit:hover { background: #81a1c1; }
+  /* Request cards */
+  .request-card { margin-bottom: 12px; }
+  .request-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .request-id { font-size: 11px; color: #4c566a; font-family: 'Consolas', 'Courier New', monospace; }
+  .badge {
+    padding: 2px 10px; border-radius: 8px; font-size: 11px; font-weight: 600;
+  }
+  .badge.running { background: rgba(136,192,208,0.15); color: #88c0d0; }
+  .badge.review { background: rgba(235,203,139,0.15); color: #ebcb8b; }
+  .badge.queued { background: rgba(180,142,173,0.15); color: #b48ead; }
+  .badge.done { background: rgba(163,190,140,0.15); color: #a3be8c; }
+  .badge.error { background: rgba(191,97,106,0.15); color: #bf616a; }
+  .request-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; color: #eceff4; }
+  .request-meta { font-size: 11px; color: #4c566a; }
+  .request-meta span { margin-right: 14px; }
+  /* Progress bar */
+  .progress-track { height: 3px; background: #434c5e; border-radius: 8px; margin-top: 10px; overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 8px; background: #88c0d0; }
+  .progress-fill.green { background: #a3be8c; }
+  /* Agent rows */
+  .agent-row {
+    display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    border-radius: 8px; background: #2e3440; border: 1px solid #434c5e; margin-bottom: 8px;
+  }
+  .agent-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .agent-dot.active { background: #a3be8c; }
+  .agent-dot.idle { background: #4c566a; }
+  .agent-info { flex: 1; }
+  .agent-name { font-size: 13px; font-weight: 600; color: #eceff4; }
+  .agent-task { font-size: 11px; color: #4c566a; margin-top: 2px; }
+  .agent-status {
+    font-size: 11px; padding: 2px 10px; border-radius: 8px;
+    background: #434c5e; color: #d8dee9;
+  }
+  /* Log panel */
+  .log-panel { max-height: 190px; overflow-y: auto; margin-top: 24px; }
+  .log-entry {
+    font-size: 12px; font-family: 'Consolas', 'Courier New', monospace;
+    padding: 5px 0; color: #d8dee9; border-bottom: 1px solid rgba(67,76,94,0.5);
+  }
+  .log-entry .time { color: #4c566a; margin-right: 10px; }
+  .log-entry .hl { color: #88c0d0; }
+  .log-entry .hl-green { color: #a3be8c; }
+  .log-entry .hl-yellow { color: #ebcb8b; }
+  .mb-24 { margin-bottom: 24px; }
+</style>
+</head>
+<body>
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-brand"><span>Agent</span> Team</div>
+    <nav class="sidebar-nav">
+      <div class="nav-section">Main</div>
+      <div class="nav-item active"><span class="icon">&#9632;</span> Dashboard</div>
+      <div class="nav-item"><span class="icon">&#9998;</span> Requests</div>
+      <div class="nav-item"><span class="icon">&#9881;</span> Agents</div>
+      <div class="nav-section">Monitor</div>
+      <div class="nav-item"><span class="icon">&#9776;</span> Activity Log</div>
+      <div class="nav-item"><span class="icon">&#9733;</span> Performance</div>
+      <div class="nav-section">Settings</div>
+      <div class="nav-item"><span class="icon">&#9874;</span> Configuration</div>
+      <div class="nav-item"><span class="icon">&#9788;</span> Preferences</div>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="sidebar-user">
+        <div class="sidebar-avatar">CK</div>
+        <div class="sidebar-name">Chandler K.</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <div class="main">
+    <div class="theme-banner">Theme 9: Nord</div>
+    <div class="topbar">
+      <div class="topbar-title">Command Center</div>
+      <div class="topbar-actions">
+        <div class="bell">&#128276;<div class="bell-badge">3</div></div>
+      </div>
+    </div>
+
+    <div class="content">
+      <!-- Stats -->
+      <div class="grid-3">
+        <div class="card">
+          <div class="stat-label">Active Requests</div>
+          <div class="stat-value blue">7</div>
+          <div class="stat-sub">2 awaiting review</div>
+        </div>
+        <div class="card">
+          <div class="stat-label">Completed Today</div>
+          <div class="stat-value green">23</div>
+          <div class="stat-sub">+8 from yesterday</div>
+        </div>
+        <div class="card">
+          <div class="stat-label">Agents Online</div>
+          <div class="stat-value purple">5 / 6</div>
+          <div class="stat-sub">1 agent idle</div>
+        </div>
+      </div>
+
+      <!-- New Request -->
+      <div class="card request-box">
+        <h3>New Request</h3>
+        <textarea class="nord-textarea" placeholder="Describe what you need the agent team to do..."></textarea>
+        <div class="input-row">
+          <div class="priority-pills">
+            <span class="pill">Low</span>
+            <span class="pill active">Normal</span>
+            <span class="pill">High</span>
+            <span class="pill">Urgent</span>
+          </div>
+          <button class="btn-submit">Submit Request</button>
+        </div>
+      </div>
+
+      <!-- Active Requests + Agents -->
+      <div class="grid-2 mb-24">
+        <div>
+          <div class="section-title">Active Requests</div>
+          <div class="card request-card">
+            <div class="request-header">
+              <span class="request-id">REQ-042</span>
+              <span class="badge running">Running</span>
+            </div>
+            <div class="request-title">Refactor authentication module</div>
+            <div class="request-meta"><span>Agent: Coder-1</span><span>12m elapsed</span></div>
+            <div class="progress-track"><div class="progress-fill" style="width:68%"></div></div>
+          </div>
+          <div class="card request-card">
+            <div class="request-header">
+              <span class="request-id">REQ-041</span>
+              <span class="badge review">Review</span>
+            </div>
+            <div class="request-title">Add unit tests for payment service</div>
+            <div class="request-meta"><span>Agent: Tester-1</span><span>28m elapsed</span></div>
+            <div class="progress-track"><div class="progress-fill green" style="width:100%"></div></div>
+          </div>
+          <div class="card request-card">
+            <div class="request-header">
+              <span class="request-id">REQ-040</span>
+              <span class="badge queued">Queued</span>
+            </div>
+            <div class="request-title">Design API schema for v2 endpoints</div>
+            <div class="request-meta"><span>Unassigned</span><span>Waiting</span></div>
+            <div class="progress-track"><div class="progress-fill" style="width:0%"></div></div>
+          </div>
+        </div>
+        <div>
+          <div class="section-title">Agent Pool</div>
+          <div class="agent-row">
+            <div class="agent-dot active"></div>
+            <div class="agent-info"><div class="agent-name">Coder-1</div><div class="agent-task">REQ-042 — refactor auth</div></div>
+            <div class="agent-status">busy</div>
+          </div>
+          <div class="agent-row">
+            <div class="agent-dot active"></div>
+            <div class="agent-info"><div class="agent-name">Coder-2</div><div class="agent-task">REQ-038 — database migration</div></div>
+            <div class="agent-status">busy</div>
+          </div>
+          <div class="agent-row">
+            <div class="agent-dot active"></div>
+            <div class="agent-info"><div class="agent-name">Tester-1</div><div class="agent-task">REQ-041 — payment tests</div></div>
+            <div class="agent-status">busy</div>
+          </div>
+          <div class="agent-row">
+            <div class="agent-dot active"></div>
+            <div class="agent-info"><div class="agent-name">Reviewer-1</div><div class="agent-task">REQ-039 — code review</div></div>
+            <div class="agent-status">busy</div>
+          </div>
+          <div class="agent-row">
+            <div class="agent-dot idle"></div>
+            <div class="agent-info"><div class="agent-name">Planner-1</div><div class="agent-task">No active task</div></div>
+            <div class="agent-status">idle</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Activity Log -->
+      <div class="section-title">Activity Log</div>
+      <div class="card log-panel">
+        <div class="log-entry"><span class="time">14:32:08</span> <span class="hl">Coder-1</span> started task REQ-042</div>
+        <div class="log-entry"><span class="time">14:30:55</span> <span class="hl">Tester-1</span> completed tests — <span class="hl-green">14 passed</span>, 0 failed</div>
+        <div class="log-entry"><span class="time">14:28:12</span> REQ-041 moved to <span class="hl-yellow">review</span></div>
+        <div class="log-entry"><span class="time">14:25:44</span> <span class="hl">Reviewer-1</span> approved REQ-037</div>
+        <div class="log-entry"><span class="time">14:22:01</span> REQ-040 queued — priority normal</div>
+        <div class="log-entry"><span class="time">14:18:33</span> <span class="hl">Coder-2</span> pushed 3 commits on REQ-038</div>
+        <div class="log-entry"><span class="time">14:15:10</span> <span class="hl">Planner-1</span> finished breakdown for REQ-039</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

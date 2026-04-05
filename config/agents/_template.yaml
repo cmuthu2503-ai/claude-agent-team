@@ -1,0 +1,39 @@
+# Agent Configuration Template
+# Copy this file and fill in all fields to define a new agent.
+# See docs/expansion-playbook.md for step-by-step guide.
+
+agent_id: ""                        # Unique snake_case identifier
+display_name: ""                    # Human-readable name
+role: ""                            # Job title
+team: ""                            # team_id from teams.yaml
+reports_to: ""                      # agent_id of direct manager (null for Engineering Lead)
+
+model: ""                           # claude-opus-4-6 | claude-sonnet-4-6
+
+system_prompt: |
+  You are the {display_name}. Your role is {role} on the {team} team.
+  {Add specific instructions here.}
+
+responsibilities:
+  - id: ""                          # Unique ID (e.g., "BE-001")
+    description: ""                 # What this agent does
+    category: ""                    # planning | development | review | testing | deployment
+
+tools: []                           # List of tool_ids from tools.yaml
+
+outputs:                            # What this agent produces
+  - name: ""
+    format: ""                      # markdown | json | yaml | code | report
+
+delegation:
+  can_delegate_to: []               # agent_ids this agent can delegate to
+  max_concurrent_tasks: 3           # How many tasks this agent handles at once
+
+quality_gates:                      # Conditions that must pass before output is accepted
+  - gate_id: ""
+    description: ""
+    threshold: ""                   # Reference to thresholds.yaml key
+
+metadata:
+  created: ""
+  version: "1.0"

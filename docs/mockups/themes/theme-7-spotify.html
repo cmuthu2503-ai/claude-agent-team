@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team Command Center — Spotify Theme</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #121212; color: #ffffff; line-height: 1.5; min-height: 100vh;
+  }
+  h1, h2, h3 { font-weight: 700; color: #ffffff; letter-spacing: -0.5px; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #535353; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #727272; }
+
+  /* Theme Banner */
+  .theme-banner {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 999;
+    background: #1DB954; color: #000000; text-align: center;
+    padding: 6px 0; font-size: 13px; font-weight: 700; letter-spacing: 0.5px;
+  }
+
+  /* Top Navigation */
+  .top-nav {
+    background: #000000; position: fixed; top: 30px; left: 0; right: 0; z-index: 900;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 32px; height: 56px;
+  }
+  .nav-brand {
+    font-size: 20px; font-weight: 800; color: #ffffff; display: flex; align-items: center; gap: 10px;
+  }
+  .nav-brand .logo {
+    width: 28px; height: 28px; background: #1DB954; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 900;
+  }
+  .nav-links { display: flex; gap: 8px; }
+  .nav-link {
+    padding: 8px 18px; border-radius: 999px; font-size: 14px; font-weight: 700;
+    color: #b3b3b3; cursor: pointer; text-decoration: none; position: relative;
+    transition: color 0.2s, background 0.2s;
+  }
+  .nav-link:hover { color: #ffffff; }
+  .nav-link.active { color: #ffffff; background: #282828; }
+  .nav-link.active::after {
+    content: ''; position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%);
+    width: 5px; height: 5px; background: #1DB954; border-radius: 50%;
+  }
+  .nav-right { display: flex; align-items: center; gap: 16px; }
+  .bell {
+    position: relative; font-size: 20px; cursor: pointer; color: #b3b3b3;
+    transition: color 0.2s;
+  }
+  .bell:hover { color: #ffffff; }
+  .bell-badge {
+    position: absolute; top: -4px; right: -6px; background: #1DB954; color: #000000;
+    font-size: 10px; width: 16px; height: 16px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; font-weight: 800;
+  }
+  .user-avatar {
+    width: 32px; height: 32px; border-radius: 50%; background: #535353;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700; cursor: pointer;
+  }
+  .user-avatar:hover { background: #636363; }
+
+  /* Main Layout */
+  .main { padding: 110px 32px 48px 32px; max-width: 1100px; margin: 0 auto; }
+
+  /* Hero heading */
+  .hero-heading { font-size: 30px; font-weight: 800; margin-bottom: 28px; }
+
+  /* Request Input */
+  .input-card {
+    background: #181818; border-radius: 16px; padding: 28px; margin-bottom: 36px;
+    transition: background 0.2s;
+  }
+  .input-card:hover { background: #1a1a1a; }
+  .input-label {
+    font-size: 14px; font-weight: 700; color: #b3b3b3; margin-bottom: 12px;
+    text-transform: uppercase; letter-spacing: 1px;
+  }
+  .request-input {
+    width: 100%; border: none; outline: none; resize: none; background: #282828;
+    border-radius: 12px; padding: 16px 18px; font-size: 15px; font-weight: 500;
+    color: #ffffff; font-family: inherit; min-height: 56px; line-height: 1.5;
+  }
+  .request-input::placeholder { color: #535353; }
+  .request-input:focus { background: #333333; }
+  .submit-row { display: flex; justify-content: flex-end; margin-top: 16px; }
+  .submit-btn {
+    background: #1DB954; color: #000000; border: none; padding: 12px 36px;
+    border-radius: 999px; font-size: 14px; font-weight: 800; cursor: pointer;
+    letter-spacing: 0.5px; text-transform: uppercase; transition: transform 0.1s, background 0.2s;
+  }
+  .submit-btn:hover { background: #1ed760; transform: scale(1.04); }
+
+  /* Section headings */
+  .section-heading {
+    font-size: 22px; font-weight: 800; margin-bottom: 16px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .section-heading .badge {
+    background: #282828; color: #b3b3b3; font-size: 13px; font-weight: 700;
+    padding: 4px 14px; border-radius: 999px;
+  }
+
+  /* Cards Grid */
+  .cards-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 40px; }
+
+  /* Active Card */
+  .card {
+    background: #181818; border-radius: 12px; padding: 20px; cursor: pointer;
+    transition: background 0.2s; position: relative; overflow: hidden;
+  }
+  .card:hover { background: #282828; }
+  .card-active::before {
+    content: ''; position: absolute; top: 0; left: 0; bottom: 0; width: 4px;
+    background: linear-gradient(180deg, #1DB954 0%, transparent 100%);
+    border-radius: 4px 0 0 4px;
+  }
+  .card-title { font-size: 16px; font-weight: 700; margin-bottom: 6px; color: #ffffff; }
+  .card-desc { font-size: 13px; color: #b3b3b3; margin-bottom: 12px; line-height: 1.5; }
+  .card-footer { display: flex; align-items: center; justify-content: space-between; }
+  .card-meta { font-size: 12px; color: #535353; font-weight: 600; }
+  .card-meta span { color: #b3b3b3; }
+
+  /* Status Pills */
+  .pill {
+    display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 999px;
+    font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .pill-running { background: rgba(29,185,84,0.2); color: #1DB954; }
+  .pill-queued { background: rgba(255,199,0,0.15); color: #ffc700; }
+  .pill-success { background: rgba(29,185,84,0.15); color: #1DB954; }
+  .pill-failed { background: rgba(233,60,60,0.15); color: #e93c3c; }
+
+  /* Progress */
+  .progress-bar {
+    height: 4px; background: #404040; border-radius: 2px; margin: 12px 0 8px 0; overflow: hidden;
+  }
+  .progress-fill { height: 100%; border-radius: 2px; background: #1DB954; }
+
+  /* Completed Section */
+  .completed-section { margin-top: 8px; }
+  .completed-list { display: flex; flex-direction: column; gap: 8px; }
+  .card-completed { opacity: 0.7; grid-column: span 1; }
+  .card-completed:hover { opacity: 1; }
+  .check { color: #1DB954; margin-right: 6px; font-weight: 900; }
+
+  /* Cost row */
+  .cost-row {
+    display: flex; align-items: center; gap: 16px; font-size: 12px; color: #535353; margin-top: 6px;
+  }
+  .cost-row .val { color: #1DB954; font-weight: 700; }
+</style>
+</head>
+<body>
+
+<div class="theme-banner">Theme 7: Spotify</div>
+
+<!-- Top Navigation -->
+<nav class="top-nav">
+  <div class="nav-brand">
+    <div class="logo">AT</div>
+    Agent Team
+  </div>
+  <div class="nav-links">
+    <a class="nav-link active" href="#">Command Center</a>
+    <a class="nav-link" href="#">History</a>
+    <a class="nav-link" href="#">Releases</a>
+    <a class="nav-link" href="#">Team</a>
+    <a class="nav-link" href="#">Costs</a>
+  </div>
+  <div class="nav-right">
+    <div class="bell">
+      &#x1F514;
+      <div class="bell-badge">3</div>
+    </div>
+    <div class="user-avatar">CL</div>
+  </div>
+</nav>
+
+<!-- Main Content -->
+<div class="main">
+
+  <div class="hero-heading">Command Center</div>
+
+  <!-- Request Input -->
+  <div class="input-card">
+    <div class="input-label">New Request</div>
+    <textarea class="request-input" rows="2" placeholder="What should the agent team work on next?"></textarea>
+    <div class="submit-row">
+      <button class="submit-btn">Submit Request</button>
+    </div>
+  </div>
+
+  <!-- Active Requests -->
+  <div class="section-heading">
+    Active Requests
+    <span class="badge">2 running</span>
+  </div>
+
+  <div class="cards-grid">
+    <div class="card card-active">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <span class="pill pill-running">Running</span>
+        <span class="card-meta">4m 12s</span>
+      </div>
+      <div class="card-title">Refactor authentication middleware</div>
+      <div class="card-desc">Extract JWT validation into shared module and update all service endpoints to use the new auth layer.</div>
+      <div class="progress-bar"><div class="progress-fill" style="width:65%"></div></div>
+      <div class="cost-row">
+        Agent: <span class="val">claude-1</span>
+        <span>|</span>
+        Cost: <span class="val">$0.18</span>
+      </div>
+    </div>
+
+    <div class="card card-active">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <span class="pill pill-queued">Queued</span>
+        <span class="card-meta">1m 05s</span>
+      </div>
+      <div class="card-title">Write integration tests for payments API</div>
+      <div class="card-desc">Create end-to-end tests covering Stripe webhook handling, subscription upgrades, and refund flows.</div>
+      <div class="progress-bar"><div class="progress-fill" style="width:20%;background:#ffc700"></div></div>
+      <div class="cost-row">
+        Agent: <span class="val">claude-2</span>
+        <span>|</span>
+        Cost: <span class="val">$0.06</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Completed Requests -->
+  <div class="completed-section">
+    <div class="section-heading">
+      Completed
+      <span class="badge">3 total</span>
+    </div>
+
+    <div class="completed-list">
+      <div class="card card-completed">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <span class="pill pill-success">Done</span>
+          <span class="card-meta">25 min ago</span>
+        </div>
+        <div class="card-title"><span class="check">&#x2713;</span>Update README with deployment instructions</div>
+        <div class="cost-row">
+          Agent: <span class="val">claude-3</span>
+          <span>|</span>
+          Cost: <span class="val">$0.04</span>
+        </div>
+      </div>
+
+      <div class="card card-completed">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <span class="pill pill-success">Done</span>
+          <span class="card-meta">1 hr ago</span>
+        </div>
+        <div class="card-title"><span class="check">&#x2713;</span>Fix CORS headers on staging environment</div>
+        <div class="cost-row">
+          Agent: <span class="val">claude-1</span>
+          <span>|</span>
+          Cost: <span class="val">$0.12</span>
+        </div>
+      </div>
+
+      <div class="card card-completed">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <span class="pill pill-failed">Failed</span>
+          <span class="card-meta">2 hrs ago</span>
+        </div>
+        <div class="card-title" style="color:#e93c3c;">&#x2717; Database migration for user preferences table</div>
+        <div class="card-desc" style="color:#535353;">Migration script encountered a foreign key constraint error on the preferences table.</div>
+        <div class="cost-row">
+          Agent: <span class="val">claude-2</span>
+          <span>|</span>
+          Cost: <span class="val">$0.09</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

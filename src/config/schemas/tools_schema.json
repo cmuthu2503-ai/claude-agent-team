@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tools Configuration",
+  "type": "object",
+  "required": ["tools"],
+  "properties": {
+    "tools": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["description", "category", "available_to"],
+        "properties": {
+          "description": { "type": "string" },
+          "category": {
+            "type": "string",
+            "enum": ["core", "github", "development", "quality", "testing", "infrastructure", "database", "research"]
+          },
+          "available_to": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

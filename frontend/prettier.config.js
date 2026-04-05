@@ -1,0 +1,8 @@
+/** @type {import("prettier").Config} */
+export default {
+  semi: false,
+  singleQuote: false,
+  trailingComma: "all",
+  tabWidth: 2,
+  plugins: ["prettier-plugin-tailwindcss"],
+}

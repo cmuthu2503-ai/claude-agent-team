@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team Command Center — Stripe Theme</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    background: #f6f9fc;
+    color: #1a1f36;
+    line-height: 1.6;
+  }
+
+  /* Gradient accent bar */
+  .accent-bar {
+    height: 3px;
+    background: linear-gradient(90deg, #635bff, #5469d4, #10b981);
+  }
+
+  /* Navbar */
+  .navbar {
+    background: #fff;
+    border-bottom: 1px solid #e3e8ee;
+    padding: 0 32px;
+    display: flex;
+    align-items: center;
+    height: 56px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .navbar-logo {
+    font-size: 17px;
+    font-weight: 700;
+    color: #635bff;
+    margin-right: 36px;
+    letter-spacing: -0.3px;
+  }
+  .navbar-logo span { color: #1a1f36; }
+  .nav-items { display: flex; gap: 28px; flex: 1; }
+  .nav-items a {
+    text-decoration: none;
+    color: #697386;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 16px 0;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .nav-items a:hover, .nav-items a.active {
+    color: #635bff;
+    border-bottom-color: #635bff;
+  }
+  .nav-right { display: flex; align-items: center; gap: 18px; }
+  .nav-bell {
+    position: relative;
+    width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .nav-bell:hover { background: #f0f0f8; }
+  .nav-bell svg { width: 18px; height: 18px; color: #697386; }
+  .nav-bell .badge {
+    position: absolute; top: 4px; right: 4px;
+    width: 8px; height: 8px; background: #ef4444;
+    border-radius: 50%; border: 2px solid #fff;
+  }
+  .nav-user {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #635bff, #7c3aed);
+    color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 600;
+    cursor: pointer;
+  }
+
+  /* Theme banner */
+  .theme-banner {
+    background: linear-gradient(135deg, #635bff 0%, #7c3aed 100%);
+    color: #fff;
+    text-align: center;
+    padding: 8px 16px;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+  }
+
+  /* Main content */
+  .main { max-width: 960px; margin: 0 auto; padding: 32px 24px; }
+  .page-title {
+    font-size: 26px;
+    font-weight: 700;
+    color: #1a1f36;
+    margin-bottom: 6px;
+    letter-spacing: -0.4px;
+  }
+  .page-subtitle {
+    font-size: 14px;
+    color: #697386;
+    margin-bottom: 28px;
+  }
+
+  /* Cards */
+  .card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    padding: 24px;
+    margin-bottom: 20px;
+    transition: transform 0.15s, box-shadow 0.15s;
+  }
+  .card:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  }
+  .card-header {
+    font-size: 15px;
+    font-weight: 600;
+    color: #1a1f36;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .card-header .count {
+    background: #f0f0f8;
+    color: #635bff;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 20px;
+  }
+
+  /* Request input */
+  .request-input textarea {
+    width: 100%;
+    min-height: 80px;
+    border: 1px solid #e3e8ee;
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 14px;
+    font-family: inherit;
+    color: #1a1f36;
+    resize: vertical;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    outline: none;
+  }
+  .request-input textarea::placeholder { color: #a3acb9; }
+  .request-input textarea:focus {
+    border-color: #635bff;
+    box-shadow: 0 0 0 3px rgba(99,91,255,0.12);
+  }
+  .request-input .actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 14px;
+    gap: 10px;
+  }
+  .btn-gradient {
+    background: linear-gradient(135deg, #635bff, #7c3aed);
+    color: #fff;
+    border: none;
+    padding: 10px 22px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s, transform 0.1s;
+    box-shadow: 0 2px 6px rgba(99,91,255,0.25);
+  }
+  .btn-gradient:hover { opacity: 0.92; transform: translateY(-0.5px); }
+
+  /* Active request cards */
+  .request-card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    padding: 20px 24px;
+    margin-bottom: 14px;
+    border-left: 4px solid #5469d4;
+    transition: transform 0.15s, box-shadow 0.15s;
+  }
+  .request-card:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  }
+  .request-card .req-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .req-id {
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    font-size: 12px;
+    color: #697386;
+    background: #f6f9fc;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .badge {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 12px;
+    border-radius: 20px;
+  }
+  .badge-progress { background: #ede9fe; color: #635bff; }
+  .badge-analyzing { background: #fef3c7; color: #d97706; }
+  .badge-feature { background: #f0f0f8; color: #5469d4; }
+  .badge-high { background: #fee2e2; color: #ef4444; }
+  .badge-medium { background: #fff7ed; color: #ea580c; }
+  .badge-success { background: #d1fae5; color: #059669; }
+  .req-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #1a1f36;
+    margin-bottom: 10px;
+  }
+  .req-badges { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* Section titles */
+  .section-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #1a1f36;
+    margin: 30px 0 14px 0;
+    letter-spacing: -0.2px;
+  }
+
+  /* Completed table */
+  .completed-list { list-style: none; }
+  .completed-list li {
+    display: flex;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid #f0f2f5;
+    font-size: 14px;
+    color: #3c4257;
+  }
+  .completed-list li:last-child { border-bottom: none; }
+  .check-icon {
+    width: 20px; height: 20px;
+    background: #d1fae5;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    margin-right: 14px;
+    flex-shrink: 0;
+  }
+  .check-icon svg { width: 12px; height: 12px; color: #059669; }
+  .completed-id {
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    font-size: 12px;
+    color: #697386;
+    margin-right: 12px;
+  }
+  .completed-time {
+    margin-left: auto;
+    font-size: 12px;
+    color: #a3acb9;
+  }
+
+  /* Cost widget */
+  .cost-widget {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 24px;
+  }
+  .cost-label { font-size: 13px; color: #697386; font-weight: 500; }
+  .cost-value {
+    font-size: 22px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #635bff, #7c3aed);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .cost-period { font-size: 12px; color: #a3acb9; }
+</style>
+</head>
+<body>
+
+<div class="accent-bar"></div>
+<div class="theme-banner">Theme Preview: Stripe — Polished gradient-rich fintech aesthetic</div>
+
+<nav class="navbar">
+  <div class="navbar-logo"><span>Agent</span> Team</div>
+  <div class="nav-items">
+    <a href="#" class="active">Dashboard</a>
+    <a href="#">Requests</a>
+    <a href="#">Agents</a>
+    <a href="#">History</a>
+    <a href="#">Settings</a>
+  </div>
+  <div class="nav-right">
+    <div class="nav-bell">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      <div class="badge"></div>
+    </div>
+    <div class="nav-user">JD</div>
+  </div>
+</nav>
+
+<div class="main">
+  <h1 class="page-title">Command Center</h1>
+  <p class="page-subtitle">Manage and monitor your agent team requests</p>
+
+  <!-- Request Input -->
+  <div class="card request-input">
+    <div class="card-header">New Request</div>
+    <textarea placeholder="Describe what you'd like the agent team to build..."></textarea>
+    <div class="actions">
+      <button class="btn-gradient">Submit Request</button>
+    </div>
+  </div>
+
+  <!-- Active Requests -->
+  <div class="section-title">Active Requests</div>
+
+  <div class="request-card">
+    <div class="req-top">
+      <span class="req-id">REQ-A1B2C3</span>
+      <span class="badge badge-high">high</span>
+    </div>
+    <div class="req-title">Build login page with JWT auth</div>
+    <div class="req-badges">
+      <span class="badge badge-progress">in_progress</span>
+      <span class="badge badge-feature">feature</span>
+    </div>
+  </div>
+
+  <div class="request-card">
+    <div class="req-top">
+      <span class="req-id">REQ-D4E5F6</span>
+      <span class="badge badge-medium">medium</span>
+    </div>
+    <div class="req-title">Add dark mode support</div>
+    <div class="req-badges">
+      <span class="badge badge-analyzing">analyzing</span>
+      <span class="badge badge-feature">feature</span>
+    </div>
+  </div>
+
+  <!-- Completed Requests -->
+  <div class="section-title">Completed</div>
+  <div class="card">
+    <ul class="completed-list">
+      <li>
+        <div class="check-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <span class="completed-id">REQ-7G8H9I</span>
+        Set up CI/CD pipeline with GitHub Actions
+        <span class="completed-time">2 hours ago</span>
+      </li>
+      <li>
+        <div class="check-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <span class="completed-id">REQ-J0K1L2</span>
+        Create user profile API endpoints
+        <span class="completed-time">5 hours ago</span>
+      </li>
+      <li>
+        <div class="check-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <span class="completed-id">REQ-M3N4O5</span>
+        Fix pagination bug in search results
+        <span class="completed-time">1 day ago</span>
+      </li>
+    </ul>
+  </div>
+
+  <!-- Cost Widget -->
+  <div class="cost-widget">
+    <div>
+      <div class="cost-label">API Cost</div>
+      <div class="cost-period">Today's usage</div>
+    </div>
+    <div class="cost-value">$12.45</div>
+  </div>
+</div>
+
+</body>
+</html>

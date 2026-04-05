@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team Command Center - Theme 14: Brutalist</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; border-radius: 0 !important; }
+  body { font-family: 'Courier New', Monaco, monospace; background: #ffffff; color: #000000; font-size: 14px; line-height: 1.6; }
+  a { color: #0000ff; text-decoration: underline; }
+  a:hover { background: #ffff00; }
+  /* BANNER */
+  .theme-banner { border-bottom: 3px solid #000; padding: 8px 16px; font-size: 11px; text-transform: uppercase; letter-spacing: 3px; text-align: center; background: #ffff00; font-weight: 700; }
+  .joke { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #666; text-align: center; padding: 4px 0; border-bottom: 1px solid #000; }
+  /* NAVBAR */
+  .navbar { border-bottom: 3px solid #000; display: flex; align-items: stretch; }
+  .navbar-brand { font-size: 18px; font-weight: 700; padding: 12px 20px; border-right: 3px solid #000; text-transform: uppercase; letter-spacing: 2px; white-space: nowrap; }
+  .nav-links { display: flex; align-items: stretch; flex: 1; }
+  .nav-link { padding: 12px 16px; border-right: 2px solid #000; font-size: 13px; text-decoration: none; color: #000; text-transform: uppercase; display: flex; align-items: center; }
+  .nav-link:hover { background: #000; color: #fff; }
+  .nav-link.active { background: #000; color: #fff; }
+  .nav-link .num { margin-right: 6px; color: #0000ff; font-weight: 700; }
+  .nav-link.active .num { color: #ffff00; }
+  .nav-right { margin-left: auto; display: flex; align-items: stretch; }
+  .notif-block { border-left: 2px solid #000; padding: 12px 16px; display: flex; align-items: center; gap: 6px; cursor: pointer; position: relative; }
+  .notif-block:hover { background: #f5f5f5; }
+  .notif-count { background: #000; color: #fff; font-size: 12px; font-weight: 700; padding: 1px 6px; }
+  .user-block { border-left: 2px solid #000; padding: 12px 16px; font-weight: 700; display: flex; align-items: center; }
+  /* MAIN */
+  .main { max-width: 1050px; margin: 0 auto; padding: 24px 20px; }
+  .page-title { font-family: 'Times New Roman', Times, serif; font-size: 48px; font-weight: 700; text-transform: uppercase; letter-spacing: -1px; border-bottom: 3px solid #000; padding-bottom: 8px; margin-bottom: 4px; }
+  .page-subtitle { font-size: 12px; text-transform: uppercase; letter-spacing: 4px; color: #666; margin-bottom: 28px; }
+  /* INPUT */
+  .input-section { border: 3px solid #000; padding: 20px; margin-bottom: 28px; }
+  .input-label { font-size: 11px; text-transform: uppercase; letter-spacing: 3px; font-weight: 700; margin-bottom: 10px; }
+  .input-row { display: flex; gap: 0; }
+  .request-input { flex: 1; padding: 10px 12px; font-family: 'Courier New', Monaco, monospace; font-size: 14px; border: 2px solid #000; border-right: none; outline: none; background: #fff; }
+  .request-input:focus { background: #ffff00; }
+  .request-input::placeholder { color: #999; }
+  .submit-btn { background: #fff; color: #000; border: 2px solid #000; padding: 10px 28px; font-family: 'Courier New', Monaco, monospace; font-size: 14px; font-weight: 700; text-transform: uppercase; cursor: pointer; letter-spacing: 1px; }
+  .submit-btn:hover { background: #000; color: #fff; }
+  /* STATS */
+  .stats-row { display: flex; margin-bottom: 28px; }
+  .stat-box { flex: 1; border: 2px solid #000; padding: 16px; text-align: center; }
+  .stat-box + .stat-box { border-left: none; }
+  .stat-number { font-size: 36px; font-weight: 700; line-height: 1; }
+  .stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 3px; color: #666; margin-top: 4px; }
+  /* SECTION */
+  .section-header { font-family: 'Times New Roman', Times, serif; font-size: 28px; font-weight: 700; text-transform: uppercase; border-bottom: 2px solid #000; padding-bottom: 6px; margin-bottom: 16px; margin-top: 8px; display: flex; align-items: baseline; gap: 12px; }
+  .section-count { background: #000; color: #fff; font-family: 'Courier New', monospace; font-size: 14px; padding: 2px 8px; }
+  /* CARDS */
+  .card { border: 2px solid #000; padding: 16px 20px; margin-bottom: 10px; }
+  .card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .card-id { font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: #666; }
+  .card-title { font-weight: 700; font-size: 16px; margin-bottom: 6px; }
+  .card-desc { font-size: 13px; color: #444; margin-bottom: 12px; }
+  .card-meta { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 12px; }
+  /* STATUS TEXT */
+  .status-tag { font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
+  .status-progress { color: #0000ff; }
+  .status-complete { color: #008000; }
+  .status-analyzing { color: #ff00ff; }
+  /* PRIORITY */
+  .priority { font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: 1px; padding: 2px 8px; border: 2px solid #000; }
+  .pri-high { background: #ff0000; color: #fff; }
+  .pri-medium { background: #ffff00; color: #000; }
+  .pri-low { background: #f5f5f5; color: #000; }
+  /* AGENT */
+  .agent-name { font-weight: 700; }
+  .timestamp { color: #888; }
+  /* PROGRESS BAR (ASCII) */
+  .ascii-progress { font-size: 13px; letter-spacing: 1px; white-space: nowrap; color: #000; }
+  /* COMPLETED */
+  .completed-section { margin-top: 32px; }
+  .completed-banner { background: #000; color: #fff; padding: 8px 20px; font-size: 12px; text-transform: uppercase; letter-spacing: 3px; font-weight: 700; display: flex; justify-content: space-between; margin-bottom: 10px; }
+  .card-completed { border-style: dashed; }
+  .card-completed .card-title { text-decoration: line-through; }
+  .checkmark { color: #008000; font-weight: 700; }
+  /* FOOTER */
+  .footer { margin-top: 48px; border-top: 3px solid #000; padding-top: 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: #888; display: flex; justify-content: space-between; }
+  .footer a { color: #0000ff; }
+</style>
+</head>
+<body>
+
+<div class="theme-banner">Theme 14: Brutalist</div>
+<div class="joke">/// NO CSS FRAMEWORKS WERE HARMED IN THE MAKING OF THIS PAGE ///</div>
+
+<nav class="navbar">
+  <div class="navbar-brand">AGENT_TEAM</div>
+  <div class="nav-links">
+    <a class="nav-link active" href="#"><span class="num">1.</span> Command Center</a>
+    <a class="nav-link" href="#"><span class="num">2.</span> Agents</a>
+    <a class="nav-link" href="#"><span class="num">3.</span> History</a>
+    <a class="nav-link" href="#"><span class="num">4.</span> Settings</a>
+  </div>
+  <div class="nav-right">
+    <div class="notif-block">
+      BELL <span class="notif-count">3</span>
+    </div>
+    <div class="user-block">[USER:CK]</div>
+  </div>
+</nav>
+
+<div class="main">
+  <h1 class="page-title">Command Center</h1>
+  <p class="page-subtitle">/// agent orchestration terminal ///</p>
+
+  <!-- Input -->
+  <div class="input-section">
+    <div class="input-label">&gt; NEW REQUEST_</div>
+    <div class="input-row">
+      <input type="text" class="request-input" placeholder="describe your task here...">
+      <button class="submit-btn">[SUBMIT]</button>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-row">
+    <div class="stat-box"><div class="stat-number">5</div><div class="stat-label">Total</div></div>
+    <div class="stat-box"><div class="stat-number">2</div><div class="stat-label">Active</div></div>
+    <div class="stat-box"><div class="stat-number">3</div><div class="stat-label">Done</div></div>
+    <div class="stat-box"><div class="stat-number">0</div><div class="stat-label">Failed</div></div>
+  </div>
+
+  <!-- Active Requests -->
+  <div class="section-header">
+    Active Requests <span class="section-count">2</span>
+  </div>
+
+  <div class="card">
+    <div class="card-top">
+      <span class="card-id">REQ-2025-042</span>
+      <span class="priority pri-high">HIGH</span>
+    </div>
+    <div class="card-title">Refactor authentication module to support OAuth2 PKCE flow</div>
+    <div class="card-desc">Migrate existing session-based auth to OAuth2 with PKCE for the SPA client. Update token refresh logic and add CSRF protection.</div>
+    <div class="card-meta">
+      <span class="status-tag status-progress">[IN PROGRESS]</span>
+      <span class="agent-name">agent://Coder-01</span>
+      <span class="timestamp">14 min ago</span>
+      <span class="ascii-progress" title="65%">[&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;] 65%</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-top">
+      <span class="card-id">REQ-2025-043</span>
+      <span class="priority pri-medium">MEDIUM</span>
+    </div>
+    <div class="card-title">Generate API documentation for v3 endpoints</div>
+    <div class="card-desc">Auto-generate OpenAPI 3.1 specs from route handlers and produce interactive Swagger docs for the developer portal.</div>
+    <div class="card-meta">
+      <span class="status-tag status-analyzing">[ANALYZING]</span>
+      <span class="agent-name">agent://Docs-02</span>
+      <span class="timestamp">6 min ago</span>
+      <span class="ascii-progress" title="30%">[&#9619;&#9619;&#9619;&#9619;&#9619;&#9619;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;] 30%</span>
+    </div>
+  </div>
+
+  <!-- Completed -->
+  <div class="completed-section">
+    <div class="completed-banner">
+      <span>Completed Requests</span>
+      <span>[3]</span>
+    </div>
+
+    <div class="card card-completed">
+      <div class="card-top">
+        <span class="card-id">REQ-2025-041</span>
+        <span class="priority pri-high">HIGH</span>
+      </div>
+      <div class="card-title"><span class="checkmark">[x]</span> Fix critical N+1 query in dashboard analytics endpoint</div>
+      <div class="card-desc">Resolved N+1 by adding eager loading with .includes(:metrics). Response time: 4.2s -> 180ms.</div>
+      <div class="card-meta">
+        <span class="status-tag status-complete">[COMPLETED]</span>
+        <span class="agent-name">agent://Coder-01</span>
+        <span class="timestamp">1 hour ago</span>
+      </div>
+    </div>
+
+    <div class="card card-completed">
+      <div class="card-top">
+        <span class="card-id">REQ-2025-040</span>
+        <span class="priority pri-medium">MEDIUM</span>
+      </div>
+      <div class="card-title"><span class="checkmark">[x]</span> Add integration tests for payment processing webhook</div>
+      <div class="card-desc">Created 12 test cases covering success, failure, retry, and idempotency scenarios for Stripe webhook handler.</div>
+      <div class="card-meta">
+        <span class="status-tag status-complete">[COMPLETED]</span>
+        <span class="agent-name">agent://Tester-03</span>
+        <span class="timestamp">3 hours ago</span>
+      </div>
+    </div>
+
+    <div class="card card-completed">
+      <div class="card-top">
+        <span class="card-id">REQ-2025-039</span>
+        <span class="priority pri-low">LOW</span>
+      </div>
+      <div class="card-title"><span class="checkmark">[x]</span> Update CI pipeline to cache Docker layers</div>
+      <div class="card-desc">Configured BuildKit cache mounts and GitHub Actions cache. Build time: 8 min -> 2.5 min.</div>
+      <div class="card-meta">
+        <span class="status-tag status-complete">[COMPLETED]</span>
+        <span class="agent-name">agent://DevOps-01</span>
+        <span class="timestamp">5 hours ago</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span>AGENT_TEAM v1.0</span>
+    <span>RAW / BRUTALIST / HONEST</span>
+    <span>LAST SYNC: <a href="#">NOW</a></span>
+  </div>
+</div>
+
+</body>
+</html>

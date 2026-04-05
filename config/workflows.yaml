@@ -1,0 +1,145 @@
+workflows:
+
+  # ──────────────────────────────────────────────
+  # Standard feature development lifecycle
+  # ──────────────────────────────────────────────
+  feature_development:
+    description: "Standard feature development lifecycle"
+    trigger: feature_request
+    stages:
+
+      requirements:
+        agents: [prd_specialist]
+        outputs: [prd_document]
+        next: [story_creation]
+
+      story_creation:
+        agents: [user_story_author]
+        inputs: [prd_document]
+        outputs: [user_stories]
+        next: [development]
+
+      development:
+        parallel:
+          backend:
+            agents: [backend_specialist]
+            inputs: [user_stories]
+            outputs: [backend_code, backend_tests, api_docs]
+          frontend:
+            agents: [frontend_specialist]
+            inputs: [user_stories]
+            outputs: [frontend_code, frontend_tests]
+        next: [review]
+
+      review:
+        agents: [code_reviewer]
+        inputs: [backend_code, frontend_code, backend_tests, frontend_tests]
+        outputs: [review_report]
+        quality_gates:
+          - gate: coverage_check
+            threshold: code_coverage_minimum
+          - gate: review_approval
+            required: true
+        on_fail: development
+        next: [testing]
+
+      testing:
+        agents: [tester_specialist]
+        inputs: [backend_code, frontend_code, review_report]
+        outputs: [test_report]
+        quality_gates:
+          - gate: all_tests_pass
+            required: true
+          - gate: regression_clear
+            required: true
+        on_fail: development
+        next: [deployment]
+
+      deployment:
+        agents: [devops_specialist]
+        inputs: [test_report]
+        outputs: [deployment_report]
+        stages: [staging, production, verified]
+        quality_gates:
+          - gate: smoke_tests_pass
+            stage: staging
+          - gate: health_checks_pass
+            stage: production
+
+  # ──────────────────────────────────────────────
+  # Expedited bug fix workflow
+  # ──────────────────────────────────────────────
+  bug_fix:
+    description: "Expedited bug fix workflow — shorter pipeline"
+    trigger: bug_report
+    stages:
+
+      triage:
+        agents: [engineering_lead]
+        outputs: [bug_analysis]
+        next: [fix]
+
+      fix:
+        agents: [backend_specialist, frontend_specialist]
+        routing: domain_based
+        inputs: [bug_analysis]
+        outputs: [fix_code, fix_tests]
+        next: [review_and_test]
+
+      review_and_test:
+        parallel:
+          review:
+            agents: [code_reviewer]
+            inputs: [fix_code]
+            outputs: [review_report]
+          test:
+            agents: [tester_specialist]
+            inputs: [fix_code, fix_tests]
+            outputs: [test_report]
+        next: [hotfix_deploy]
+
+      hotfix_deploy:
+        agents: [devops_specialist]
+        inputs: [review_report, test_report]
+        outputs: [deployment_report]
+
+  # ──────────────────────────────────────────────
+  # Documentation-only workflow
+  # ──────────────────────────────────────────────
+  documentation_update:
+    description: "PRD and documentation updates — no deployment"
+    trigger: doc_request
+    stages:
+
+      draft:
+        agents: [prd_specialist]
+        outputs: [prd_document]
+        next: [stories]
+
+      stories:
+        agents: [user_story_author]
+        inputs: [prd_document]
+        outputs: [user_stories]
+
+  # ──────────────────────────────────────────────
+  # Demo preparation workflow
+  # ──────────────────────────────────────────────
+  demo_preparation:
+    description: "Demo creation and testing"
+    trigger: demo_request
+    stages:
+
+      prepare:
+        parallel:
+          environment:
+            agents: [devops_specialist]
+            outputs: [demo_environment]
+          test_plan:
+            agents: [tester_specialist]
+            outputs: [demo_test_plan]
+        next: [validate]
+
+      validate:
+        agents: [tester_specialist]
+        inputs: [demo_environment, demo_test_plan]
+        outputs: [demo_test_report]

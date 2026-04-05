@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workflows Configuration",
+  "type": "object",
+  "required": ["workflows"],
+  "properties": {
+    "workflows": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["description", "trigger", "stages"],
+        "properties": {
+          "description": { "type": "string" },
+          "trigger": {
+            "type": "string",
+            "enum": ["feature_request", "bug_report", "doc_request", "demo_request"]
+          },
+          "stages": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "agents": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "parallel": { "type": "object" },
+                "inputs": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "outputs": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "next": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "routing": { "type": "string" },
+                "quality_gates": { "type": "array" },
+                "on_fail": { "type": "string" },
+                "stages": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,116 @@
+thresholds:
+
+  # ── Code Quality ──────────────────────────────
+  code_coverage_minimum:
+    value: 80
+    unit: percent
+    enforcement: block_merge
+    description: "Minimum code coverage required on every PR"
+
+  review_sla:
+    value: 24
+    unit: hours
+    enforcement: alert
+    description: "Maximum time for code review after PR submission"
+
+  review_approval_required:
+    value: true
+    enforcement: block_merge
+    description: "At least one approval required before merge"
+
+  max_review_cycles:
+    value: 3
+    enforcement: escalate
+    description: "Maximum review iterations before escalating"
+
+  # ── Deployment ────────────────────────────────
+  deployment_frequency:
+    value: weekly
+    options: [daily, weekly, biweekly, monthly]
+    enforcement: scheduled
+    description: "Target deployment cadence"
+
+  smoke_test_pass_rate:
+    value: 100
+    unit: percent
+    enforcement: block_promotion
+    description: "All smoke tests must pass to promote staging to production"
+
+  health_check_pass_rate:
+    value: 100
+    unit: percent
+    enforcement: auto_rollback
+    description: "All health checks must pass after production deployment"
+
+  health_check_retries:
+    value: 3
+    enforcement: auto_rollback
+    description: "Consecutive health check failures before triggering rollback"
+
+  # ── Demo ──────────────────────────────────────
+  demo_test_frequency:
+    value: weekly
+    enforcement: cron
+    cron_expression: "0 9 * * 1"
+    description: "How often demo tests run (Monday 9am)"
+
+  # ── Task Management ───────────────────────────
+  stale_branch_age:
+    value: 7
+    unit: days
+    enforcement: automated_cleanup
+    description: "Delete branches merged longer than this"
+
+  max_concurrent_tasks_per_agent:
+    value: 3
+    enforcement: queue
+    description: "Maximum parallel tasks any single agent handles"
+
+  task_timeout:
+    value: 300
+    unit: seconds
+    enforcement: cancel_with_partial_results
+    description: "Maximum time for a single agent task before timeout"
+
+  # ── Testing ───────────────────────────────────
+  test_pass_rate:
+    value: 100
+    unit: percent
+    enforcement: block_deploy
+    description: "All tests must pass before deployment"
+
+  regression_check:
+    value: true
+    enforcement: block_deploy
+    description: "No regressions detected in test suite"
+
+# ── Cost & Token Management ─────────────────────
+# See cross-cutting-concerns.md Area 4
+cost:
+  pricing:                             # USD per million tokens
+    claude-opus-4-6:
+      input: 15.00
+      output: 75.00
+    claude-sonnet-4-6:
+      input: 3.00
+      output: 15.00
+  budget:
+    daily_limit_usd: 50.00
+    monthly_limit_usd: 500.00
+    per_request_limit_usd: 10.00
+    alert_threshold_pct: 0.80
+
+# ── Testing Strategy ────────────────────────────
+# See cross-cutting-concerns.md Area 6
+testing:
+  unit_coverage_min: 80              # percent
+  tier2_cassette_match: strict       # strict | flexible
+  tier3_eval_threshold: 0.75         # minimum eval score to pass
+  tier3_schedule: weekly             # weekly | per-release | manual
+
+# ── Backup ──────────────────────────────────────
+# See cross-cutting-concerns.md Area 7
+backup:
+  schedule: daily                    # daily | hourly
+  retention_days: 30
+  path: "/app/backups"

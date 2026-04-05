@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team Command Center — Neumorphism (Soft UI)</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Poppins', system-ui, sans-serif;
+    background: #e0e5ec;
+    color: #2d3436;
+    min-height: 100vh;
+    line-height: 1.6;
+  }
+  .theme-banner {
+    text-align: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: #636e72;
+    padding: 10px;
+    letter-spacing: 0.05em;
+  }
+  /* NAVBAR */
+  nav {
+    margin: 10px 40px 0; padding: 16px 28px; border-radius: 20px;
+    background: #e0e5ec; box-shadow: 8px 8px 16px #b8bcc2, -8px -8px 16px #ffffff;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  nav .brand { font-size: 16px; font-weight: 700; }
+  nav .nav-links { display: flex; gap: 8px; }
+  nav .nav-links a {
+    text-decoration: none; font-size: 13px; font-weight: 500; color: #636e72;
+    padding: 10px 20px; border-radius: 16px; background: #e0e5ec;
+    box-shadow: 4px 4px 8px #b8bcc2, -4px -4px 8px #ffffff; transition: all 0.2s;
+  }
+  nav .nav-links a.active { color: #6c63ff; font-weight: 600; box-shadow: inset 4px 4px 8px #b8bcc2, inset -4px -4px 8px #ffffff; }
+  nav .nav-links a:hover { color: #6c63ff; }
+  .notif-bell {
+    padding: 10px 18px; border-radius: 16px; background: #e0e5ec;
+    box-shadow: 4px 4px 8px #b8bcc2, -4px -4px 8px #ffffff;
+    font-size: 13px; font-weight: 500; color: #636e72; position: relative; cursor: pointer;
+  }
+  .notif-bell .badge {
+    position: absolute; top: -4px; right: -4px; width: 20px; height: 20px; border-radius: 50%;
+    background: #e0e5ec; box-shadow: 2px 2px 4px #b8bcc2, -2px -2px 4px #ffffff;
+    font-size: 10px; font-weight: 700; color: #ff6b6b;
+    display: flex; align-items: center; justify-content: center;
+  }
+  /* LAYOUT */
+  .container { max-width: 1040px; margin: 0 auto; padding: 30px 40px 60px; }
+  .page-title { text-align: center; margin-bottom: 30px; }
+  .page-title h1 { font-size: 28px; font-weight: 700; }
+  .page-title p { font-size: 14px; color: #636e72; margin-top: 4px; }
+  /* INPUT AREA */
+  .input-card {
+    padding: 28px; border-radius: 20px; background: #e0e5ec;
+    box-shadow: 8px 8px 16px #b8bcc2, -8px -8px 16px #ffffff;
+    margin-bottom: 36px; display: flex; gap: 16px; align-items: end;
+  }
+  .input-card .field { flex: 1; }
+  .input-card label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #636e72;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .input-card input {
+    width: 100%; padding: 14px 20px; border: none; border-radius: 16px; background: #e0e5ec;
+    box-shadow: inset 4px 4px 8px #b8bcc2, inset -4px -4px 8px #ffffff;
+    font-family: inherit; font-size: 14px; color: #2d3436; outline: none;
+  }
+  .input-card input::placeholder { color: #b2bec3; }
+  .input-card button {
+    padding: 14px 28px; border: none; border-radius: 16px; background: #e0e5ec;
+    box-shadow: 6px 6px 12px #b8bcc2, -6px -6px 12px #ffffff;
+    font-family: inherit; font-size: 14px; font-weight: 600; color: #6c63ff;
+    cursor: pointer; white-space: nowrap; transition: all 0.2s;
+  }
+  .input-card button:hover { box-shadow: inset 4px 4px 8px #b8bcc2, inset -4px -4px 8px #ffffff; }
+  /* SECTIONS */
+  .section-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #636e72;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .section-label .pill {
+    padding: 4px 12px; border-radius: 12px; background: #e0e5ec;
+    box-shadow: 3px 3px 6px #b8bcc2, -3px -3px 6px #ffffff;
+    font-size: 12px; font-weight: 700; color: #2d3436;
+  }
+  .cards-grid { margin-bottom: 36px; }
+  /* CARDS */
+  .card {
+    padding: 24px; border-radius: 20px; background: #e0e5ec;
+    box-shadow: 8px 8px 16px #b8bcc2, -8px -8px 16px #ffffff; margin-bottom: 20px;
+  }
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .card-header h3 { font-size: 16px; font-weight: 600; }
+  .card-id {
+    font-size: 12px; font-weight: 600; color: #636e72; padding: 4px 12px; border-radius: 10px;
+    background: #e0e5ec; box-shadow: inset 3px 3px 6px #b8bcc2, inset -3px -3px 6px #ffffff;
+    font-family: 'Courier New', monospace;
+  }
+  .card-desc { font-size: 13px; color: #636e72; line-height: 1.6; margin-bottom: 14px; }
+  .card-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .card-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .card-meta { font-size: 12px; color: #636e72; font-weight: 500; }
+  /* STATUS */
+  .status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .status-dot {
+    width: 12px; height: 12px; border-radius: 50%; background: #e0e5ec;
+    box-shadow: 2px 2px 4px #b8bcc2, -2px -2px 4px #ffffff;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .status-dot .inner { width: 6px; height: 6px; border-radius: 50%; }
+  .inner-active { background: #6c63ff; }
+  .inner-complete { background: #4ecdc4; }
+  .status-toggle {
+    padding: 6px 14px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    background: #e0e5ec;
+  }
+  .status-toggle.active {
+    box-shadow: inset 4px 4px 8px #b8bcc2, inset -4px -4px 8px #ffffff;
+    color: #6c63ff;
+  }
+  .status-toggle.complete {
+    box-shadow: 3px 3px 6px #b8bcc2, -3px -3px 6px #ffffff;
+    color: #4ecdc4;
+  }
+  /* AGENTS */
+  .agents-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .agent-tag {
+    font-size: 11px; font-weight: 500; color: #636e72; padding: 4px 12px; border-radius: 10px;
+    background: #e0e5ec; box-shadow: 3px 3px 6px #b8bcc2, -3px -3px 6px #ffffff;
+  }
+  /* FOOTER */
+  .footer {
+    text-align: center;
+    margin-top: 20px;
+    padding: 24px;
+    border-radius: 16px;
+    background: #e0e5ec;
+    box-shadow: inset 4px 4px 8px #b8bcc2, inset -4px -4px 8px #ffffff;
+    font-size: 12px;
+    color: #b2bec3;
+  }
+</style>
+</head>
+<body>
+
+<div class="theme-banner">Theme 12: Neumorphism (Soft UI)</div>
+
+<nav>
+  <div class="brand">Agent Team Command Center</div>
+  <div class="nav-links">
+    <a href="#" class="active">Dashboard</a>
+    <a href="#">Agents</a>
+    <a href="#">History</a>
+    <a href="#">Settings</a>
+  </div>
+  <div class="notif-bell">Notifications<span class="badge">3</span></div>
+</nav>
+
+<div class="container">
+  <div class="page-title">
+    <h1>Command Center</h1>
+    <p>Multi-agent orchestration dashboard</p>
+  </div>
+
+  <div class="input-card">
+    <div class="field">
+      <label>New Request</label>
+      <input type="text" placeholder="Describe the task for the agent team..." />
+    </div>
+    <button>Submit Request</button>
+  </div>
+
+  <!-- ACTIVE REQUESTS -->
+  <div class="cards-grid">
+    <div class="section-label">Active Requests <span class="pill">2</span></div>
+    <div class="card">
+      <div class="card-header">
+        <h3>Refactor Authentication Module</h3>
+        <span class="card-id">REQ-0042</span>
+      </div>
+      <div class="card-desc">Migrate legacy session-based auth to JWT with refresh token rotation. Update all middleware and integration tests.</div>
+      <div class="card-footer">
+        <div class="agents-row">
+          <span class="agent-tag">Architect</span>
+          <span class="agent-tag">Coder-1</span>
+          <span class="agent-tag">Tester</span>
+        </div>
+        <div class="card-right">
+          <span class="card-meta">12 min elapsed</span>
+          <div class="status-indicator">
+            <span class="status-dot"><span class="inner inner-active"></span></span>
+            <span class="status-toggle active">In Progress</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <h3>Performance Audit: API Endpoints</h3>
+        <span class="card-id">REQ-0043</span>
+      </div>
+      <div class="card-desc">Profile all API endpoints, identify bottlenecks exceeding 200ms p95, and propose optimizations with benchmarks.</div>
+      <div class="card-footer">
+        <div class="agents-row">
+          <span class="agent-tag">Analyzer</span>
+          <span class="agent-tag">Coder-2</span>
+        </div>
+        <div class="card-right">
+          <span class="card-meta">4 min elapsed</span>
+          <div class="status-indicator">
+            <span class="status-dot"><span class="inner inner-active"></span></span>
+            <span class="status-toggle active">In Progress</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- COMPLETED REQUESTS -->
+  <div class="cards-grid">
+    <div class="section-label">Completed Requests <span class="pill">3</span></div>
+    <div class="card">
+      <div class="card-header">
+        <h3>Database Schema Migration v3</h3>
+        <span class="card-id">REQ-0041</span>
+      </div>
+      <div class="card-desc">Added composite indexes, normalized user_preferences, created rollback scripts for all changes.</div>
+      <div class="card-footer">
+        <div class="agents-row">
+          <span class="agent-tag">Architect</span>
+          <span class="agent-tag">Coder-1</span>
+          <span class="agent-tag">Reviewer</span>
+        </div>
+        <div class="card-right">
+          <span class="card-meta">2026-04-05 09:14</span>
+          <div class="status-indicator">
+            <span class="status-dot"><span class="inner inner-complete"></span></span>
+            <span class="status-toggle complete">Complete</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <h3>CI Pipeline Optimization</h3>
+        <span class="card-id">REQ-0040</span>
+      </div>
+      <div class="card-desc">Parallelized test stages, added build caching, reduced pipeline duration from 18 min to 7 min.</div>
+      <div class="card-footer">
+        <div class="agents-row">
+          <span class="agent-tag">DevOps</span>
+          <span class="agent-tag">Tester</span>
+        </div>
+        <div class="card-right">
+          <span class="card-meta">2026-04-05 08:31</span>
+          <div class="status-indicator">
+            <span class="status-dot"><span class="inner inner-complete"></span></span>
+            <span class="status-toggle complete">Complete</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <h3>Error Handling Standardization</h3>
+        <span class="card-id">REQ-0039</span>
+      </div>
+      <div class="card-desc">Implemented unified error response format across 14 microservices with structured logging and correlation IDs.</div>
+      <div class="card-footer">
+        <div class="agents-row">
+          <span class="agent-tag">Architect</span>
+          <span class="agent-tag">Coder-2</span>
+          <span class="agent-tag">Reviewer</span>
+        </div>
+        <div class="card-right">
+          <span class="card-meta">2026-04-04 17:52</span>
+          <div class="status-indicator">
+            <span class="status-dot"><span class="inner inner-complete"></span></span>
+            <span class="status-toggle complete">Complete</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">Agent Team Command Center v2.1 &middot; 5 Agents Online &middot; 2026-04-05 14:22 UTC</div>
+</div>
+
+</body>
+</html>

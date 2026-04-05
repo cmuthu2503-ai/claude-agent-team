@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team Command Center - Y2K Aesthetic</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  @keyframes scanline { 0%{top:-100%} 100%{top:100%} }
+  body {
+    font-family: Verdana, Tahoma, Geneva, sans-serif;
+    background: #000033;
+    color: #c0c0c0;
+    cursor: crosshair;
+    min-height: 100vh;
+    overflow-x: hidden;
+    position: relative;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  /* Starfield background */
+  body::before {
+    content: '';
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background:
+      radial-gradient(1px 1px at 10% 15%, #ffffff 50%, transparent 100%),
+      radial-gradient(1px 1px at 25% 35%, #ffffff 50%, transparent 100%),
+      radial-gradient(1px 1px at 40% 8%, #ffffff 50%, transparent 100%),
+      radial-gradient(1px 1px at 55% 60%, #ffffff 50%, transparent 100%),
+      radial-gradient(1px 1px at 70% 25%, #ffffff 50%, transparent 100%),
+      radial-gradient(1px 1px at 85% 75%, #ffffff 50%, transparent 100%),
+      radial-gradient(1px 1px at 15% 80%, #ffffff 50%, transparent 100%),
+      radial-gradient(1px 1px at 30% 50%, #ffffff 50%, transparent 100%),
+      radial-gradient(1px 1px at 60% 90%, #ffffff 50%, transparent 100%),
+      radial-gradient(1px 1px at 90% 45%, #ffffff 50%, transparent 100%),
+      radial-gradient(1px 1px at 5% 55%, #ffffff 50%, transparent 100%),
+      radial-gradient(1px 1px at 48% 42%, #ffffff 50%, transparent 100%),
+      radial-gradient(1px 1px at 78% 12%, #ffffff 50%, transparent 100%),
+      radial-gradient(1px 1px at 95% 88%, #ffffff 50%, transparent 100%),
+      radial-gradient(1px 1px at 33% 72%, #ffffff 50%, transparent 100%),
+      radial-gradient(1px 1px at 62% 5%, #ffffff 50%, transparent 100%);
+    z-index: 0;
+    pointer-events: none;
+  }
+  body > * { position: relative; z-index: 1; }
+  /* Scrollbar styling */
+  ::-webkit-scrollbar { width: 16px; }
+  ::-webkit-scrollbar-track { background: linear-gradient(to right, #808080, #c0c0c0, #808080); }
+  ::-webkit-scrollbar-thumb { background: linear-gradient(to bottom, #e8e8e8, #c0c0c0, #808080); border: 2px outset #c0c0c0; }
+  /* Theme banner */
+  .theme-banner {
+    background: linear-gradient(90deg, #000033, #1a1a2e, #000033);
+    text-align: center;
+    padding: 6px;
+    font-family: 'Trebuchet MS', Impact, sans-serif;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 6px;
+    color: #00ffff;
+    border-bottom: 1px solid #00ffff;
+    text-shadow: 0 0 10px #00ffff;
+  }
+  .theme-banner .binary { color: #00ff0044; font-family: 'Courier New', monospace; font-size: 9px; letter-spacing: 2px; }
+  /* Navbar */
+  .navbar {
+    background: linear-gradient(to bottom, #e8e8e8, #c0c0c0, #a0a0a0);
+    padding: 4px 12px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    border-top: 2px solid #ffffff;
+    border-bottom: 2px solid #333333;
+  }
+  .navbar-brand {
+    font-family: Impact, 'Trebuchet MS', sans-serif;
+    font-size: 18px;
+    color: #000033;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-right: 16px;
+    text-shadow: 1px 1px 0 #ffffff;
+  }
+  .nav-btn {
+    font-family: Tahoma, Verdana, sans-serif;
+    font-size: 11px;
+    padding: 4px 14px;
+    background: linear-gradient(to bottom, #e8e8e8, #c0c0c0);
+    border-top: 2px solid #ffffff;
+    border-left: 2px solid #ffffff;
+    border-bottom: 2px solid #333333;
+    border-right: 2px solid #333333;
+    color: #000033;
+    cursor: crosshair;
+    text-transform: uppercase;
+    font-weight: bold;
+  }
+  .nav-btn:hover { background: linear-gradient(to bottom, #ffffff, #d0d0d0); }
+  .nav-btn.active { background: linear-gradient(to bottom, #001155, #000033); color: #00ffff; text-shadow: 0 0 8px #00ffff; }
+  .nav-spacer { flex: 1; }
+  .notification-btn {
+    position: relative;
+    font-size: 16px;
+    background: linear-gradient(to bottom, #e8e8e8, #c0c0c0);
+    border-top: 2px solid #ffffff; border-left: 2px solid #ffffff;
+    border-bottom: 2px solid #333333; border-right: 2px solid #333333;
+    padding: 3px 10px;
+    cursor: crosshair;
+  }
+  .notif-badge {
+    position: absolute; top: -4px; right: -4px;
+    background: #ff00ff;
+    color: #fff; font-size: 9px; font-weight: bold;
+    width: 16px; height: 16px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    text-shadow: 0 0 6px #ff00ff;
+    animation: blink 1.5s infinite;
+  }
+  /* System status bar */
+  .status-bar {
+    background: #0a0a2e;
+    padding: 4px 16px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+    border-bottom: 1px solid #333355;
+  }
+  .status-online { color: #00ff00; text-shadow: 0 0 10px #00ff00; }
+  .status-binary { color: #00ffff33; font-family: 'Courier New', monospace; }
+  /* Gradient HR */
+  .gradient-hr {
+    height: 2px;
+    background: linear-gradient(90deg, transparent, #00ffff, #ff00ff, #00ff00, #00ffff, transparent);
+    border: none;
+    margin: 0;
+  }
+  /* Main content */
+  .container { max-width: 960px; margin: 16px auto; padding: 0 16px; }
+  /* Window card */
+  .window {
+    margin-bottom: 16px;
+    border-top: 2px solid #ffffff;
+    border-left: 2px solid #ffffff;
+    border-bottom: 2px solid #333333;
+    border-right: 2px solid #333333;
+    background: #0d0d30;
+  }
+  .window-title {
+    background: linear-gradient(90deg, #000066, #000099, #000066);
+    padding: 3px 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: Tahoma, Verdana, sans-serif;
+    font-size: 11px;
+    font-weight: bold;
+    color: #ffffff;
+    text-shadow: 0 0 6px #00ffff;
+  }
+  .window-title span { flex: 1; }
+  .window-btn {
+    background: linear-gradient(to bottom, #c0c0c0, #808080);
+    border-top: 1px solid #fff; border-left: 1px solid #fff;
+    border-bottom: 1px solid #333; border-right: 1px solid #333;
+    width: 18px; height: 16px; font-size: 10px;
+    display: flex; align-items: center; justify-content: center;
+    color: #000; cursor: crosshair;
+  }
+  .window-body { padding: 12px; }
+  /* Input area */
+  .input-row { display: flex; gap: 8px; }
+  .cyber-input {
+    flex: 1;
+    background: #0a0a2e;
+    border: 1px solid #00ffff;
+    color: #00ffff;
+    font-family: Verdana, sans-serif;
+    font-size: 12px;
+    padding: 8px 12px;
+    caret-color: #00ffff;
+    outline: none;
+  }
+  .cyber-input::placeholder { color: #00ffff55; }
+  .cyber-input:focus { box-shadow: 0 0 8px #00ffff44; }
+  .submit-btn {
+    background: linear-gradient(to bottom, #e8e8e8, #c0c0c0, #a0a0a0);
+    border-top: 2px solid #ffffff; border-left: 2px solid #ffffff;
+    border-bottom: 2px solid #333333; border-right: 2px solid #333333;
+    color: #00ffff;
+    font-family: 'Trebuchet MS', Impact, sans-serif;
+    font-size: 12px;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    padding: 8px 24px;
+    cursor: crosshair;
+    text-shadow: 0 0 6px #00aaaa;
+  }
+  .submit-btn:hover { background: linear-gradient(to bottom, #ffffff, #d0d0d0, #b0b0b0); }
+  /* Section heading */
+  .section-heading {
+    font-family: Impact, 'Trebuchet MS', sans-serif;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 4px;
+    color: #ff00ff;
+    text-shadow: 0 0 10px #ff00ff;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .section-heading::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, #ff00ff, transparent); }
+  /* Request card */
+  .request-card {
+    background: #0a0a28;
+    border-top: 2px solid #ffffff; border-left: 2px solid #ffffff;
+    border-bottom: 2px solid #333333; border-right: 2px solid #333333;
+    padding: 10px 14px;
+    margin-bottom: 10px;
+  }
+  .request-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .status-indicator {
+    width: 10px; height: 10px; display: inline-block;
+    font-size: 0;
+    border: 1px solid;
+  }
+  .status-active { background: #00ffff; border-color: #00aaaa; box-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff44; }
+  .status-done { background: #00ff00; border-color: #00aa00; box-shadow: 0 0 10px #00ff00, 0 0 20px #00ff0044; }
+  .status-failed { background: #ff0040; border-color: #cc0033; box-shadow: 0 0 10px #ff0040, 0 0 20px #ff004044; }
+  .request-title {
+    font-family: 'Trebuchet MS', Impact, sans-serif;
+    font-size: 13px;
+    color: #ffffff;
+    text-shadow: 0 0 4px #00ffff44;
+    flex: 1;
+  }
+  .request-id { font-size: 10px; color: #00ffff88; font-family: 'Courier New', monospace; text-transform: uppercase; }
+  .request-meta {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #808080;
+    margin-bottom: 6px;
+  }
+  .request-meta strong { color: #c0c0c0; }
+  /* Segmented progress bar */
+  .progress-bar {
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    letter-spacing: 1px;
+    margin-top: 4px;
+  }
+  .progress-filled { color: #00ffff; text-shadow: 0 0 6px #00ffff; }
+  .progress-empty { color: #333355; }
+  .progress-label { font-size: 10px; color: #00ffff; text-transform: uppercase; margin-left: 8px; }
+  /* Tags */
+  .tag {
+    display: inline-block;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 1px 6px;
+    border: 1px solid;
+    margin-right: 4px;
+  }
+  .tag-agent { color: #ff00ff; border-color: #ff00ff55; }
+  .tag-priority { color: #00ff00; border-color: #00ff0055; }
+  /* Completed card variation */
+  .request-card.completed { opacity: 0.75; }
+  .request-card.completed .request-title { color: #a0a0a0; text-shadow: none; }
+  /* Footer */
+  .footer {
+    text-align: center;
+    padding: 12px;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+    color: #333366;
+    border-top: 1px solid #1a1a4e;
+    margin-top: 20px;
+  }
+  .footer .binary-deco { color: #00ffff22; font-family: 'Courier New', monospace; font-size: 8px; display: block; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<!-- Theme Banner -->
+<div class="theme-banner">
+  <span class="binary">01010 </span>
+  Theme 15: Y2K Aesthetic
+  <span class="binary"> 01010</span>
+</div>
+
+<!-- Navbar -->
+<nav class="navbar">
+  <div class="navbar-brand">AgentTeam://</div>
+  <div class="nav-btn active">Dashboard</div>
+  <div class="nav-btn">Agents</div>
+  <div class="nav-btn">History</div>
+  <div class="nav-btn">Config</div>
+  <div class="nav-spacer"></div>
+  <div class="notification-btn">
+    &#x1F514;
+    <div class="notif-badge">3</div>
+  </div>
+</nav>
+
+<!-- Gradient HR -->
+<hr class="gradient-hr">
+
+<!-- System Status Bar -->
+<div class="status-bar">
+  <span><span class="status-online">&#9632; SYSTEM STATUS: ONLINE</span></span>
+  <span class="status-binary">01001100 01001111 01000001 01000100</span>
+  <span style="color:#808080;">UPTIME: 47:23:11</span>
+</div>
+
+<!-- Main Container -->
+<div class="container">
+
+  <!-- Request Input Window -->
+  <div class="window">
+    <div class="window-title">
+      <span>&#9658; NEW_REQUEST.exe</span>
+      <div class="window-btn">&#9632;</div>
+      <div class="window-btn">&#10005;</div>
+    </div>
+    <div class="window-body">
+      <div class="input-row">
+        <input class="cyber-input" type="text" placeholder="Enter command request...">
+        <button class="submit-btn">&#9654; Execute</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Active Requests -->
+  <div class="section-heading">&#9656; Active Requests [2]</div>
+
+  <div class="window">
+    <div class="window-title">
+      <span>ACTIVE_PROCESSES.dat</span>
+      <div class="window-btn">&#9632;</div>
+      <div class="window-btn">&#10005;</div>
+    </div>
+    <div class="window-body">
+
+      <!-- Active Request 1 -->
+      <div class="request-card">
+        <div class="request-header">
+          <span class="status-indicator status-active"></span>
+          <span class="request-title">Refactor authentication module to OAuth2</span>
+          <span class="request-id">REQ-0042</span>
+        </div>
+        <div class="request-meta">
+          <span class="tag tag-agent">Agent: Claude-7</span>
+          <span class="tag tag-priority">Priority: High</span>
+          <strong>Started:</strong> 2026-04-05 09:14 &nbsp;|&nbsp; <strong>Elapsed:</strong> 1h 23m
+        </div>
+        <div class="progress-bar">
+          <span class="progress-filled">&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;</span><span class="progress-empty">&#9617;&#9617;&#9617;</span>
+          <span class="progress-label">70% complete</span>
+        </div>
+      </div>
+
+      <!-- Active Request 2 -->
+      <div class="request-card">
+        <div class="request-header">
+          <span class="status-indicator status-active"></span>
+          <span class="request-title">Generate API documentation for v3 endpoints</span>
+          <span class="request-id">REQ-0043</span>
+        </div>
+        <div class="request-meta">
+          <span class="tag tag-agent">Agent: Claude-3</span>
+          <span class="tag tag-priority">Priority: Med</span>
+          <strong>Started:</strong> 2026-04-05 10:02 &nbsp;|&nbsp; <strong>Elapsed:</strong> 35m
+        </div>
+        <div class="progress-bar">
+          <span class="progress-filled">&#9608;&#9608;&#9608;&#9608;</span><span class="progress-empty">&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;</span>
+          <span class="progress-label">40% complete</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Completed Requests -->
+  <div class="section-heading">&#9656; Completed Requests [3]</div>
+
+  <div class="window">
+    <div class="window-title">
+      <span>COMPLETED_LOG.dat</span>
+      <div class="window-btn">&#9632;</div>
+      <div class="window-btn">&#10005;</div>
+    </div>
+    <div class="window-body">
+
+      <!-- Completed 1 -->
+      <div class="request-card completed">
+        <div class="request-header">
+          <span class="status-indicator status-done"></span>
+          <span class="request-title">Set up CI/CD pipeline for staging environment</span>
+          <span class="request-id">REQ-0041</span>
+        </div>
+        <div class="request-meta">
+          <span class="tag tag-agent">Agent: Claude-5</span>
+          <strong>Completed:</strong> 2026-04-05 08:55 &nbsp;|&nbsp; <strong>Duration:</strong> 2h 10m
+        </div>
+        <div class="progress-bar">
+          <span class="progress-filled">&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;</span>
+          <span class="progress-label" style="color:#00ff00;">DONE</span>
+        </div>
+      </div>
+
+      <!-- Completed 2 -->
+      <div class="request-card completed">
+        <div class="request-header">
+          <span class="status-indicator status-done"></span>
+          <span class="request-title">Fix memory leak in WebSocket connection pool</span>
+          <span class="request-id">REQ-0040</span>
+        </div>
+        <div class="request-meta">
+          <span class="tag tag-agent">Agent: Claude-2</span>
+          <strong>Completed:</strong> 2026-04-04 17:30 &nbsp;|&nbsp; <strong>Duration:</strong> 45m
+        </div>
+        <div class="progress-bar">
+          <span class="progress-filled">&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;</span>
+          <span class="progress-label" style="color:#00ff00;">DONE</span>
+        </div>
+      </div>
+
+      <!-- Completed 3 (Failed) -->
+      <div class="request-card completed">
+        <div class="request-header">
+          <span class="status-indicator status-failed"></span>
+          <span class="request-title">Deploy canary release to production cluster</span>
+          <span class="request-id">REQ-0039</span>
+        </div>
+        <div class="request-meta">
+          <span class="tag tag-agent">Agent: Claude-1</span>
+          <strong>Failed:</strong> 2026-04-04 14:12 &nbsp;|&nbsp; <strong>Duration:</strong> 12m
+        </div>
+        <div class="progress-bar">
+          <span class="progress-filled" style="color:#ff0040; text-shadow:0 0 6px #ff0040;">&#9608;&#9608;&#9608;</span><span class="progress-empty">&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;</span>
+          <span class="progress-label" style="color:#ff0040; text-shadow:0 0 6px #ff0040;">FAILED</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<!-- Footer -->
+<div class="footer">
+  Agent Team Command Center &copy; 2026 &mdash; All Systems Nominal
+  <span class="binary-deco">01000001 01000111 01000101 01001110 01010100 00100000 01010100 01000101 01000001 01001101</span>
+</div>
+
+</body>
+</html>

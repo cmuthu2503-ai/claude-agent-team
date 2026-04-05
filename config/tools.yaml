@@ -1,0 +1,100 @@
+tools:
+  file_read:
+    description: "Read file contents from the project directory"
+    category: core
+    available_to: [all]
+
+  file_write:
+    description: "Create or modify files within the project directory"
+    category: core
+    available_to:
+      - prd_specialist
+      - user_story_author
+      - backend_specialist
+      - frontend_specialist
+      - devops_specialist
+      - tester_specialist
+
+  git_operations:
+    description: "Git status, diff, commit, branch, push operations"
+    category: core
+    available_to:
+      - code_reviewer
+      - backend_specialist
+      - frontend_specialist
+      - devops_specialist
+      - tester_specialist
+
+  github_api:
+    description: "Create issues, manage labels, list PRs, repo operations"
+    category: github
+    available_to:
+      - user_story_author
+      - code_reviewer
+      - devops_specialist
+
+  github_pr_review:
+    description: "Review pull requests, post line comments, approve or request changes"
+    category: github
+    available_to:
+      - code_reviewer
+
+  code_exec:
+    description: "Execute code in a sandboxed environment (tests, scripts)"
+    category: development
+    available_to:
+      - backend_specialist
+      - frontend_specialist
+      - tester_specialist
+
+  code_analysis:
+    description: "Static analysis, linting, formatting checks (read-only)"
+    category: quality
+    available_to:
+      - code_reviewer
+      - backend_specialist
+      - frontend_specialist
+
+  coverage_report:
+    description: "Generate and read code coverage reports"
+    category: quality
+    available_to:
+      - code_reviewer
+      - tester_specialist
+
+  test_runner:
+    description: "Execute test suites (unit, integration, E2E)"
+    category: testing
+    available_to:
+      - tester_specialist
+      - backend_specialist
+      - frontend_specialist
+
+  deployment:
+    description: "Docker Compose deploy, rollback, health check operations"
+    category: infrastructure
+    available_to:
+      - devops_specialist
+
+  ci_cd_pipeline:
+    description: "Create and manage GitHub Actions workflows"
+    category: infrastructure
+    available_to:
+      - devops_specialist
+
+  monitoring:
+    description: "Read health check endpoints and deployment status"
+    category: infrastructure
+    available_to:
+      - devops_specialist
+
+  database_operations:
+    description: "Database schema management, migrations, seed data"
+    category: database
+    available_to:
+      - backend_specialist
+
+  web_search:
+    description: "Search the web for technical information and documentation"
+    category: research
+    available_to: [all]

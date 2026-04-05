@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team Command Center - Theme 13: Flat Design (Metro/Modern UI)</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; border-radius: 0 !important; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-weight: 400; color: #333; background: #ffffff; }
+  .theme-banner { background: #5c2d91; color: #fff; text-align: center; padding: 6px 0; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; font-weight: 600; }
+  /* NAVBAR */
+  .navbar { background: #0078d4; display: flex; align-items: center; padding: 0; height: 48px; }
+  .navbar-brand { color: #fff; font-weight: 300; font-size: 22px; padding: 0 24px; white-space: nowrap; }
+  .navbar-tiles { display: flex; height: 100%; margin-left: 16px; }
+  .nav-tile { display: flex; align-items: center; justify-content: center; padding: 0 20px; height: 100%; color: #fff; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; cursor: pointer; text-decoration: none; position: relative; }
+  .nav-tile:hover { filter: brightness(1.15); }
+  .nav-tile.active::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 3px; background: #fff100; }
+  .tile-green { background: #107c10; }
+  .tile-teal { background: #008575; }
+  .tile-purple { background: #5c2d91; }
+  .tile-orange { background: #ff8c00; }
+  .navbar-right { margin-left: auto; display: flex; align-items: center; padding-right: 16px; gap: 12px; }
+  .notif-bell { position: relative; cursor: pointer; color: #fff; font-size: 20px; }
+  .notif-badge { position: absolute; top: -6px; right: -8px; background: #d13438; color: #fff; font-size: 10px; font-weight: 700; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; }
+  .user-avatar { width: 32px; height: 32px; background: #fff100; color: #333; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; }
+  /* MAIN LAYOUT */
+  .main { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
+  .page-title { font-weight: 300; font-size: 38px; color: #0078d4; margin-bottom: 4px; }
+  .page-subtitle { font-size: 14px; color: #666; text-transform: uppercase; letter-spacing: 2px; font-weight: 600; margin-bottom: 28px; }
+  /* INPUT SECTION */
+  .input-section { background: #f2f2f2; padding: 24px; margin-bottom: 32px; border-left: 4px solid #0078d4; }
+  .input-label { text-transform: uppercase; font-size: 11px; letter-spacing: 2px; font-weight: 700; color: #555; margin-bottom: 10px; }
+  .input-row { display: flex; gap: 0; }
+  .request-input { flex: 1; padding: 12px 16px; font-family: 'Segoe UI', sans-serif; font-size: 15px; border: none; border-bottom: 2px solid #0078d4; background: #fff; outline: none; }
+  .request-input::placeholder { color: #aaa; }
+  .request-input:focus { border-bottom-color: #5c2d91; }
+  .submit-btn { background: #0078d4; color: #fff; border: none; padding: 12px 32px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; cursor: pointer; font-family: 'Segoe UI', sans-serif; }
+  .submit-btn:hover { background: #106ebe; }
+  /* STATS ROW */
+  .stats-row { display: flex; gap: 0; margin-bottom: 32px; }
+  .stat-tile { flex: 1; padding: 20px 24px; color: #fff; }
+  .stat-tile-blue { background: #0078d4; }
+  .stat-tile-green { background: #107c10; }
+  .stat-tile-orange { background: #ff8c00; }
+  .stat-tile-red { background: #d13438; }
+  .stat-number { font-weight: 300; font-size: 42px; line-height: 1; }
+  .stat-label { text-transform: uppercase; font-size: 11px; letter-spacing: 2px; font-weight: 600; margin-top: 4px; }
+  /* SECTION HEADERS */
+  .section-header { display: flex; align-items: center; margin-bottom: 16px; gap: 12px; }
+  .section-title { font-weight: 300; font-size: 26px; color: #333; }
+  .section-count { background: #0078d4; color: #fff; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; }
+  /* CARDS */
+  .card { background: #fff; border-left: 4px solid #ccc; padding: 20px 24px; margin-bottom: 12px; border-top: 1px solid #e6e6e6; border-right: 1px solid #e6e6e6; border-bottom: 1px solid #e6e6e6; }
+  .card-active { border-left-color: #0078d4; }
+  .card-completed { border-left-color: #107c10; }
+  .card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .card-id { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #888; font-weight: 600; }
+  .card-title { font-size: 16px; font-weight: 600; color: #222; margin-bottom: 6px; }
+  .card-desc { font-size: 13px; color: #666; margin-bottom: 12px; line-height: 1.5; }
+  .card-meta { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  /* STATUS SQUARES */
+  .status-indicator { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; }
+  .status-square { width: 10px; height: 10px; display: inline-block; }
+  .sq-blue { background: #0078d4; }
+  .sq-green { background: #107c10; }
+  .sq-orange { background: #ff8c00; }
+  /* PRIORITY TILES */
+  .priority-tile { display: inline-block; padding: 2px 10px; color: #fff; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; }
+  .pri-high { background: #d13438; }
+  .pri-medium { background: #0078d4; }
+  .pri-low { background: #888; }
+  /* AGENT TAG */
+  .agent-tag { font-size: 12px; color: #5c2d91; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
+  .timestamp { font-size: 12px; color: #999; }
+  /* PROGRESS BAR */
+  .progress-track { height: 4px; background: #e0e0e0; width: 120px; }
+  .progress-fill { height: 100%; }
+  .fill-blue { background: #0078d4; }
+  .fill-green { background: #107c10; }
+  /* COMPLETED SECTION */
+  .completed-section { margin-top: 40px; }
+  .completed-header-bar { background: #107c10; color: #fff; padding: 10px 24px; font-size: 13px; text-transform: uppercase; letter-spacing: 2px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
+  /* FOOTER */
+  .footer { margin-top: 48px; border-top: 2px solid #e0e0e0; padding-top: 16px; display: flex; justify-content: space-between; font-size: 12px; color: #999; text-transform: uppercase; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+
+<div class="theme-banner">Theme 13: Flat Design (Metro/Modern UI)</div>
+
+<nav class="navbar">
+  <span class="navbar-brand">Agent Team</span>
+  <div class="navbar-tiles">
+    <a class="nav-tile tile-green active" href="#">Command Center</a>
+    <a class="nav-tile tile-teal" href="#">Agents</a>
+    <a class="nav-tile tile-purple" href="#">History</a>
+    <a class="nav-tile tile-orange" href="#">Settings</a>
+  </div>
+  <div class="navbar-right">
+    <div class="notif-bell">
+      &#128276;
+      <span class="notif-badge">3</span>
+    </div>
+    <div class="user-avatar">CK</div>
+  </div>
+</nav>
+
+<div class="main">
+  <h1 class="page-title">Command Center</h1>
+  <p class="page-subtitle">Agent orchestration dashboard</p>
+
+  <!-- Request Input -->
+  <div class="input-section">
+    <div class="input-label">New Request</div>
+    <div class="input-row">
+      <input type="text" class="request-input" placeholder="Describe your task for the agent team...">
+      <button class="submit-btn">Submit</button>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-row">
+    <div class="stat-tile stat-tile-blue"><div class="stat-number">5</div><div class="stat-label">Total Requests</div></div>
+    <div class="stat-tile stat-tile-green"><div class="stat-number">2</div><div class="stat-label">Active</div></div>
+    <div class="stat-tile stat-tile-orange"><div class="stat-number">3</div><div class="stat-label">Completed</div></div>
+    <div class="stat-tile stat-tile-red"><div class="stat-number">0</div><div class="stat-label">Failed</div></div>
+  </div>
+
+  <!-- Active Requests -->
+  <div class="section-header">
+    <h2 class="section-title">Active Requests</h2>
+    <div class="section-count">2</div>
+  </div>
+
+  <div class="card card-active">
+    <div class="card-top">
+      <span class="card-id">REQ-2025-042</span>
+      <span class="priority-tile pri-high">High</span>
+    </div>
+    <div class="card-title">Refactor authentication module to support OAuth2 PKCE flow</div>
+    <div class="card-desc">Migrate the existing session-based auth to OAuth2 with PKCE for the SPA client. Update token refresh logic and add CSRF protection.</div>
+    <div class="card-meta">
+      <span class="status-indicator"><span class="status-square sq-blue"></span> In Progress</span>
+      <span class="agent-tag">Agent: Coder-01</span>
+      <span class="timestamp">Started 14 min ago</span>
+      <div class="progress-track"><div class="progress-fill fill-blue" style="width: 65%;"></div></div>
+    </div>
+  </div>
+
+  <div class="card card-active">
+    <div class="card-top">
+      <span class="card-id">REQ-2025-043</span>
+      <span class="priority-tile pri-medium">Medium</span>
+    </div>
+    <div class="card-title">Generate API documentation for v3 endpoints</div>
+    <div class="card-desc">Auto-generate OpenAPI 3.1 specs from route handlers and produce interactive Swagger docs for the developer portal.</div>
+    <div class="card-meta">
+      <span class="status-indicator"><span class="status-square sq-orange"></span> Analyzing</span>
+      <span class="agent-tag">Agent: Docs-02</span>
+      <span class="timestamp">Started 6 min ago</span>
+      <div class="progress-track"><div class="progress-fill fill-blue" style="width: 30%;"></div></div>
+    </div>
+  </div>
+
+  <!-- Completed Requests -->
+  <div class="completed-section">
+    <div class="completed-header-bar">
+      <span>Completed Requests</span>
+      <span>3</span>
+    </div>
+
+    <div class="card card-completed">
+      <div class="card-top">
+        <span class="card-id">REQ-2025-041</span>
+        <span class="priority-tile pri-high">High</span>
+      </div>
+      <div class="card-title">Fix critical N+1 query in dashboard analytics endpoint</div>
+      <div class="card-desc">Resolved N+1 by adding eager loading with .includes(:metrics). Response time reduced from 4.2s to 180ms.</div>
+      <div class="card-meta">
+        <span class="status-indicator"><span class="status-square sq-green"></span> Completed</span>
+        <span class="agent-tag">Agent: Coder-01</span>
+        <span class="timestamp">Completed 1 hour ago</span>
+      </div>
+    </div>
+
+    <div class="card card-completed">
+      <div class="card-top">
+        <span class="card-id">REQ-2025-040</span>
+        <span class="priority-tile pri-medium">Medium</span>
+      </div>
+      <div class="card-title">Add integration tests for payment processing webhook</div>
+      <div class="card-desc">Created 12 test cases covering success, failure, retry, and idempotency scenarios for Stripe webhook handler.</div>
+      <div class="card-meta">
+        <span class="status-indicator"><span class="status-square sq-green"></span> Completed</span>
+        <span class="agent-tag">Agent: Tester-03</span>
+        <span class="timestamp">Completed 3 hours ago</span>
+      </div>
+    </div>
+
+    <div class="card card-completed">
+      <div class="card-top">
+        <span class="card-id">REQ-2025-039</span>
+        <span class="priority-tile pri-low">Low</span>
+      </div>
+      <div class="card-title">Update CI pipeline to cache Docker layers</div>
+      <div class="card-desc">Configured BuildKit cache mounts and GitHub Actions cache. Build time reduced from 8 min to 2.5 min.</div>
+      <div class="card-meta">
+        <span class="status-indicator"><span class="status-square sq-green"></span> Completed</span>
+        <span class="agent-tag">Agent: DevOps-01</span>
+        <span class="timestamp">Completed 5 hours ago</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span>Agent Team Command Center v1.0</span>
+    <span>Flat Design / Metro UI</span>
+    <span>Last sync: just now</span>
+  </div>
+</div>
+
+</body>
+</html>

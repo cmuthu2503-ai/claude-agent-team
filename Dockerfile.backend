@@ -1,0 +1,57 @@
+# ============================================
+# Stage 1: Development (hot reload, dev tools)
+# ============================================
+FROM python:3.12-slim AS dev
+
+WORKDIR /app
+
+# System deps for bcrypt and cryptography
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md ./
+RUN pip install --no-cache-dir ".[dev]"
+
+# Source code mounted as volume in dev, copied in prod
+COPY . .
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')" || exit 1
+
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+# ============================================
+# Stage 2: Production (slim, no dev deps)
+# ============================================
+FROM python:3.12-slim AS prod
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r agent && useradd -r -g agent agent
+
+COPY pyproject.toml README.md ./
+RUN pip install --no-cache-dir .
+
+COPY src/ src/
+COPY config/ config/
+
+# Create data directories
+RUN mkdir -p /app/data /app/reports /app/backups \
+    && chown -R agent:agent /app
+
+USER agent
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')" || exit 1
+
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

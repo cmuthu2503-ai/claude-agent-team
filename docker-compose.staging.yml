@@ -1,0 +1,59 @@
+# Staging Environment
+# Ports: backend=8010, frontend=3010
+# Network: staging-net
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: prod
+    container_name: agent-team-staging-backend
+    ports:
+      - "8010:8000"
+    volumes:
+      - agent-team-staging-data:/app/data
+      - agent-team-staging-reports:/app/reports
+    env_file:
+      - .env.staging
+    environment:
+      - ENVIRONMENT=staging
+      - LOG_LEVEL=INFO
+    networks:
+      - staging-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      target: prod
+    container_name: agent-team-staging-frontend
+    ports:
+      - "3010:3000"
+    networks:
+      - staging-net
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  agent-team-staging-data:
+  agent-team-staging-reports:
+
+networks:
+  staging-net:
+    name: agent-team-staging

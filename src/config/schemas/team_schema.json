@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Teams Configuration",
+  "type": "object",
+  "required": ["teams", "hierarchy"],
+  "properties": {
+    "teams": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["display_name", "lead"],
+        "properties": {
+          "display_name": { "type": "string" },
+          "lead": { "type": "string" },
+          "members": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "sub_teams": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "domain": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "parent_team": { "type": "string" }
+        }
+      }
+    },
+    "hierarchy": {
+      "type": "object",
+      "required": ["root", "delegation_direction"],
+      "properties": {
+        "root": { "type": "string" },
+        "delegation_direction": {
+          "type": "string",
+          "enum": ["top_down", "bottom_up", "peer"]
+        }
+      }
+    }
+  }
+}

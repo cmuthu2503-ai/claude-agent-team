@@ -1,0 +1,24 @@
+name: Demo Test
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+jobs:
+  demo-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start demo environment
+        run: docker compose -f docker-compose.demo.yml up -d --build
+      - name: Wait for healthy
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8030/api/v1/health && break
+            sleep 2
+          done
+      - name: Run demo tests
+        run: docker compose -f docker-compose.demo.yml exec -T backend python -m pytest tests/demo/ -v
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.demo.yml down -v
