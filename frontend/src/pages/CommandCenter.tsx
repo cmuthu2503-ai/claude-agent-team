@@ -26,6 +26,7 @@ interface ActivityEvent {
 
 export function CommandCenterPage() {
   const [requests, setRequests] = useState<RequestItem[]>([])
+  const [selectedTeam, setSelectedTeam] = useState("engineering")
   const [taskType, setTaskType] = useState("feature_request")
   const [priority, setPriority] = useState("medium")
   const [submitting, setSubmitting] = useState(false)
@@ -176,6 +177,44 @@ export function CommandCenterPage() {
 
         <div style={{ marginTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            {/* Team Selector */}
+            <div style={{ display: "flex", borderRadius: "var(--radius)", overflow: "hidden", border: "1px solid var(--border)" }}>
+              {[
+                { id: "engineering", label: "Engineering", icon: "⚙️" },
+                { id: "research", label: "Research", icon: "🔍" },
+                { id: "content", label: "Content", icon: "📝" },
+              ].map((team) => (
+                <button
+                  key={team.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedTeam(team.id)
+                    // Auto-select first task type for the team
+                    const defaults: Record<string, string> = {
+                      engineering: "feature_request",
+                      research: "research_request",
+                      content: "content_request",
+                    }
+                    setTaskType(defaults[team.id] || "feature_request")
+                  }}
+                  style={{
+                    padding: "6px 14px",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    border: "none",
+                    cursor: "pointer",
+                    fontFamily: "var(--font)",
+                    background: selectedTeam === team.id ? "var(--accent)" : "var(--bg-input)",
+                    color: selectedTeam === team.id ? "#fff" : "var(--text-secondary)",
+                    borderRight: "1px solid var(--border)",
+                  }}
+                >
+                  {team.icon} {team.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Task Type — filtered by selected team */}
             <select
               value={taskType}
               onChange={(e) => setTaskType(e.target.value)}
@@ -186,15 +225,23 @@ export function CommandCenterPage() {
                 color: "var(--text-primary)",
                 fontFamily: "var(--font)",
                 padding: "6px 12px",
-                fontSize: 14,
+                fontSize: 13,
               }}
             >
-              <option value="feature_request">Feature</option>
-              <option value="bug_report">Bug Fix</option>
-              <option value="doc_request">Docs</option>
-              <option value="demo_request">Demo</option>
-              <option value="research_request">Research</option>
-              <option value="content_request">Content</option>
+              {selectedTeam === "engineering" && (
+                <>
+                  <option value="feature_request">Feature</option>
+                  <option value="bug_report">Bug Fix</option>
+                  <option value="doc_request">Docs</option>
+                  <option value="demo_request">Demo</option>
+                </>
+              )}
+              {selectedTeam === "research" && (
+                <option value="research_request">Research Assessment</option>
+              )}
+              {selectedTeam === "content" && (
+                <option value="content_request">Create Content</option>
+              )}
             </select>
             <div style={{ display: "flex", gap: 4 }}>
               {["high", "medium", "low"].map((p) => (
