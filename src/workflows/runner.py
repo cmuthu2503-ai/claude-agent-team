@@ -2,7 +2,7 @@
 
 import asyncio
 from collections import defaultdict
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 import structlog
 
@@ -26,8 +26,9 @@ class AgentExecutor(Protocol):
 class WorkflowRunner:
     """Executes a workflow with a combined quality gate after Review + Testing."""
 
-    def __init__(self, executor: AgentExecutor) -> None:
+    def __init__(self, executor: AgentExecutor, code_commit_handler: Any = None) -> None:
         self.executor = executor
+        self._code_commit_handler = code_commit_handler
         self._rework_count: dict[str, int] = {}
 
     async def run(
@@ -53,7 +54,14 @@ class WorkflowRunner:
             logger.info("workflow_stage_started", stage=stage_id, request_id=request_id)
 
             try:
-                if isinstance(stage, ParallelStage):
+                # code_commit is a system stage (agents: []) — handled by orchestrator
+                if stage_id == "code_commit":
+                    if self._code_commit_handler:
+                        result = await self._code_commit_handler(request_id, artifacts)
+                    else:
+                        result = {}
+                        logger.warning("no_code_commit_handler", request_id=request_id)
+                elif isinstance(stage, ParallelStage):
                     result = await self._run_parallel_stage(stage, request_id, artifacts)
                 else:
                     result = await self._run_stage(stage, request_id, artifacts)

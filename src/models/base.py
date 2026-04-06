@@ -192,6 +192,38 @@ class Document(BaseModel):
     updated_at: datetime | None = None
 
 
+# ── Deployment State Machine ─────────────────────
+
+
+class DeploymentStep(StrEnum):
+    CODE_COMMITTED = "code_committed"
+    BUILDING = "building"
+    STAGING_DEPLOYING = "staging_deploying"
+    STAGING_HEALTHY = "staging_healthy"
+    PROD_DEPLOYING = "prod_deploying"
+    PROD_HEALTHY = "prod_healthy"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    ROLLING_BACK = "rolling_back"
+    ROLLED_BACK = "rolled_back"
+
+
+class DeploymentState(BaseModel):
+    """Tracks every step of an autonomous deployment — resumable across restarts."""
+
+    deployment_id: str
+    request_id: str
+    commit_sha: str = ""
+    current_step: str = DeploymentStep.CODE_COMMITTED
+    step_history: list[dict] = Field(default_factory=list)  # [{step, status, timestamp, detail}]
+    files_committed: list[str] = Field(default_factory=list)
+    started_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime | None = None
+    completed_at: datetime | None = None
+    error_message: str | None = None
+    rollback_sha: str = ""  # previous commit SHA for rollback
+
+
 # ── Deployment Models ────────────────────────────
 
 

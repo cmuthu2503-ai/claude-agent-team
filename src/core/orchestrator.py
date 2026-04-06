@@ -50,13 +50,17 @@ class Orchestrator(AgentExecutor):
         self.aggregator = Aggregator()
         self.workflow_loader = WorkflowLoader(config)
         self.workflow_loader.load_all()
-        self.runner = WorkflowRunner(executor=self)
+        self.runner = WorkflowRunner(executor=self, code_commit_handler=self._handle_code_commit)
         self._agent_executor: Any = None  # Set by agent system in Phase 3
         self._background_tasks: set[asyncio.Task] = set()
 
         # Token tracker for cost recording
         from src.core.token_tracker import TokenTracker
         self._token_tracker = TokenTracker(state)
+
+        # Code writer for Level 3 deployment
+        from src.core.code_writer import CodeWriter
+        self._code_writer = CodeWriter(state)
 
     def set_agent_executor(self, executor: Any) -> None:
         """Inject the real agent executor (set during Phase 3 agent system init)."""
@@ -294,6 +298,51 @@ class Orchestrator(AgentExecutor):
                 "request_id": request_id, "agent_id": agent_id, "error": str(e),
             })
             return {"status": "failed", "error": str(e), "outputs": {}, "artifacts": []}
+
+    # ── Code Commit Handler ────────────────────────
+
+    async def _handle_code_commit(self, request_id: str, artifacts: dict[str, Any]) -> dict[str, Any]:
+        """Parse agent code outputs, write to disk, compile, test, git push."""
+        from src.core.code_writer import CodeWriteError
+
+        await self.events.emit("code_commit.started", {"request_id": request_id})
+        logger.info("code_commit_started", request_id=request_id)
+
+        # Collect code outputs from backend and frontend specialists
+        agent_outputs: dict[str, str] = {}
+        for key, value in artifacts.items():
+            if isinstance(value, str) and ("backend_specialist" in key or "backend_code" in key):
+                agent_outputs["backend_specialist"] = value
+            if isinstance(value, str) and ("frontend_specialist" in key or "frontend_code" in key):
+                agent_outputs["frontend_specialist"] = value
+
+        if not agent_outputs:
+            logger.warning("no_code_outputs_for_commit", request_id=request_id)
+            return {"commit_status": "skipped", "reason": "No code outputs found"}
+
+        try:
+            description = artifacts.get("description", request_id)[:80]
+            dep_state = await self._code_writer.commit_code(request_id, description, agent_outputs)
+
+            await self.events.emit("code_commit.completed", {
+                "request_id": request_id,
+                "commit_sha": dep_state.commit_sha,
+                "files": dep_state.files_committed,
+            })
+
+            return {
+                "commit_sha": dep_state.commit_sha,
+                "files_committed": dep_state.files_committed,
+                "deployment_id": dep_state.deployment_id,
+                "commit_status": "success",
+            }
+
+        except CodeWriteError as e:
+            await self.events.emit("code_commit.failed", {
+                "request_id": request_id, "error": str(e),
+            })
+            logger.error("code_commit_failed", request_id=request_id, error=str(e))
+            raise RuntimeError(f"Code commit failed: {e}")
 
     # ── Document Persistence ───────────────────────
 

@@ -53,11 +53,17 @@ workflows:
           - gate: regression_clear
             required: true
         on_fail: development
+        next: [code_commit]
+
+      code_commit:
+        agents: []
+        inputs: [backend_code, frontend_code, test_report, review_report]
+        outputs: [commit_sha, files_committed]
         next: [deployment]
 
       deployment:
         agents: [devops_specialist]
-        inputs: [test_report]
+        inputs: [test_report, commit_sha]
         outputs: [deployment_report]
         stages: [staging, production, verified]
         quality_gates:

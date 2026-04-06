@@ -488,6 +488,59 @@ When both Code Review and Testing complete, a combined quality gate evaluates bo
 - DevOps only runs when BOTH gates pass
 - Each rework cycle includes BOTH code review AND testing (not just one)
 
+### Level 3 Autonomous Deployment
+
+#### Code Commit Gate
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| DC-001 | Backend Specialist's code output must be parsed and written to actual project files on disk | Critical |
+| DC-002 | Frontend Specialist's code output must be parsed and written to actual project files on disk | Critical |
+| DC-003 | Python code must pass `ruff check` (zero errors) before commit | Critical |
+| DC-004 | TypeScript code must pass `tsc --noEmit` (zero errors) before commit | Critical |
+| DC-005 | All tests must pass (`pytest` for backend, `npm run build` for frontend) before commit | Critical |
+| DC-006 | Code committed to GitHub with descriptive commit message listing all files and agents | Critical |
+| DC-007 | If any compilation or test step fails, request status = FAILED, no deployment | Critical |
+
+#### Deployment State Machine
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| DS-001 | `deployment_state` table tracks every deployment step with status, timestamp, and detail | Critical |
+| DS-002 | Steps tracked: code_committed → building → staging_deploying → staging_healthy → prod_deploying → prod_healthy → completed | Critical |
+| DS-003 | On container restart, DevOps agent reads deployment_state and resumes from last step | Critical |
+| DS-004 | Step history stored as JSON array — full audit trail of every state transition | High |
+
+#### Sidecar Supervisor
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| SS-001 | Supervisor process runs on host machine, outside Docker containers | Critical |
+| SS-002 | Supervisor watches deployment_state for 'code_committed' trigger | Critical |
+| SS-003 | Supervisor executes: docker compose build → staging deploy → health check → prod deploy → health check | Critical |
+| SS-004 | Supervisor updates deployment_state at every step transition | Critical |
+| SS-005 | On any failure: supervisor executes rollback (git revert + Docker retag + container restart) | Critical |
+| SS-006 | Supervisor rebuilds dev containers after successful deployment | High |
+
+#### Rollback
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| RB-001 | Rollback reverts git commit (`git revert HEAD`) and pushes to GitHub | Critical |
+| RB-002 | Rollback retags previous Docker image and restarts containers | Critical |
+| RB-003 | Rollback updates deployment_state with 'rolled_back' status | High |
+| RB-004 | Both staging and production rolled back on production failure | High |
+
+#### Pipeline Gate: Zero Tolerance
+
+```
+Backend + Frontend → Compile → Test → Git Push → DevOps → Sidecar
+                      ↓ FAIL at any step
+                   Request FAILED. No deployment. Period.
+```
+
+No uncompiled code reaches Docker build. No failed tests reach staging. No unhealthy staging reaches production.
+
 #### 7.1.4 Demo Tasks
 
 | Stage | Description | Exit Criteria |

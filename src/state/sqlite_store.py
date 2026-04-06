@@ -8,6 +8,7 @@ import aiosqlite
 
 from src.models.base import (
     AgentTrace,
+    DeploymentState,
     Document,
     Artifact,
     Deployment,
@@ -184,6 +185,24 @@ CREATE TABLE IF NOT EXISTS agent_traces (
     error_message TEXT,
     PRIMARY KEY (trace_id, subtask_id)
 );
+
+-- Deployment State Machine
+CREATE TABLE IF NOT EXISTS deployment_states (
+    deployment_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    commit_sha TEXT DEFAULT '',
+    current_step TEXT NOT NULL DEFAULT 'code_committed',
+    step_history TEXT DEFAULT '[]',
+    files_committed TEXT DEFAULT '[]',
+    started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    error_message TEXT,
+    rollback_sha TEXT DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_deployment_states_request ON deployment_states(request_id);
+CREATE INDEX IF NOT EXISTS idx_deployment_states_step ON deployment_states(current_step);
 
 -- Documents (Knowledge Base)
 CREATE TABLE IF NOT EXISTS documents (
@@ -906,4 +925,90 @@ class SQLiteStateStore(StateStore):
             updated_at=(
                 datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
             ),
+        )
+
+    # ── Deployment State Machine ─────────────────
+
+    async def create_deployment_state(self, state: DeploymentState) -> str:
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO deployment_states
+               (deployment_id, request_id, commit_sha, current_step, step_history,
+                files_committed, started_at, rollback_sha)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                state.deployment_id, state.request_id, state.commit_sha,
+                state.current_step, json.dumps(state.step_history),
+                json.dumps(state.files_committed), state.started_at.isoformat(),
+                state.rollback_sha,
+            ),
+        )
+        await db.commit()
+        return state.deployment_id
+
+    async def get_deployment_state(self, deployment_id: str) -> DeploymentState | None:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM deployment_states WHERE deployment_id = ?", (deployment_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        return self._row_to_deployment_state(row)
+
+    async def get_deployment_state_for_request(self, request_id: str) -> DeploymentState | None:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM deployment_states WHERE request_id = ? ORDER BY started_at DESC LIMIT 1",
+            (request_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        return self._row_to_deployment_state(row)
+
+    async def get_pending_deployments(self) -> list[DeploymentState]:
+        """Get deployments waiting for the sidecar to pick up."""
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM deployment_states WHERE current_step = 'code_committed' ORDER BY started_at"
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_deployment_state(r) for r in rows]
+
+    async def update_deployment_state(self, state: DeploymentState) -> None:
+        db = await self._get_db()
+        await db.execute(
+            """UPDATE deployment_states SET commit_sha=?, current_step=?, step_history=?,
+               files_committed=?, updated_at=?, completed_at=?, error_message=?, rollback_sha=?
+               WHERE deployment_id=?""",
+            (
+                state.commit_sha, state.current_step,
+                json.dumps(state.step_history),
+                json.dumps(state.files_committed),
+                datetime.utcnow().isoformat(),
+                state.completed_at.isoformat() if state.completed_at else None,
+                state.error_message, state.rollback_sha,
+                state.deployment_id,
+            ),
+        )
+        await db.commit()
+
+    def _row_to_deployment_state(self, row: aiosqlite.Row) -> DeploymentState:
+        return DeploymentState(
+            deployment_id=row["deployment_id"],
+            request_id=row["request_id"],
+            commit_sha=row["commit_sha"] or "",
+            current_step=row["current_step"],
+            step_history=json.loads(row["step_history"]) if row["step_history"] else [],
+            files_committed=json.loads(row["files_committed"]) if row["files_committed"] else [],
+            started_at=datetime.fromisoformat(row["started_at"]),
+            updated_at=(
+                datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
+            ),
+            completed_at=(
+                datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None
+            ),
+            error_message=row["error_message"],
+            rollback_sha=row["rollback_sha"] or "",
         )
