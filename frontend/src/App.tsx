@@ -37,9 +37,10 @@ function Layout({ children }: { children: React.ReactNode }) {
 
 function App() {
   const theme = useThemeStore((s) => s.theme)
+  const mode = useThemeStore((s) => s.mode)
 
   return (
-    <div data-theme={theme}>
+    <div data-theme={theme} data-mode={mode}>
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />

@@ -97,6 +97,7 @@ class Subtask(BaseModel):
     status: SubtaskStatus = SubtaskStatus.PENDING
     input_artifacts: list[str] = Field(default_factory=list)
     output_artifacts: list[str] = Field(default_factory=list)
+    output_text: str = ""  # Full text output from the agent
     started_at: datetime | None = None
     completed_at: datetime | None = None
     error_message: str | None = None
@@ -169,6 +170,24 @@ class User(BaseModel):
     must_change_password: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)
     last_login_at: datetime | None = None
+
+
+# ── Document Persistence ─────────────────────────
+
+
+class Document(BaseModel):
+    """A persisted document produced by an agent (PRD, stories, code, reviews, etc.)."""
+
+    document_id: str
+    request_id: str
+    doc_type: str  # prd | user_stories | backend_code | frontend_code | code_review | test_report | deploy_report
+    title: str
+    content: str
+    agent_id: str
+    version: int = 1
+    tags: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime | None = None
 
 
 # ── Deployment Models ────────────────────────────

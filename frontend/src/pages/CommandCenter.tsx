@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { api } from "../lib/api"
 import { StatusBadge } from "../components/ui/StatusBadge"
-import { PipelineBar } from "../components/ui/PipelineBar"
+import { RichTextInput, type RichTextInputHandle } from "../components/ui/RichTextInput"
 import { Link } from "react-router-dom"
 import { Plus, Send } from "lucide-react"
 
@@ -14,12 +14,27 @@ interface RequestItem {
   created_at: string
 }
 
+interface ActivityEvent {
+  id: string
+  type: string
+  agent?: string
+  message?: string
+  request_id?: string
+  progress?: number
+  timestamp: string
+}
+
 export function CommandCenterPage() {
   const [requests, setRequests] = useState<RequestItem[]>([])
-  const [description, setDescription] = useState("")
   const [taskType, setTaskType] = useState("feature_request")
   const [priority, setPriority] = useState("medium")
   const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState("")
+  const [attachCount, setAttachCount] = useState(0)
+  const [similarDocs, setSimilarDocs] = useState<any[]>([])
+  const [activity, setActivity] = useState<ActivityEvent[]>([])
+  const editorRef = useRef<RichTextInputHandle>(null)
+  const wsRef = useRef<WebSocket | null>(null)
 
   const loadRequests = async () => {
     try {
@@ -28,17 +43,73 @@ export function CommandCenterPage() {
     } catch {}
   }
 
-  useEffect(() => { loadRequests() }, [])
+  useEffect(() => {
+    loadRequests()
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!description.trim()) return
+    // Connect to WebSocket for real-time activity
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/activity`)
+    wsRef.current = ws
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        const eventType = data.type || ""
+        const eventData = data.data || {}
+
+        // Add to activity feed
+        const activityItem: ActivityEvent = {
+          id: Math.random().toString(36).slice(2),
+          type: eventType,
+          agent: eventData.display_name || eventData.agent_id,
+          message: eventData.message || _eventMessage(eventType, eventData),
+          request_id: eventData.request_id,
+          progress: eventData.progress,
+          timestamp: data.timestamp || new Date().toISOString(),
+        }
+        setActivity((prev) => [activityItem, ...prev].slice(0, 30))
+
+        // Refresh request list on status changes
+        if (["request.completed", "request.failed", "request.status_changed"].includes(eventType)) {
+          loadRequests()
+        }
+      } catch {}
+    }
+
+    ws.onclose = () => {
+      // Reconnect after 3 seconds
+      setTimeout(() => {
+        if (wsRef.current === ws) wsRef.current = null
+      }, 3000)
+    }
+
+    return () => {
+      ws.close()
+      wsRef.current = null
+    }
+  }, [])
+
+  const handleSubmit = async () => {
+    const content = editorRef.current?.getContent()
+    if (!content || !content.text.trim()) return
     setSubmitting(true)
+    setSubmitError("")
     try {
-      await api.post("/requests", { description, task_type: taskType, priority })
-      setDescription("")
+      const formData = new FormData()
+      formData.append("description", content.text)
+      formData.append("task_type", taskType)
+      formData.append("priority", priority)
+      for (const file of content.files) {
+        formData.append("screenshots", file)
+      }
+      await api.postForm("/requests", formData)
+      editorRef.current?.clear()
+      setAttachCount(0)
       await loadRequests()
-    } catch {}
+    } catch (err: any) {
+      console.error("Submit failed:", err)
+      setSubmitError(err?.message || "Submit failed")
+    }
     setSubmitting(false)
   }
 
@@ -48,8 +119,7 @@ export function CommandCenterPage() {
   return (
     <div style={{ maxWidth: 1280, margin: "0 auto", padding: 24, display: "flex", flexDirection: "column", gap: 32 }}>
       {/* Input Form */}
-      <form
-        onSubmit={handleSubmit}
+      <div
         style={{
           background: "var(--bg-card)",
           border: "1px solid var(--border)",
@@ -60,27 +130,52 @@ export function CommandCenterPage() {
         <h2 style={{ color: "var(--text-primary)", fontSize: 18, fontWeight: 600, marginBottom: 16 }}>
           New Request
         </h2>
-        <textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Describe what you want to build..."
-          rows={3}
-          style={{
-            width: "100%",
-            background: "var(--bg-input)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius)",
-            color: "var(--text-primary)",
-            fontFamily: "var(--font)",
-            padding: "12px 16px",
-            fontSize: 14,
-            resize: "vertical",
-            outline: "none",
-            boxSizing: "border-box",
+
+        <RichTextInput
+          ref={editorRef}
+          placeholder="Describe what you want to build... (paste or drag screenshots directly here)"
+          onFilesChange={setAttachCount}
+          onTextChange={async (text: string) => {
+            // Search for similar documents when user types enough
+            if (text.length > 20) {
+              try {
+                const words = text.split(/\s+/).slice(0, 5).join(" ")
+                const res = await api.get(`/documents/search?q=${encodeURIComponent(words)}&doc_type=prd&limit=3`)
+                setSimilarDocs(res.data || [])
+              } catch { setSimilarDocs([]) }
+            } else {
+              setSimilarDocs([])
+            }
           }}
         />
+
+        {/* Similar documents found */}
+        {similarDocs.length > 0 && (
+          <div style={{
+            marginTop: 8, padding: "10px 14px",
+            borderRadius: "var(--radius)",
+            background: "var(--accent-subtle)",
+            border: "1px solid var(--accent)",
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)", marginBottom: 6 }}>
+              Similar PRDs found — pipeline may reuse existing documents:
+            </div>
+            {similarDocs.map((d: any) => (
+              <div key={d.document_id} style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 2 }}>
+                • <strong>{d.request_id}</strong>: {d.title?.slice(0, 80)}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {submitError && (
+          <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: "var(--radius)", background: "var(--danger-subtle)", color: "var(--danger)", fontSize: 13 }}>
+            {submitError}
+          </div>
+        )}
+
         <div style={{ marginTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
             <select
               value={taskType}
               onChange={(e) => setTaskType(e.target.value)}
@@ -121,10 +216,16 @@ export function CommandCenterPage() {
                 </button>
               ))}
             </div>
+            {attachCount > 0 && (
+              <span style={{ fontSize: 12, color: "var(--accent)" }}>
+                📎 {attachCount} screenshot{attachCount > 1 ? "s" : ""} attached
+              </span>
+            )}
           </div>
           <button
-            type="submit"
-            disabled={submitting || !description.trim()}
+            type="button"
+            onClick={handleSubmit}
+            disabled={submitting}
             style={{
               display: "flex",
               alignItems: "center",
@@ -136,15 +237,15 @@ export function CommandCenterPage() {
               fontSize: 14,
               fontWeight: 500,
               border: "none",
-              cursor: submitting || !description.trim() ? "not-allowed" : "pointer",
-              opacity: submitting || !description.trim() ? 0.5 : 1,
+              cursor: submitting ? "not-allowed" : "pointer",
+              opacity: submitting ? 0.5 : 1,
             }}
           >
             <Send size={14} />
             {submitting ? "Submitting..." : "Submit"}
           </button>
         </div>
-      </form>
+      </div>
 
       {/* Active Requests */}
       {active.length > 0 && (
@@ -238,12 +339,118 @@ export function CommandCenterPage() {
         </section>
       )}
 
-      {requests.length === 0 && (
+      {/* Live Activity Feed */}
+      {activity.length > 0 && (
+        <section>
+          <h2 style={{ color: "var(--text-primary)", fontSize: 18, fontWeight: 600, marginBottom: 12 }}>
+            Live Activity
+          </h2>
+          <div
+            style={{
+              background: "var(--bg-card)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              maxHeight: 300,
+              overflowY: "auto",
+            }}
+          >
+            {activity.map((a, i) => (
+              <div
+                key={a.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "8px 16px",
+                  borderTop: i > 0 ? "1px solid var(--border)" : "none",
+                  fontSize: 13,
+                }}
+              >
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    flexShrink: 0,
+                    background: a.type.includes("completed") || a.type.includes("progress")
+                      ? "var(--success)"
+                      : a.type.includes("failed")
+                        ? "var(--danger)"
+                        : a.type.includes("started")
+                          ? "var(--accent)"
+                          : "var(--text-muted)",
+                    animation: a.type.includes("started") || a.type.includes("progress")
+                      ? "pulse 1.5s infinite"
+                      : "none",
+                  }}
+                />
+                {a.agent && (
+                  <span style={{ fontWeight: 600, color: "var(--text-primary)", minWidth: 120 }}>
+                    {a.agent}
+                  </span>
+                )}
+                <span style={{ color: "var(--text-secondary)", flex: 1 }}>
+                  {a.message}
+                </span>
+                {a.progress !== undefined && a.progress < 100 && (
+                  <div style={{ width: 60, height: 4, borderRadius: 2, background: "var(--bg-hover)", overflow: "hidden" }}>
+                    <div
+                      style={{
+                        width: `${a.progress}%`,
+                        height: "100%",
+                        background: "var(--accent)",
+                        borderRadius: 2,
+                        transition: "width 0.3s",
+                      }}
+                    />
+                  </div>
+                )}
+                <span style={{ fontSize: 10, color: "var(--text-muted)", flexShrink: 0 }}>
+                  {new Date(a.timestamp).toLocaleTimeString()}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {requests.length === 0 && activity.length === 0 && (
         <div style={{ padding: "80px 0", textAlign: "center", color: "var(--text-muted)" }}>
           <Plus size={48} style={{ margin: "0 auto 16px", opacity: 0.5 }} />
           <p>No requests yet. Submit your first request above.</p>
         </div>
       )}
+
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.4; }
+        }
+      `}</style>
     </div>
   )
+}
+
+function _eventMessage(type: string, data: any): string {
+  const name = data.display_name || data.agent_id || ""
+  switch (type) {
+    case "request.created":
+      return `Request ${data.request_id} submitted`
+    case "request.status_changed":
+      return `Request ${data.request_id} → ${data.status?.replace("_", " ")}`
+    case "request.completed":
+      return `Request ${data.request_id} completed successfully`
+    case "request.failed":
+      return `Request ${data.request_id} failed: ${data.error || "unknown"}`
+    case "agent.started":
+      return `Started working on ${data.request_id}`
+    case "agent.progress":
+      return data.message || `Working... ${data.progress}%`
+    case "agent.completed":
+      return `Finished work on ${data.request_id}`
+    case "agent.failed":
+      return `Failed: ${data.error || "unknown error"}`
+    default:
+      return type.replace(/\./g, " ")
+  }
 }

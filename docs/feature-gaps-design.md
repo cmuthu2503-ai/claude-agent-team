@@ -479,6 +479,28 @@ STEP 4: POST REVIEW
               - After 3 cycles: Escalate to Engineering Lead
 ```
 
+### Quality Gate — Combined Feedback Loop
+
+The pipeline enforces a combined quality gate after BOTH Code Review and Testing complete:
+
+**Gate Logic:**
+- After Tester completes, the workflow runner checks BOTH review output AND test results
+- Review pass: `**APPROVED**` with zero `[CRITICAL]` findings
+- Test pass: zero `FAIL` test cases with `**READY FOR DEPLOYMENT**`
+- BOTH must pass for the gate to open
+- On fail: review findings + test failures aggregated into one `rework_instructions` package
+- Pipeline routes back to `development` stage
+- Dev agents fix ALL issues (review + test) in one pass
+- Code Reviewer re-reviews, Tester re-tests
+- Max 2 rework cycles, then FAILED (DevOps never runs on broken code)
+
+**Implementation:**
+- `src/workflows/runner.py` — `_check_combined_gate()` checks both review and test output
+- `src/workflows/runner.py` — `_extract_review_findings()` + `_extract_test_failures()` parse feedback
+- `src/workflows/runner.py` — `MAX_REWORK_CYCLES = 2`
+- `src/core/orchestrator.py` — checks for `escalation_reason` to set FAILED status
+- All 5 agent prompts updated for rework/re-review/re-test behavior
+
 ---
 
 ## AREA 2: Deployment and Demo

@@ -335,7 +335,19 @@ tools:
     available_to: [all]
 ```
 
-### 3.6 Configurable Thresholds
+### 3.6 Agent Tool Assignment
+
+All agents operate in text-only mode with no tools:
+
+| Category | Agents | Tools | Output Mode |
+|----------|--------|-------|-------------|
+| **All Agents** | Engineering Lead, PRD Specialist, User Story Author, Code Reviewer, Tester Specialist, DevOps Specialist, Backend Specialist, Frontend Specialist | None (tools: []) | All agents produce structured text output directly from context. No agent uses filesystem tools. |
+
+Backend and Frontend Specialists produce complete, compilable code as text output with file paths and code blocks. They must pass a self-verification compilation checklist before submitting.
+
+All agents receive full pipeline context (description + all previous agent outputs) and produce structured documents or code without needing filesystem access. This design was adopted because tool-equipped agents entered explore loops (calling file_read repeatedly) without producing output, and rate limits (30k tokens/min) made multi-round tool interactions impractical.
+
+### 3.7 Configurable Thresholds
 
 All values that were previously hardcoded (80% coverage, 24h SLA, weekly cadence) are now centralized in one file:
 
@@ -590,7 +602,67 @@ workflows:
                     └──────────────┘
 ```
 
-### 4.4 Workflow Visualization — Bug Fix (Expedited)
+### 4.4 Quality Gate Enforcement
+
+#### Pipeline Flow with Combined Quality Gate
+
+```
+PRD → Stories → Backend + Frontend (parallel) → Code Reviewer → Tester
+                                                                   │
+                                                              ┌────┴────┐
+                                                              │BOTH OK? │
+                                                              └────┬────┘
+                                                             YES   │   NO
+                                                              ↓    ↓
+                                                           DevOps  Aggregate feedback
+                                                              ↓    (review + test)
+                                                          COMPLETED     ↓
+                                                              Back to Development
+                                                                   ↓
+                                                              Code Reviewer → Tester
+                                                                   │
+                                                              ┌────┴────┐
+                                                              │BOTH OK? │ (cycle 2)
+                                                              └────┬────┘
+                                                             YES   │   NO
+                                                              ↓    ↓
+                                                           DevOps  FAILED
+                                                              ↓
+                                                          COMPLETED
+```
+
+#### Gate Rules
+
+| Rule | Value |
+|------|-------|
+| Gate location | After `testing` stage (checks both review AND test results) |
+| Pass condition | Review = `**APPROVED**` with zero `[CRITICAL]` AND Tester = zero `FAIL` with `**READY FOR DEPLOYMENT**` |
+| Fail action | Aggregate review findings + test failures into combined `rework_instructions` |
+| On fail | Route back to `development` stage. Dev agents receive combined feedback. |
+| Max rework cycles | 2 (configurable via `MAX_REWORK_CYCLES`) |
+| After max cycles | Request status = FAILED. DevOps does NOT run. |
+| DevOps runs only when | BOTH review AND test gates pass |
+
+#### Rework Flow
+
+When the combined gate fails:
+1. Review findings and test failures are aggregated into one `rework_instructions` package
+2. Pipeline jumps back to `development` stage
+3. Backend and Frontend specialists receive combined feedback and produce fixed code
+4. Code Reviewer re-reviews (marks each previous finding as FIXED/STILL OPEN)
+5. Tester re-tests (tags previously-failing tests with [RETEST])
+6. Combined gate re-evaluates both results
+7. If both pass → DevOps runs → COMPLETED
+8. If max cycles reached → FAILED (no deployment)
+
+#### Request Status Detection
+
+The orchestrator determines final request status by:
+1. Checking for `escalation_reason` in workflow result (max rework cycles exceeded)
+2. Checking `subtask.status` for any `failed` entries
+3. Only marks `COMPLETED` if pipeline reached DevOps without gate failures
+
+### 4.5 Workflow Visualization — Bug Fix (Expedited)
 
 ```
      ┌──────────────┐

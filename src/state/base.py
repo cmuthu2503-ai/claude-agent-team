@@ -6,6 +6,7 @@ from src.models.base import (
     AgentTrace,
     Artifact,
     Deployment,
+    Document,
     Metric,
     Notification,
     Request,
@@ -119,6 +120,25 @@ class StateStore(ABC):
 
     @abstractmethod
     async def mark_all_notifications_read(self, user_id: str) -> None: ...
+
+    # ── Documents ─────────────────────────────────
+
+    @abstractmethod
+    async def save_document(self, doc: Document) -> str: ...
+
+    @abstractmethod
+    async def get_document(self, document_id: str) -> Document | None: ...
+
+    @abstractmethod
+    async def get_documents_for_request(self, request_id: str) -> list[Document]: ...
+
+    @abstractmethod
+    async def search_documents(
+        self, query: str, doc_type: str | None = None, limit: int = 10
+    ) -> list[Document]: ...
+
+    @abstractmethod
+    async def update_document(self, doc: Document) -> None: ...
 
     # ── Token Usage ──────────────────────────────
 

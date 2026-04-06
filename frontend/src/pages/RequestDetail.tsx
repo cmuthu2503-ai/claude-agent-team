@@ -2,79 +2,247 @@ import { useState, useEffect } from "react"
 import { useParams, Link } from "react-router-dom"
 import { api } from "../lib/api"
 import { StatusBadge } from "../components/ui/StatusBadge"
-import { ArrowLeft } from "lucide-react"
+import { ArrowLeft, ChevronDown, ChevronRight, FileText, ExternalLink } from "lucide-react"
+import { MarkdownRenderer } from "../components/ui/MarkdownRenderer"
 
 export function RequestDetailPage() {
   const { requestId } = useParams()
   const [data, setData] = useState<any>(null)
+  const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set())
+  const [polling, setPolling] = useState(true)
+
+  const loadData = async () => {
+    if (!requestId) return
+    try {
+      const res = await api.get(`/requests/${requestId}`)
+      setData(res.data)
+      if (["completed", "failed"].includes(res.data.status)) {
+        setPolling(false)
+      }
+    } catch {}
+  }
 
   useEffect(() => {
-    if (requestId) {
-      api.get(`/requests/${requestId}`).then((res) => setData(res.data)).catch(() => {})
-    }
-  }, [requestId])
+    loadData()
+    const interval = setInterval(() => {
+      if (polling) loadData()
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [requestId, polling])
 
-  if (!data) return <div className="p-6 text-gray-400">Loading...</div>
+  const toggleAgent = (id: string) => {
+    setExpandedAgents((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const expandAll = () => {
+    if (data?.subtasks) {
+      setExpandedAgents(new Set(data.subtasks.map((s: any) => s.subtask_id)))
+    }
+  }
+
+  const collapseAll = () => setExpandedAgents(new Set())
+
+  if (!data) return <div style={{ padding: 24, color: "var(--text-muted)" }}>Loading...</div>
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
-      <Link to="/" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
-        <ArrowLeft size={14} /> Back
+    <div style={{ maxWidth: 1100, margin: "0 auto", padding: 24, display: "flex", flexDirection: "column", gap: 24 }}>
+      <Link to="/" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 13, color: "var(--text-muted)", textDecoration: "none" }}>
+        <ArrowLeft size={14} /> Back to Command Center
       </Link>
-      <div className="rounded-lg border border-gray-200 bg-white p-6">
-        <div className="flex items-start justify-between">
+
+      {/* Request Header */}
+      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 24 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
           <div>
-            <h1 className="text-xl font-bold text-gray-900">{data.request_id}</h1>
-            <p className="mt-1 text-gray-600">{data.description}</p>
+            <h1 style={{ fontSize: 20, fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>{data.request_id}</h1>
+            <p style={{ marginTop: 8, color: "var(--text-secondary)", fontSize: 14, lineHeight: 1.6 }}>{data.description}</p>
           </div>
           <StatusBadge status={data.status} size="md" />
         </div>
-        <div className="mt-4 flex gap-4 text-sm text-gray-500">
-          <span>Type: <span className="capitalize">{data.task_type?.replace("_", " ")}</span></span>
-          <span>Priority: <span className="capitalize">{data.priority}</span></span>
+        <div style={{ marginTop: 12, display: "flex", gap: 16, fontSize: 13, color: "var(--text-muted)" }}>
+          <span>Type: <span style={{ color: "var(--text-secondary)", textTransform: "capitalize" }}>{data.task_type?.replace("_", " ")}</span></span>
+          <span>Priority: <span style={{ color: "var(--text-secondary)", textTransform: "capitalize" }}>{data.priority}</span></span>
           <span>Created: {new Date(data.created_at).toLocaleString()}</span>
-          {data.total_cost && <span>Cost: ${data.total_cost.cost_usd}</span>}
+          {data.total_cost?.cost_usd > 0 && <span>Cost: ${data.total_cost.cost_usd}</span>}
         </div>
+        {data.stories?.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <Link to={`/stories/${requestId}`} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 13, color: "var(--accent)", textDecoration: "none" }}>
+              <ExternalLink size={13} /> View Story Board ({data.stories.length} stories)
+            </Link>
+          </div>
+        )}
       </div>
 
-      {/* Subtasks */}
+      {/* Agent Pipeline with Outputs */}
       {data.subtasks?.length > 0 && (
-        <div className="rounded-lg border border-gray-200 bg-white p-6">
-          <h2 className="mb-4 text-lg font-semibold text-gray-900">Agent Timeline</h2>
-          <div className="space-y-3">
-            {data.subtasks.map((s: any) => (
-              <div key={s.subtask_id} className="flex items-center justify-between rounded-md border border-gray-100 px-4 py-3">
-                <div className="flex items-center gap-3">
-                  <StatusBadge status={s.status} />
-                  <span className="text-sm font-medium text-gray-700">{s.agent_id.replace(/_/g, " ")}</span>
+        <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+            <h2 style={{ fontSize: 18, fontWeight: 600, color: "var(--text-primary)", margin: 0 }}>Agent Pipeline</h2>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={expandAll} style={{ fontSize: 11, color: "var(--accent)", background: "transparent", border: "none", cursor: "pointer" }}>Expand All</button>
+              <button onClick={collapseAll} style={{ fontSize: 11, color: "var(--text-muted)", background: "transparent", border: "none", cursor: "pointer" }}>Collapse All</button>
+            </div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            {(() => {
+              // Deduplicate: keep the version with content for each agent, or the first one
+              const seen = new Map<string, any>()
+              for (const s of data.subtasks) {
+                const existing = seen.get(s.agent_id)
+                if (!existing) {
+                  seen.set(s.agent_id, s)
+                } else {
+                  // Prefer the one with output_text
+                  const existingHas = existing.output_text && existing.output_text.trim().length > 0
+                  const newHas = s.output_text && s.output_text.trim().length > 0
+                  if (newHas && !existingHas) {
+                    seen.set(s.agent_id, s)
+                  }
+                }
+              }
+              return Array.from(seen.values())
+            })().map((s: any, i: number) => {
+              const isExpanded = expandedAgents.has(s.subtask_id)
+              const hasOutput = s.output_text && s.output_text.trim().length > 0
+              const duration = s.started_at && s.completed_at
+                ? Math.round((new Date(s.completed_at).getTime() - new Date(s.started_at).getTime()) / 1000)
+                : null
+              return (
+                <div key={s.subtask_id}>
+                  {/* Agent Header Row */}
+                  <div
+                    onClick={() => (hasOutput || s.error_message) && toggleAgent(s.subtask_id)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "10px 12px",
+                      borderRadius: "var(--radius)",
+                      background: isExpanded ? "var(--accent-subtle)" : "transparent",
+                      cursor: hasOutput || s.error_message ? "pointer" : "default",
+                      transition: "background 0.15s",
+                    }}
+                    onMouseEnter={(e) => { if ((hasOutput || s.error_message) && !isExpanded) e.currentTarget.style.background = "var(--bg-hover)" }}
+                    onMouseLeave={(e) => { if (!isExpanded) e.currentTarget.style.background = "transparent" }}
+                  >
+                    <span style={{
+                      width: 24, height: 24, borderRadius: "50%",
+                      background: s.status === "completed" ? "var(--success)" : s.status === "failed" ? "var(--danger)" : s.status === "in_progress" ? "var(--accent)" : "var(--text-muted)",
+                      color: "#fff", fontSize: 11, fontWeight: 700,
+                      display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                      animation: s.status === "in_progress" ? "pulse 1.5s infinite" : "none",
+                    }}>
+                      {i + 1}
+                    </span>
+
+                    {hasOutput || s.error_message ? (
+                      isExpanded ? <ChevronDown size={14} style={{ color: "var(--accent)", flexShrink: 0 }} />
+                        : <ChevronRight size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
+                    ) : <span style={{ width: 14 }} />}
+
+                    <span style={{ fontWeight: 600, color: "var(--text-primary)", minWidth: 160 }}>
+                      {s.display_name || s.agent_id.replace(/_/g, " ")}
+                    </span>
+                    <StatusBadge status={s.status} />
+
+                    {duration !== null && (
+                      <span style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: "auto" }}>
+                        {duration < 60 ? `${duration}s` : `${Math.floor(duration / 60)}m ${duration % 60}s`}
+                      </span>
+                    )}
+
+                    {hasOutput && !isExpanded && (
+                      <FileText size={13} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
+                    )}
+                  </div>
+
+                  {/* Expanded Output */}
+                  {isExpanded && hasOutput && (
+                    <div style={{
+                      margin: "4px 0 8px 48px",
+                      padding: 16,
+                      background: "var(--bg-input)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "var(--radius)",
+                      maxHeight: 600,
+                      overflowY: "auto",
+                    }}>
+                      <MarkdownRenderer content={s.output_text} />
+                    </div>
+                  )}
+
+                  {/* Error message */}
+                  {isExpanded && s.error_message && (
+                    <div style={{
+                      margin: "4px 0 8px 48px",
+                      padding: "8px 12px",
+                      background: "var(--danger-subtle)",
+                      borderRadius: "var(--radius)",
+                      fontSize: 12,
+                      color: "var(--danger)",
+                      fontFamily: "var(--font-mono)",
+                      whiteSpace: "pre-wrap",
+                    }}>
+                      {s.error_message}
+                    </div>
+                  )}
+
+                  {i < data.subtasks.length - 1 && (
+                    <div style={{ marginLeft: 23, width: 2, height: 8, background: "var(--border)" }} />
+                  )}
                 </div>
-                <span className="text-xs text-gray-400">
-                  {s.started_at ? new Date(s.started_at).toLocaleTimeString() : "—"}
-                  {s.completed_at && ` → ${new Date(s.completed_at).toLocaleTimeString()}`}
-                </span>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Stories Summary */}
+      {data.stories?.length > 0 && (
+        <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+            <h2 style={{ fontSize: 18, fontWeight: 600, color: "var(--text-primary)", margin: 0 }}>
+              User Stories ({data.stories.length})
+            </h2>
+            <Link to={`/stories/${requestId}`} style={{ fontSize: 12, color: "var(--accent)", textDecoration: "none" }}>
+              Open Story Board →
+            </Link>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {data.stories.map((st: any) => (
+              <div key={st.story_id} style={{ padding: 12, background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>{st.story_id}</span>
+                    <span style={{ fontSize: 14, fontWeight: 500, color: "var(--text-primary)" }}>{st.title}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {st.assigned_agent && (
+                      <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: "var(--radius)", background: "var(--accent-subtle)", color: "var(--accent)" }}>
+                        {st.assigned_agent.replace(/_/g, " ")}
+                      </span>
+                    )}
+                    <StatusBadge status={st.status} />
+                  </div>
+                </div>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Stories */}
-      {data.stories?.length > 0 && (
-        <div className="rounded-lg border border-gray-200 bg-white p-6">
-          <h2 className="mb-4 text-lg font-semibold text-gray-900">Stories</h2>
-          <div className="space-y-2">
-            {data.stories.map((st: any) => (
-              <div key={st.story_id} className="flex items-center justify-between rounded-md border border-gray-100 px-4 py-3">
-                <div>
-                  <span className="text-xs font-mono text-gray-400">{st.story_id}</span>
-                  <span className="ml-2 text-sm text-gray-700">{st.title}</span>
-                </div>
-                <StatusBadge status={st.status} />
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.4; }
+        }
+      `}</style>
     </div>
   )
 }

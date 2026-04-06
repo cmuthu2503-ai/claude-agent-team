@@ -317,6 +317,33 @@ System-wide testing, documentation validation, performance.
 
 ---
 
+## Post-Release Changes (Implemented)
+
+Changes implemented after the initial 144-task plan was completed:
+
+| Change | Description | Impact |
+|--------|-------------|--------|
+| Theme System | 6 selectable UI themes (Linear, Vercel, Discord, Flat, Brutalist, Y2K) with dark/light mode icons | Frontend: theme store, CSS variables, ThemeSelector component |
+| Screenshot Attachments | Inline image paste/drag/drop in request input with file upload to backend | Frontend: RichTextInput component. Backend: multipart form upload, /attachments endpoint |
+| Real LLM Integration | Connected Anthropic API for real agent execution | Backend: AgentSystemExecutor, BaseAgent with retry on rate limits |
+| Agent Output Visibility | Full text output saved per agent, expandable in Request Detail UI | Backend: output_text column in subtasks. Frontend: expand/collapse pipeline view |
+| Story Board Integration | User stories parsed from agent output, tracked through pipeline stages | Backend: story parsing in orchestrator. Frontend: Kanban board with real data |
+| Quality Gate Enforcement | Code Review gate blocks pipeline if critical issues found, routes back to dev | Backend: WorkflowRunner review gate, max 2 rework cycles |
+| Request Status Detection | Scans agent output for failure keywords, marks request FAILED appropriately | Backend: orchestrator post-workflow check |
+| Agent Tool Removal | Removed tools from 6 report-producing agents to force direct text output | Config: tools: [] for PRD, Stories, Review, Test, DevOps, Engineering Lead |
+| Rate Limit Handling | Exponential backoff retry (30s-120s), staggered parallel agent starts (30s) | Backend: BaseAgent._call_llm retry loop |
+| Async Pipeline | Workflow runs in background, API returns immediately, WebSocket streams updates | Backend: asyncio.create_task in orchestrator.submit |
+| Combined Feedback Loop | Review + Test feedback aggregated into one rework package. Dev fixes all issues in one pass. Max 2 cycles. DevOps only runs when both gates pass. | Backend: WorkflowRunner combined gate, orchestrator escalation. Config: all 5 agent prompts updated for rework/re-review/re-test. |
+| Document Persistence & Knowledge Base | Agent outputs saved as first-class documents. Duplicate detection searches existing PRDs/stories before running pipeline. Pipeline skip for matching requirements. | Backend: documents table, StateStore CRUD, keyword search, orchestrator reuse logic. Frontend: similar request detection, reused badge. API: documents search endpoint. |
+| Compilation Quality Gate | Backend/Frontend agents must produce complete, compilable code with self-verification checklist. Code Reviewer checks compilation FIRST before quality review. Zero tolerance for truncated files, missing imports, syntax errors. | Config: backend_specialist.yaml, frontend_specialist.yaml, code_reviewer.yaml prompts updated with compilation rules and self-verification checklists. |
+| Light/Dark Theme Toggle | Sun/moon icon in navbar toggles between light and dark mode. All 6 themes have both palettes. Mode persists independently via localStorage. CSS: [data-theme][data-mode] selectors. | Frontend: theme store with mode, themes.css with 12 palettes, Navbar toggle button, App.tsx data-mode attribute. |
+| Engineering Lead Removed | Redundant agent removed from pipeline. Was using expensive Opus tokens for simple decomposition. Bug fix triage reassigned to PRD Specialist. | Config: engineering_lead.yaml deleted. workflows.yaml, teams.yaml, factory.py updated. Team: 8→7 agents. |
+| Agent Persona Overhaul | All 7 agents upgraded with: project tech stack context, structured output formats, cross-agent traceability (REQ→US→Code→Review→Test), output size caps, user story notes reading. | Config: all 7 agent YAML prompts rewritten. PRD Specialist switched Opus→Sonnet. Stale responsibilities cleaned. |
+| Markdown Rendering | Agent outputs render as formatted HTML instead of raw text. Custom MarkdownRenderer handles headings, tables, code blocks, lists, checkboxes. | Frontend: MarkdownRenderer.tsx component, RequestDetail.tsx and StoryBoard.tsx updated. |
+| Cost Tracking Wired | Token usage now recorded per agent per request. Cost calculated from pricing config. Cost Dashboard shows breakdowns by model, agent, request. | Backend: orchestrator calls TokenTracker.record() after each agent. API: cost/dashboard returns full breakdowns. Frontend: CostDashboard.tsx redesigned. |
+
+---
+
 ## Dependency Graph (Phase Level)
 
 ```

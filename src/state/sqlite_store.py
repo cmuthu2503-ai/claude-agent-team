@@ -8,6 +8,7 @@ import aiosqlite
 
 from src.models.base import (
     AgentTrace,
+    Document,
     Artifact,
     Deployment,
     Metric,
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS subtasks (
     status TEXT NOT NULL DEFAULT 'pending',
     input_artifacts TEXT DEFAULT '[]',
     output_artifacts TEXT DEFAULT '[]',
+    output_text TEXT DEFAULT '',
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
     error_message TEXT,
@@ -183,6 +185,20 @@ CREATE TABLE IF NOT EXISTS agent_traces (
     PRIMARY KEY (trace_id, subtask_id)
 );
 
+-- Documents (Knowledge Base)
+CREATE TABLE IF NOT EXISTS documents (
+    document_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    doc_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    version INTEGER DEFAULT 1,
+    tags TEXT DEFAULT '[]',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
 CREATE INDEX IF NOT EXISTS idx_requests_created ON requests(created_at);
@@ -195,6 +211,8 @@ CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read
 CREATE INDEX IF NOT EXISTS idx_metrics_name_time ON metrics(metric_name, recorded_at);
 CREATE INDEX IF NOT EXISTS idx_agent_traces_request ON agent_traces(request_id);
 CREATE INDEX IF NOT EXISTS idx_deployments_env ON deployments(environment, status);
+CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(doc_type);
+CREATE INDEX IF NOT EXISTS idx_documents_request ON documents(request_id);
 """
 
 
@@ -217,6 +235,12 @@ class SQLiteStateStore(StateStore):
     async def initialize(self) -> None:
         db = await self._get_db()
         await db.executescript(SCHEMA_SQL)
+        # Migrate: add output_text column if missing (for existing DBs)
+        try:
+            await db.execute("ALTER TABLE subtasks ADD COLUMN output_text TEXT DEFAULT ''")
+            await db.commit()
+        except Exception:
+            pass  # Column already exists
         await db.commit()
 
     async def close(self) -> None:
@@ -338,11 +362,12 @@ class SQLiteStateStore(StateStore):
     async def update_subtask(self, subtask: Subtask) -> None:
         db = await self._get_db()
         await db.execute(
-            """UPDATE subtasks SET status=?, output_artifacts=?, started_at=?,
+            """UPDATE subtasks SET status=?, output_artifacts=?, output_text=?, started_at=?,
                completed_at=?, error_message=? WHERE subtask_id=?""",
             (
                 subtask.status,
                 json.dumps(subtask.output_artifacts),
+                subtask.output_text,
                 subtask.started_at.isoformat() if subtask.started_at else None,
                 subtask.completed_at.isoformat() if subtask.completed_at else None,
                 subtask.error_message,
@@ -367,6 +392,7 @@ class SQLiteStateStore(StateStore):
             status=row["status"],
             input_artifacts=json.loads(row["input_artifacts"]) if row["input_artifacts"] else [],
             output_artifacts=json.loads(row["output_artifacts"]) if row["output_artifacts"] else [],
+            output_text=row["output_text"] if "output_text" in row.keys() else "",
             started_at=(
                 datetime.fromisoformat(row["started_at"]) if row["started_at"] else None
             ),
@@ -790,3 +816,94 @@ class SQLiteStateStore(StateStore):
             ),
         )
         await db.commit()
+
+    # ── Documents ────────────────────────────────
+
+    async def save_document(self, doc: Document) -> str:
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO documents
+               (document_id, request_id, doc_type, title, content, agent_id, version, tags, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                doc.document_id, doc.request_id, doc.doc_type, doc.title,
+                doc.content, doc.agent_id, doc.version,
+                json.dumps(doc.tags), doc.created_at.isoformat(),
+            ),
+        )
+        await db.commit()
+        return doc.document_id
+
+    async def get_document(self, document_id: str) -> Document | None:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM documents WHERE document_id = ?", (document_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        return self._row_to_document(row)
+
+    async def get_documents_for_request(self, request_id: str) -> list[Document]:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM documents WHERE request_id = ? ORDER BY created_at", (request_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_document(r) for r in rows]
+
+    async def search_documents(
+        self, query: str, doc_type: str | None = None, limit: int = 10
+    ) -> list[Document]:
+        db = await self._get_db()
+        # Split query into keywords and search title, content, tags
+        keywords = [k.strip().lower() for k in query.split() if len(k.strip()) > 2]
+        if not keywords:
+            return []
+
+        conditions = []
+        params: list = []
+        for kw in keywords[:5]:  # Max 5 keywords
+            conditions.append("(LOWER(title) LIKE ? OR LOWER(content) LIKE ? OR LOWER(tags) LIKE ?)")
+            params.extend([f"%{kw}%", f"%{kw}%", f"%{kw}%"])
+
+        where = " AND ".join(conditions)
+        if doc_type:
+            where = f"doc_type = ? AND ({where})"
+            params.insert(0, doc_type)
+
+        sql = f"SELECT * FROM documents WHERE {where} ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+
+        async with db.execute(sql, params) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_document(r) for r in rows]
+
+    async def update_document(self, doc: Document) -> None:
+        db = await self._get_db()
+        await db.execute(
+            """UPDATE documents SET title=?, content=?, version=?, tags=?, updated_at=?
+               WHERE document_id=?""",
+            (
+                doc.title, doc.content, doc.version,
+                json.dumps(doc.tags), datetime.utcnow().isoformat(),
+                doc.document_id,
+            ),
+        )
+        await db.commit()
+
+    def _row_to_document(self, row: aiosqlite.Row) -> Document:
+        return Document(
+            document_id=row["document_id"],
+            request_id=row["request_id"],
+            doc_type=row["doc_type"],
+            title=row["title"],
+            content=row["content"],
+            agent_id=row["agent_id"],
+            version=row["version"],
+            tags=json.loads(row["tags"]) if row["tags"] else [],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=(
+                datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
+            ),
+        )

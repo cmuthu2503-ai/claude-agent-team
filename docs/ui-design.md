@@ -140,6 +140,12 @@ This is the primary screen. Submit requests at the top, watch active work below.
 - **Live Activity feed** auto-updates via WebSocket — latest 3 agent actions shown
 - **Recently Completed** shows last 3-5 finished requests with one-line outcomes
 
+### Additional Command Center Features
+
+- **Inline screenshot attachments**: Paste (Ctrl+V), drag-and-drop, or click to attach images directly in the description text box
+- **Similar request detection**: As the user types, the system searches existing PRDs and shows "Similar PRDs found" if matches exist
+- **Live Activity feed**: Real-time WebSocket-based activity stream showing agent progress, status changes, and completion events
+
 ---
 
 ## 5. Screen 2: Request Detail
@@ -673,6 +679,21 @@ WebSocket:
 | State | React Context + useReducer | Simple app state; no need for Redux/Zustand at this scale |
 | Charts | None | Intentionally excluded — numbers and progress bars are sufficient |
 
+### Theme System
+
+The application supports 6 selectable UI themes with dark/light mode indicators:
+
+| Theme | Mode | Style |
+|-------|------|-------|
+| Linear | Dark | Purple accents, clean minimal |
+| Vercel | Dark | Black & white, ultra-minimal |
+| Discord | Dark | Blurple accents, channel-style |
+| Flat Design | Light | Bold Metro colors, zero shadows |
+| Brutalist | Light | Raw monospace, anti-design |
+| Y2K | Dark | Neon cyan glow, retro-future |
+
+Theme selection persists to localStorage. The theme selector in the navbar shows moon/sun icons indicating dark/light mode, with a dropdown organized into "Dark Themes" and "Light Themes" sections.
+
 ---
 
 ## 16. What Was Deliberately Excluded
@@ -687,7 +708,7 @@ WebSocket:
 | Custom dashboards | Fixed layout = no configuration needed = simpler |
 | Notification preferences | Active requests are visible on Command Center; browser notifications are Phase 2 |
 | Multi-user / permissions | Not in scope for v1 — single user interacting with the agent team |
-| Dark mode | Phase 2 — not essential for functionality |
+| Dark mode | ~~Phase 2~~ **Implemented** — 6 themes available (Linear, Vercel, Discord, Flat, Brutalist, Y2K) with dark/light variants |
 
 ---
 

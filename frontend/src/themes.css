@@ -1,11 +1,11 @@
 /* ============================================
    Theme System — CSS Custom Properties
-   Each theme defines its full color palette.
-   Components use var(--xxx) everywhere.
+   Each theme has BOTH dark and light modes.
+   Selector: [data-theme="X"][data-mode="Y"]
    ============================================ */
 
-/* ── LINEAR (default) ─────────────────────── */
-[data-theme="linear"] {
+/* ── LINEAR — Dark ───────────────────────────── */
+[data-theme="linear"][data-mode="dark"] {
   --bg-primary: #131320;
   --bg-secondary: #1a1a2e;
   --bg-card: #1e1e32;
@@ -31,12 +31,39 @@
   --shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   --font: "Inter", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
-  --nav-width: 220px;
-  --nav-style: sidebar;
 }
 
-/* ── VERCEL ───────────────────────────────── */
-[data-theme="vercel"] {
+/* ── LINEAR — Light ──────────────────────────── */
+[data-theme="linear"][data-mode="light"] {
+  --bg-primary: #f5f3ff;
+  --bg-secondary: #ede9fe;
+  --bg-card: #ffffff;
+  --bg-input: #ffffff;
+  --bg-hover: #ede9fe;
+  --bg-nav: #f5f3ff;
+  --border: #ddd6fe;
+  --text-primary: #1e1b4b;
+  --text-secondary: #4c1d95;
+  --text-muted: #7c3aed;
+  --accent: #7c3aed;
+  --accent-hover: #6d28d9;
+  --accent-subtle: rgba(124, 58, 237, 0.1);
+  --success: #059669;
+  --success-subtle: rgba(5, 150, 105, 0.1);
+  --danger: #dc2626;
+  --danger-subtle: rgba(220, 38, 38, 0.1);
+  --warning: #d97706;
+  --warning-subtle: rgba(217, 119, 6, 0.1);
+  --info: #2563eb;
+  --info-subtle: rgba(37, 99, 235, 0.1);
+  --radius: 8px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  --font: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+/* ── VERCEL — Dark ───────────────────────────── */
+[data-theme="vercel"][data-mode="dark"] {
   --bg-primary: #000000;
   --bg-secondary: #0a0a0a;
   --bg-card: #111111;
@@ -62,12 +89,39 @@
   --shadow: none;
   --font: "Geist", system-ui, -apple-system, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, monospace;
-  --nav-width: 0px;
-  --nav-style: topbar;
 }
 
-/* ── DISCORD ──────────────────────────────── */
-[data-theme="discord"] {
+/* ── VERCEL — Light ──────────────────────────── */
+[data-theme="vercel"][data-mode="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #fafafa;
+  --bg-card: #ffffff;
+  --bg-input: #ffffff;
+  --bg-hover: #f5f5f5;
+  --bg-nav: #ffffff;
+  --border: #eaeaea;
+  --text-primary: #000000;
+  --text-secondary: #666666;
+  --text-muted: #999999;
+  --accent: #000000;
+  --accent-hover: #333333;
+  --accent-subtle: rgba(0, 0, 0, 0.05);
+  --success: #0070f3;
+  --success-subtle: rgba(0, 112, 243, 0.1);
+  --danger: #ee0000;
+  --danger-subtle: rgba(238, 0, 0, 0.08);
+  --warning: #f5a623;
+  --warning-subtle: rgba(245, 166, 35, 0.1);
+  --info: #0070f3;
+  --info-subtle: rgba(0, 112, 243, 0.08);
+  --radius: 4px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --font: "Geist", system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+}
+
+/* ── DISCORD — Dark ──────────────────────────── */
+[data-theme="discord"][data-mode="dark"] {
   --bg-primary: #313338;
   --bg-secondary: #2b2d31;
   --bg-card: #2b2d31;
@@ -93,12 +147,39 @@
   --shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
   --font: "gg sans", "Noto Sans", system-ui, sans-serif;
   --font-mono: "Consolas", ui-monospace, monospace;
-  --nav-width: 220px;
-  --nav-style: sidebar;
 }
 
-/* ── FLAT DESIGN ──────────────────────────── */
-[data-theme="flat"] {
+/* ── DISCORD — Light ─────────────────────────── */
+[data-theme="discord"][data-mode="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f2f3f5;
+  --bg-card: #ffffff;
+  --bg-input: #e3e5e8;
+  --bg-hover: #ebedef;
+  --bg-nav: #f2f3f5;
+  --border: #e3e5e8;
+  --text-primary: #060607;
+  --text-secondary: #4e5058;
+  --text-muted: #80848e;
+  --accent: #5865f2;
+  --accent-hover: #4752c4;
+  --accent-subtle: rgba(88, 101, 242, 0.1);
+  --success: #23a55a;
+  --success-subtle: rgba(35, 165, 90, 0.1);
+  --danger: #f23f43;
+  --danger-subtle: rgba(242, 63, 67, 0.1);
+  --warning: #f0b232;
+  --warning-subtle: rgba(240, 178, 50, 0.1);
+  --info: #00a8fc;
+  --info-subtle: rgba(0, 168, 252, 0.1);
+  --radius: 8px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --font: "gg sans", "Noto Sans", system-ui, sans-serif;
+  --font-mono: "Consolas", ui-monospace, monospace;
+}
+
+/* ── FLAT DESIGN — Light ─────────────────────── */
+[data-theme="flat"][data-mode="light"] {
   --bg-primary: #ffffff;
   --bg-secondary: #f5f5f5;
   --bg-card: #ffffff;
@@ -124,12 +205,39 @@
   --shadow: none;
   --font: "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-mono: "Consolas", ui-monospace, monospace;
-  --nav-width: 0px;
-  --nav-style: topbar;
 }
 
-/* ── BRUTALIST ────────────────────────────── */
-[data-theme="brutalist"] {
+/* ── FLAT DESIGN — Dark ──────────────────────── */
+[data-theme="flat"][data-mode="dark"] {
+  --bg-primary: #1a1a1a;
+  --bg-secondary: #252525;
+  --bg-card: #2d2d2d;
+  --bg-input: #333333;
+  --bg-hover: #3a3a3a;
+  --bg-nav: #005a9e;
+  --border: #444444;
+  --text-primary: #f0f0f0;
+  --text-secondary: #bbbbbb;
+  --text-muted: #888888;
+  --accent: #4cc2ff;
+  --accent-hover: #0078d4;
+  --accent-subtle: rgba(76, 194, 255, 0.15);
+  --success: #6ccb5f;
+  --success-subtle: rgba(108, 203, 95, 0.15);
+  --danger: #f85149;
+  --danger-subtle: rgba(248, 81, 73, 0.15);
+  --warning: #ffb02e;
+  --warning-subtle: rgba(255, 176, 46, 0.15);
+  --info: #4cc2ff;
+  --info-subtle: rgba(76, 194, 255, 0.15);
+  --radius: 0px;
+  --shadow: none;
+  --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "Consolas", ui-monospace, monospace;
+}
+
+/* ── BRUTALIST — Light ───────────────────────── */
+[data-theme="brutalist"][data-mode="light"] {
   --bg-primary: #ffffff;
   --bg-secondary: #f5f5f5;
   --bg-card: #ffffff;
@@ -155,18 +263,45 @@
   --shadow: none;
   --font: "Courier New", Courier, monospace;
   --font-mono: "Courier New", Courier, monospace;
-  --nav-width: 0px;
-  --nav-style: topbar;
 }
 
-/* ── Y2K ──────────────────────────────────── */
-[data-theme="y2k"] {
+/* ── BRUTALIST — Dark ────────────────────────── */
+[data-theme="brutalist"][data-mode="dark"] {
+  --bg-primary: #0a0a0a;
+  --bg-secondary: #141414;
+  --bg-card: #1a1a1a;
+  --bg-input: #1a1a1a;
+  --bg-hover: #333300;
+  --bg-nav: #ffffff;
+  --border: #ffffff;
+  --text-primary: #ffffff;
+  --text-secondary: #cccccc;
+  --text-muted: #999999;
+  --accent: #00ff00;
+  --accent-hover: #00cc00;
+  --accent-subtle: rgba(0, 255, 0, 0.1);
+  --success: #00ff00;
+  --success-subtle: rgba(0, 255, 0, 0.15);
+  --danger: #ff0000;
+  --danger-subtle: rgba(255, 0, 0, 0.15);
+  --warning: #ffff00;
+  --warning-subtle: rgba(255, 255, 0, 0.15);
+  --info: #00ffff;
+  --info-subtle: rgba(0, 255, 255, 0.1);
+  --radius: 0px;
+  --shadow: none;
+  --font: "Courier New", Courier, monospace;
+  --font-mono: "Courier New", Courier, monospace;
+}
+
+/* ── Y2K — Dark ──────────────────────────────── */
+[data-theme="y2k"][data-mode="dark"] {
   --bg-primary: #000033;
   --bg-secondary: #0a0a3a;
   --bg-card: #0d0d40;
   --bg-input: #0a0a2e;
   --bg-hover: #15154a;
-  --bg-nav: linear-gradient(180deg, #c0c0c0, #808080);
+  --bg-nav: #0d0d40;
   --border: #4a4a8a;
   --text-primary: #00ffff;
   --text-secondary: #8888cc;
@@ -186,6 +321,33 @@
   --shadow: 0 0 10px rgba(0, 255, 255, 0.2);
   --font: Verdana, Tahoma, sans-serif;
   --font-mono: "Courier New", monospace;
-  --nav-width: 0px;
-  --nav-style: topbar;
+}
+
+/* ── Y2K — Light ─────────────────────────────── */
+[data-theme="y2k"][data-mode="light"] {
+  --bg-primary: #e8e8f0;
+  --bg-secondary: #d0d0e8;
+  --bg-card: #ffffff;
+  --bg-input: #ffffff;
+  --bg-hover: #c8c8e0;
+  --bg-nav: #c0c0d0;
+  --border: #9090b0;
+  --text-primary: #000066;
+  --text-secondary: #333399;
+  --text-muted: #6666aa;
+  --accent: #0066cc;
+  --accent-hover: #0055aa;
+  --accent-subtle: rgba(0, 102, 204, 0.1);
+  --success: #008800;
+  --success-subtle: rgba(0, 136, 0, 0.1);
+  --danger: #cc0000;
+  --danger-subtle: rgba(204, 0, 0, 0.1);
+  --warning: #cc00cc;
+  --warning-subtle: rgba(204, 0, 204, 0.1);
+  --info: #0066cc;
+  --info-subtle: rgba(0, 102, 204, 0.1);
+  --radius: 0px;
+  --shadow: 2px 2px 0px rgba(0, 0, 0, 0.15);
+  --font: Verdana, Tahoma, sans-serif;
+  --font-mono: "Courier New", monospace;
 }

@@ -35,7 +35,7 @@ export function ThemeSelector() {
           fontFamily: "var(--font)",
         }}
       >
-        {currentTheme?.mode === "dark" ? <Moon size={14} /> : <Sun size={14} />}
+        <Palette size={14} />
         {currentTheme?.name}
       </button>
 
@@ -54,7 +54,6 @@ export function ThemeSelector() {
             overflow: "hidden",
           }}
         >
-          {/* Dark Themes Section */}
           <div
             style={{
               padding: "8px 12px",
@@ -64,46 +63,11 @@ export function ThemeSelector() {
               color: "var(--text-muted)",
               fontFamily: "var(--font)",
               borderBottom: "1px solid var(--border)",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
             }}
           >
-            <Moon size={11} />
-            Dark Themes
+            Select Theme
           </div>
-          {THEMES.filter((t) => t.mode === "dark").map((t) => (
-            <ThemeOption
-              key={t.id}
-              theme={t}
-              isActive={theme === t.id}
-              onSelect={() => {
-                setTheme(t.id)
-                setOpen(false)
-              }}
-            />
-          ))}
-
-          {/* Light Themes Section */}
-          <div
-            style={{
-              padding: "8px 12px",
-              fontSize: "10px",
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-              color: "var(--text-muted)",
-              fontFamily: "var(--font)",
-              borderBottom: "1px solid var(--border)",
-              borderTop: "1px solid var(--border)",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-            }}
-          >
-            <Sun size={11} />
-            Light Themes
-          </div>
-          {THEMES.filter((t) => t.mode === "light").map((t) => (
+          {THEMES.map((t) => (
             <ThemeOption
               key={t.id}
               theme={t}
@@ -155,11 +119,8 @@ function ThemeOption({
       }}
     >
       <div>
-        <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: "6px" }}>
-          {t.mode === "dark" ? <Moon size={12} /> : <Sun size={12} />}
-          {t.name}
-        </div>
-        <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px", marginLeft: "18px" }}>
+        <div style={{ fontWeight: 600 }}>{t.name}</div>
+        <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
           {t.description}
         </div>
       </div>

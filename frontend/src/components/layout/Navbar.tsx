@@ -1,6 +1,7 @@
-import { Bell, LayoutDashboard, History, Rocket, Users, DollarSign, Shield } from "lucide-react"
+import { Bell, LayoutDashboard, History, Rocket, Users, DollarSign, Shield, Sun, Moon } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 import { useAuthStore } from "../../stores/auth"
+import { useThemeStore } from "../../stores/theme"
 import { ThemeSelector } from "../ui/ThemeSelector"
 
 const navItems = [
@@ -14,6 +15,7 @@ const navItems = [
 export function Navbar() {
   const location = useLocation()
   const { user, logout } = useAuthStore()
+  const { mode, toggleMode } = useThemeStore()
 
   return (
     <header
@@ -76,6 +78,26 @@ export function Navbar() {
           </nav>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          {/* Light/Dark Mode Toggle */}
+          <button
+            onClick={toggleMode}
+            title={mode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 36,
+              height: 36,
+              borderRadius: "var(--radius)",
+              background: "var(--bg-hover)",
+              border: "1px solid var(--border)",
+              color: mode === "dark" ? "var(--warning)" : "var(--accent)",
+              cursor: "pointer",
+              transition: "all 0.2s",
+            }}
+          >
+            {mode === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+          </button>
           <ThemeSelector />
           <button
             style={{

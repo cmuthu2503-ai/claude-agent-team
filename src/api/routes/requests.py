@@ -1,13 +1,21 @@
-"""Request endpoints — submit, list, detail, retry, stories."""
+"""Request endpoints — submit, list, detail, retry, stories, attachments."""
 
+import os
+import uuid
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from src.auth.service import get_current_user, require_role
 
 router = APIRouter(prefix="/api/v1/requests", tags=["requests"])
+
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "data/uploads"))
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".pdf"}
 
 
 class SubmitRequestBody(BaseModel):
@@ -23,15 +31,48 @@ def _envelope(data: Any, meta: dict | None = None) -> dict:
 
 @router.post("")
 async def submit_request(
-    body: SubmitRequestBody,
     request: Request,
+    description: str = Form(...),
+    task_type: str = Form("feature_request"),
+    priority: str = Form("medium"),
+    screenshots: list[UploadFile] = File(default=[]),
     user: dict = Depends(require_role("developer", "admin")),
 ):
+    # Save uploaded screenshots
+    saved_files: list[dict[str, str]] = []
+    for file in screenshots:
+        if file.filename:
+            ext = Path(file.filename).suffix.lower()
+            if ext not in ALLOWED_EXTENSIONS:
+                raise HTTPException(400, f"File type {ext} not allowed. Use: {ALLOWED_EXTENSIONS}")
+            content = await file.read()
+            if len(content) > MAX_FILE_SIZE:
+                raise HTTPException(400, f"File {file.filename} exceeds 10MB limit")
+            file_id = uuid.uuid4().hex[:12]
+            safe_name = f"{file_id}{ext}"
+            upload_path = UPLOAD_DIR / safe_name
+            upload_path.parent.mkdir(parents=True, exist_ok=True)
+            upload_path.write_bytes(content)
+            saved_files.append({
+                "file_id": file_id,
+                "filename": file.filename,
+                "stored_as": safe_name,
+                "size": len(content),
+                "url": f"/api/v1/requests/attachments/{safe_name}",
+            })
+
+    # Build description with attachment references
+    full_description = description
+    if saved_files:
+        full_description += "\n\n**Attachments:**\n"
+        for f in saved_files:
+            full_description += f"- [{f['filename']}]({f['url']})\n"
+
     orchestrator = request.app.state.orchestrator
     result = await orchestrator.submit(
-        description=body.description,
-        task_type=body.task_type,
-        priority=body.priority,
+        description=full_description,
+        task_type=task_type,
+        priority=priority,
         created_by=user.get("username", ""),
     )
     return _envelope({
@@ -40,7 +81,20 @@ async def submit_request(
         "description": result.description,
         "priority": result.priority,
         "created_at": result.created_at.isoformat(),
+        "attachments": saved_files,
     })
+
+
+@router.get("/attachments/{filename}")
+async def get_attachment(filename: str):
+    """Serve an uploaded attachment file."""
+    file_path = UPLOAD_DIR / filename
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(404, "Attachment not found")
+    # Prevent path traversal
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(400, "Invalid filename")
+    return FileResponse(file_path)
 
 
 @router.get("")
@@ -99,9 +153,11 @@ async def get_request_detail(
             {
                 "subtask_id": s.subtask_id,
                 "agent_id": s.agent_id,
+                "display_name": request.app.state.config.agents.get(s.agent_id, {}).get("display_name", s.agent_id),
                 "status": s.status,
                 "started_at": s.started_at.isoformat() if s.started_at else None,
                 "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+                "output_text": s.output_text or "",
                 "output_artifacts": s.output_artifacts,
                 "error_message": s.error_message,
             }
@@ -111,7 +167,9 @@ async def get_request_detail(
             {
                 "story_id": st.story_id,
                 "title": st.title,
+                "description": st.description or "",
                 "status": st.status,
+                "priority": st.priority,
                 "assigned_agent": st.assigned_agent,
                 "coverage_pct": st.coverage_pct,
                 "github_issue_number": st.github_issue_number,

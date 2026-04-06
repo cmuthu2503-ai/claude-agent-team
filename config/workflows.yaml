@@ -75,7 +75,7 @@ workflows:
     stages:
 
       triage:
-        agents: [engineering_lead]
+        agents: [prd_specialist]
         outputs: [bug_analysis]
         next: [fix]
 

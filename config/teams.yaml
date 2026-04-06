@@ -1,7 +1,7 @@
 teams:
   engineering:
     display_name: "Engineering"
-    lead: engineering_lead
+    lead: prd_specialist
     sub_teams: [planning, development, delivery]
     domain: [all]
 

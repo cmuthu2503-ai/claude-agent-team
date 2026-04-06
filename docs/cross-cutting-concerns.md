@@ -1444,3 +1444,8 @@ These 7 areas add approximately **28 new tasks** across existing phases:
 | Backup | SQLite backup API | Atomic, safe while DB is in use. No file-level copy corruption risk. |
 | Metrics storage | SQLite (not Prometheus) | Keeps Docker stack at 3 containers. Sufficient for single-team scale. |
 | Rate limiting | slowapi (in-process) | No Redis/external limiter needed. Fits Docker-only constraint. |
+| Agent tool assignment | All agents: no tools (tools: []) | All agents produce text output directly. Tool-based agents got stuck in explore loops without producing results. Removing tools forces direct, complete output generation. |
+| Quality gate enforcement | Combined gate after Review + Testing | Single gate checks both review verdict and test results. Aggregates feedback for one rework pass. Max 2 cycles. DevOps only runs when both pass. |
+| Request status detection | Scan agent output text for failure keywords | Catches cases where subtask status is "completed" but agent reports failures in content. |
+| Agent output persistence | Store full text in subtasks.output_text column | Enables visibility into what each agent produced. Supports expand/collapse in UI. |
+| Rework feedback loop | Inject review findings as rework_instructions | Dev agents receive specific feedback on what to fix, produce revised code. |

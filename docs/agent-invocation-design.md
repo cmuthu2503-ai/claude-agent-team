@@ -336,11 +336,33 @@ AGENT RECEIVES TASK
 └───────────────────────────────────────────────┘
 ```
 
-### 4.2 Tool Execution During Agent Tasks
+### 4.2 Current Agent Execution Mode
 
-Each agent has access to specific tools (defined in `config/tools.yaml`). When an agent is invoked, it can use tools to interact with the real system:
+All agents operate in **text-only mode** (tools: []). The LLM receives the full pipeline context and produces structured text output directly. This design choice was made because:
 
-| Tool | What It Does | Used By |
+1. Tool-equipped agents entered explore loops (calling file_read repeatedly) without producing output
+2. Rate limits (30k tokens/min) made multi-round tool interactions impractical
+3. Text-only output ensures every agent produces a complete, visible deliverable
+4. The pipeline context grows as each agent adds their output — downstream agents see everything
+
+The Backend and Frontend Specialists produce code as formatted text with file paths:
+
+```
+### `path/to/file.py`
+```python
+[complete file contents]
+```
+```
+
+These code outputs are reviewed by the Code Reviewer and tested by the Tester Specialist based on the text content.
+
+### 4.3 Tool Execution During Agent Tasks (Original Design — Superseded)
+
+> **Note**: The tool-based execution model described below has been **superseded** by the text-only mode above. It is retained for historical reference.
+
+Each agent originally had access to specific tools (defined in `config/tools.yaml`). When an agent was invoked, it could use tools to interact with the real system:
+
+| Tool | What It Does | Originally Used By |
 |------|-------------|---------|
 | `file_read` | Read source files, configs, docs | All agents |
 | `file_write` | Create/modify source files | Backend, Frontend, DevOps, Tester, PRD, User Story |
@@ -353,7 +375,7 @@ Each agent has access to specific tools (defined in `config/tools.yaml`). When a
 | `deployment` | Deploy via Docker Compose (build, up, down, rollback) | DevOps |
 | `ci_cd_pipeline` | Create/manage GitHub Actions workflows | DevOps |
 
-### 4.3 Agent Communication — Artifact Passing
+### 4.4 Agent Communication — Artifact Passing
 
 Agents don't talk to each other directly. Instead, they produce **artifacts** that become inputs for the next stage:
 

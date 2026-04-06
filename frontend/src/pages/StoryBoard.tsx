@@ -3,7 +3,8 @@ import { useParams, Link } from "react-router-dom"
 import { api } from "../lib/api"
 import { StatusBadge } from "../components/ui/StatusBadge"
 import { CoverageBar } from "../components/ui/CoverageBar"
-import { ArrowLeft } from "lucide-react"
+import { MarkdownRenderer } from "../components/ui/MarkdownRenderer"
+import { ArrowLeft, ChevronDown, ChevronRight } from "lucide-react"
 
 const columns = ["todo", "in_progress", "review", "testing", "done"]
 const columnLabels: Record<string, string> = {
@@ -13,75 +14,154 @@ const columnLabels: Record<string, string> = {
   testing: "Testing",
   done: "Done",
 }
+const columnColors: Record<string, string> = {
+  todo: "var(--text-muted)",
+  in_progress: "var(--accent)",
+  review: "var(--info, var(--accent))",
+  testing: "var(--warning)",
+  done: "var(--success)",
+}
 
 export function StoryBoardPage() {
   const { requestId } = useParams()
+  const [data, setData] = useState<any>(null)
   const [stories, setStories] = useState<any[]>([])
+  const [expandedStory, setExpandedStory] = useState<string | null>(null)
+  const [polling, setPolling] = useState(true)
+
+  const loadData = async () => {
+    if (!requestId) return
+    try {
+      const res = await api.get(`/requests/${requestId}`)
+      setData(res.data)
+      setStories(res.data.stories || [])
+      if (["completed", "failed"].includes(res.data.status)) {
+        setPolling(false)
+      }
+    } catch {}
+  }
 
   useEffect(() => {
-    if (requestId) {
-      api.get(`/requests/${requestId}/stories`).then((res) => setStories(res.data)).catch(() => {})
-    }
-  }, [requestId])
+    loadData()
+    const interval = setInterval(() => {
+      if (polling) loadData()
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [requestId, polling])
 
   return (
-    <div className="mx-auto max-w-7xl space-y-4 p-6">
-      <Link to={`/request/${requestId}`} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
-        <ArrowLeft size={14} /> Back to {requestId}
-      </Link>
-      <h1 className="text-xl font-bold text-gray-900">Story Board — {requestId}</h1>
-
-      {/* Pipeline header */}
-      <div className="flex gap-2 rounded-lg border border-gray-200 bg-white px-4 py-3">
-        {columns.map((col) => {
-          const count = stories.filter((s) => s.status === col).length
-          return (
-            <div key={col} className="flex items-center gap-1.5 text-sm">
-              <StatusBadge status={col} />
-              <span className="font-mono text-xs text-gray-400">{count}</span>
-            </div>
-          )
-        })}
-        <div className="ml-auto text-xs text-gray-400">
-          {stories.length} stories
+    <div style={{ maxWidth: 1400, margin: "0 auto", padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <Link to={`/request/${requestId}`} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 13, color: "var(--text-muted)", textDecoration: "none" }}>
+            <ArrowLeft size={14} /> Back to {requestId}
+          </Link>
+          <h1 style={{ fontSize: 20, fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>Story Board</h1>
+          {data && <StatusBadge status={data.status} />}
         </div>
       </div>
 
-      {/* Kanban columns */}
-      <div className="grid grid-cols-5 gap-4">
-        {columns.map((col) => (
-          <div key={col} className="space-y-2">
-            <h3 className="text-sm font-semibold text-gray-700">{columnLabels[col]}</h3>
-            <div className="min-h-[200px] space-y-2 rounded-lg bg-gray-50 p-2">
-              {stories
-                .filter((s) => s.status === col)
-                .map((s) => (
-                  <div key={s.story_id} className="rounded-md border border-gray-200 bg-white p-3">
-                    <div className="flex items-start justify-between">
-                      <span className="text-[10px] font-mono text-gray-400">{s.story_id}</span>
-                      {s.assigned_agent && (
-                        <span className="rounded bg-purple-50 px-1.5 py-0.5 text-[10px] text-purple-600">
-                          {s.assigned_agent.replace(/_/g, " ")}
-                        </span>
-                      )}
-                    </div>
-                    <p className="mt-1 text-xs font-medium text-gray-800">{s.title}</p>
-                    {s.coverage_pct !== null && (
-                      <div className="mt-2">
-                        <CoverageBar value={s.coverage_pct} />
-                      </div>
-                    )}
-                    {s.github_issue_number && (
-                      <span className="mt-1 inline-block rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500">
-                        #{s.github_issue_number}
-                      </span>
-                    )}
-                  </div>
-                ))}
+      {/* Pipeline Summary */}
+      <div style={{ display: "flex", gap: 12, padding: "12px 16px", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+        {columns.map((col) => {
+          const count = stories.filter((s) => s.status === col).length
+          return (
+            <div key={col} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: columnColors[col] }} />
+              <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{columnLabels[col]}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "var(--font-mono)", color: "var(--text-primary)" }}>{count}</span>
             </div>
-          </div>
-        ))}
+          )
+        })}
+        <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-muted)" }}>
+          {stories.length} total stories
+        </span>
       </div>
+
+      {/* Kanban Columns */}
+      {stories.length > 0 ? (
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${columns.length}, 1fr)`, gap: 12 }}>
+          {columns.map((col) => (
+            <div key={col} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 0" }}>
+                <span style={{ width: 10, height: 10, borderRadius: "50%", background: columnColors[col] }} />
+                <h3 style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)", margin: 0 }}>{columnLabels[col]}</h3>
+                <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
+                  {stories.filter((s) => s.status === col).length}
+                </span>
+              </div>
+              <div style={{ minHeight: 120, display: "flex", flexDirection: "column", gap: 8, padding: 8, borderRadius: "var(--radius)", background: "var(--bg-secondary)" }}>
+                {stories
+                  .filter((s) => s.status === col)
+                  .map((s) => {
+                    const isExpanded = expandedStory === s.story_id
+                    return (
+                      <div
+                        key={s.story_id}
+                        style={{
+                          background: "var(--bg-card)",
+                          border: "1px solid var(--border)",
+                          borderRadius: "var(--radius)",
+                          borderLeft: `3px solid ${columnColors[col]}`,
+                          overflow: "hidden",
+                        }}
+                      >
+                        {/* Story header */}
+                        <div
+                          onClick={() => setExpandedStory(isExpanded ? null : s.story_id)}
+                          style={{ padding: "10px 12px", cursor: "pointer" }}
+                        >
+                          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 4 }}>
+                            <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>{s.story_id}</span>
+                            {isExpanded ? <ChevronDown size={12} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
+                              : <ChevronRight size={12} style={{ color: "var(--text-muted)", flexShrink: 0 }} />}
+                          </div>
+                          <p style={{ fontSize: 12, fontWeight: 500, color: "var(--text-primary)", margin: "4px 0 0", lineHeight: 1.4 }}>
+                            {s.title}
+                          </p>
+                          {s.assigned_agent && (
+                            <span style={{ display: "inline-block", marginTop: 6, fontSize: 9, padding: "2px 6px", borderRadius: "var(--radius)", background: "var(--accent-subtle)", color: "var(--accent)" }}>
+                              {s.assigned_agent.replace(/_/g, " ")}
+                            </span>
+                          )}
+                          {s.priority && (
+                            <span style={{ display: "inline-block", marginTop: 6, marginLeft: 4, fontSize: 9, padding: "2px 6px", borderRadius: "var(--radius)", background: "var(--bg-hover)", color: "var(--text-muted)", textTransform: "capitalize" }}>
+                              {s.priority}
+                            </span>
+                          )}
+                          {s.coverage_pct !== null && s.coverage_pct !== undefined && (
+                            <div style={{ marginTop: 6 }}>
+                              <CoverageBar value={s.coverage_pct} />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Expanded description */}
+                        {isExpanded && s.description && (
+                          <div style={{
+                            padding: "0 12px 12px",
+                            maxHeight: 300,
+                            overflowY: "auto",
+                            borderTop: "1px solid var(--border)",
+                            paddingTop: 8,
+                          }}>
+                            <MarkdownRenderer content={s.description} />
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ padding: "60px 0", textAlign: "center", color: "var(--text-muted)" }}>
+          {data?.status === "in_progress" || data?.status === "analyzing"
+            ? "Stories will appear here once the User Story Author completes..."
+            : "No stories for this request"}
+        </div>
+      )}
     </div>
   )
 }

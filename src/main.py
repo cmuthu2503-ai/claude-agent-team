@@ -7,7 +7,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import agents, auth, cost, notifications, releases, requests, users
+from src.api.routes import agents, auth, cost, documents, notifications, releases, requests, users
 from src.api.websocket import router as ws_router
 from src.auth.service import AuthService
 from src.config.loader import ConfigLoader
@@ -58,6 +58,15 @@ async def lifespan(app: FastAPI):
     orchestrator = Orchestrator(config=config, state=state, events=events)
     app.state.orchestrator = orchestrator
 
+    # Initialize agent system with real LLM (if API key is set)
+    from src.agents.executor import AgentSystemExecutor
+    agent_executor = AgentSystemExecutor(config)
+    if agent_executor.client:
+        orchestrator.set_agent_executor(agent_executor)
+        logger.info("agent_system_connected", mode="real_llm")
+    else:
+        logger.info("agent_system_connected", mode="mock")
+
     logger.info("backend_started", environment=ENVIRONMENT)
     yield
 
@@ -96,6 +105,7 @@ app.include_router(agents.router)
 app.include_router(releases.router)
 app.include_router(notifications.router)
 app.include_router(users.router)
+app.include_router(documents.router)
 app.include_router(cost.router)
 app.include_router(ws_router)
 

@@ -7,9 +7,9 @@
 
 | Field | Value |
 |-------|-------|
-| Document Version | 2.0 |
+| Document Version | 3.0 |
 | Created Date | 2026-04-04 |
-| Last Updated | 2026-04-04 |
+| Last Updated | 2026-04-06 |
 | Status | Draft |
 | Product Owner | Chandramouli |
 
@@ -215,7 +215,7 @@ The system supports these expansions through YAML-only changes:
 | ID | Responsibility | Description |
 |----|---------------|-------------|
 | PRD-001 | Requirement Gathering | Collect and organize requirements from stakeholder inputs |
-| PRD-002 | Document Structuring | Write PRDs following the standard template (see Section 9.1) |
+| PRD-002 | Document Structuring | Write PRDs following the standard template (see Section 10.1) |
 | PRD-003 | Requirement Traceability | Link each requirement to its user story and acceptance criteria |
 | PRD-004 | Version Management | Maintain document versions and track changes |
 | PRD-005 | Completeness Review | Ensure no requirement gaps exist before handoff to development |
@@ -239,6 +239,8 @@ The system supports these expansions through YAML-only changes:
 | CR-003 | Constructive Feedback | Provide actionable, specific feedback — no vague "looks wrong" comments |
 | CR-004 | Standards Compliance | Verify adherence to linting rules, formatting, and project conventions |
 | CR-005 | Knowledge Sharing | Include explanations in reviews that help junior developers learn |
+| CR-006 | Combined Quality Gate | Participate in combined feedback loop with Tester. On re-review: verify all previous findings are FIXED. Only APPROVE when zero critical issues remain. |
+| CR-007 | Compilation Gate | FIRST verify every file compiles before reviewing quality. Truncated files, missing imports, syntax errors = automatic CHANGES REQUESTED. Non-negotiable. |
 
 ### 4.5 Backend Specialist — Detailed Responsibilities
 
@@ -282,13 +284,79 @@ The system supports these expansions through YAML-only changes:
 | TS-003 | E2E Testing | Create end-to-end tests that validate complete user workflows |
 | TS-004 | Regression Testing | Run regression suites before each deployment to catch regressions |
 | TS-005 | Test Reporting | Generate test reports with pass/fail counts, coverage metrics, and trends |
-| TS-006 | Demo Testing | Execute weekly demo tests and report results (see Section 7.2) |
+| TS-006 | Demo Testing | Execute weekly demo tests and report results (see Section 8.2) |
 
 ---
 
-## 5. GitHub Integration
+## 5. UI Features & Enhancements
 
-### 5.1 Repository Setup
+### Light/Dark Theme Toggle
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| UI-001 | Sun/moon toggle icon in navbar switches between light and dark mode for the current theme | Critical |
+| UI-002 | All 6 themes (Linear, Vercel, Discord, Flat, Brutalist, Y2K) have both light and dark color palettes | Critical |
+| UI-003 | Mode (light/dark) persists to localStorage independently of theme selection | Critical |
+| UI-004 | Theme selection persists to localStorage independently of mode | High |
+| UI-005 | CSS selectors use [data-theme="X"][data-mode="Y"] for 12 palette combinations | High |
+
+### Theme System
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| UI-006 | 6 selectable themes available via dropdown in navbar | High |
+| UI-007 | Each theme defines CSS custom properties (--bg-primary, --text-primary, --accent, etc.) | High |
+| UI-008 | All UI components use var(--xxx) for colors, not hardcoded values | High |
+
+### Inline Screenshot Attachments
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| UI-009 | Users can paste screenshots (Ctrl+V) directly into the request description text box | High |
+| UI-010 | Users can drag-and-drop image files into the description | High |
+| UI-011 | Users can click "Attach image" button to browse and select files | High |
+| UI-012 | Attached images display inline with text in the editor | High |
+| UI-013 | Files uploaded as multipart/form-data, stored on server, served via /api/v1/requests/attachments/ | High |
+
+### Live Activity Feed
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| UI-014 | Command Center shows real-time agent activity via WebSocket connection | High |
+| UI-015 | Activity feed shows agent name, status, progress messages, timestamps | Medium |
+| UI-016 | Request Detail page auto-polls every 3 seconds while request is in progress | Medium |
+
+### Agent Output Visibility
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| UI-017 | Request Detail page shows expandable agent pipeline with numbered steps | Critical |
+| UI-018 | Each agent's full output rendered as formatted markdown (headings, tables, code blocks) | Critical |
+| UI-019 | Expand All / Collapse All buttons for batch viewing | Medium |
+| UI-020 | Agent outputs deduplicated — shows best version when rework creates duplicates | Medium |
+
+### Markdown Rendering
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| UI-021 | Custom markdown renderer handles: headings, bold, tables, code blocks, lists, checkboxes, blockquotes | High |
+| UI-022 | Code blocks display with monospace font, themed background, and border | Medium |
+| UI-023 | Tables render with proper headers, borders, and themed styling | Medium |
+
+### Cost Dashboard
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| UI-024 | Cost page shows today's spend, monthly spend, all-time spend, total API calls | High |
+| UI-025 | Breakdown by model (Opus vs Sonnet) with token counts and cost | High |
+| UI-026 | Breakdown by agent with call count, tokens, and cost | High |
+| UI-027 | Top 10 most expensive requests listed | Medium |
+
+---
+
+## 6. GitHub Integration
+
+### 6.1 Repository Setup
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
@@ -297,7 +365,7 @@ The system supports these expansions through YAML-only changes:
 | GH-003 | Set up issue templates for bugs, features, and tasks | Medium |
 | GH-004 | Configure PR templates with checklist (tests, docs, coverage) | Medium |
 
-### 5.2 GitHub Actions — Automated Checks
+### 6.2 GitHub Actions — Automated Checks
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
@@ -308,7 +376,7 @@ The system supports these expansions through YAML-only changes:
 | GA-005 | Run security scanning (e.g., dependency audit) on PRs | Medium |
 | GA-006 | Generate and publish coverage reports as PR comments | Medium |
 
-### 5.3 Issue Tracking & PR Management
+### 6.3 Issue Tracking & PR Management
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
@@ -320,13 +388,13 @@ The system supports these expansions through YAML-only changes:
 
 ---
 
-## 6. Task Management System
+## 7. Task Management System
 
-### 6.1 Task Categories
+### 7.1 Task Categories
 
 The system tracks four categories of tasks, each with distinct lifecycle stages:
 
-#### 6.1.1 Development Tasks
+#### 7.1.1 Development Tasks
 
 | Stage | Description | Exit Criteria |
 |-------|------------|---------------|
@@ -335,7 +403,7 @@ The system tracks four categories of tasks, each with distinct lifecycle stages:
 | In Review | PR submitted, awaiting review | Code Reviewer approved |
 | Done | PR merged to main | CI checks pass, merged |
 
-#### 6.1.2 Testing Tasks
+#### 7.1.2 Testing Tasks
 
 | Stage | Description | Exit Criteria |
 |-------|------------|---------------|
@@ -344,7 +412,7 @@ The system tracks four categories of tasks, each with distinct lifecycle stages:
 | Test Execution | Running tests (manual or automated) | All tests executed |
 | Pass / Fail | Results recorded | Coverage ≥ 80%, all critical tests pass |
 
-#### 6.1.3 Deployment Tasks
+#### 7.1.3 Deployment Tasks
 
 | Stage | Description | Exit Criteria |
 |-------|------------|---------------|
@@ -353,7 +421,33 @@ The system tracks four categories of tasks, each with distinct lifecycle stages:
 | Production | Deployed to production | Health checks pass |
 | Verified | Post-deploy verification complete | No regressions detected |
 
-#### 6.1.4 Demo Tasks
+#### Rework Tasks — Combined Feedback Loop (Approach B)
+
+When both Code Review and Testing complete, a combined quality gate evaluates both results:
+
+| Check | Pass Condition | Fail Condition |
+|-------|---------------|----------------|
+| Code Review | Verdict = `**APPROVED**`, zero `[CRITICAL]` findings | `**CHANGES REQUESTED**` or any `[CRITICAL]` finding |
+| Testing | Zero `FAIL` test cases, verdict = `**READY FOR DEPLOYMENT**` | Any `FAIL` test case or `**NEEDS FIXES**` |
+
+**Combined gate must pass BOTH checks.** If either fails:
+
+| Stage | Description | Exit Criteria |
+|-------|------------|---------------|
+| Feedback Aggregation | Combine review findings + test failures into one package | Rework instructions generated |
+| Rework | Backend + Frontend agents fix ALL issues (review + test) | Fixed code with "Changes in this revision" |
+| Re-Review | Code Reviewer verifies fixes, marks each as FIXED/STILL OPEN | All critical issues resolved |
+| Re-Test | Tester re-runs full test plan, tags previously-failing tests with [RETEST] | All tests pass |
+| Combined Gate | Re-evaluate both review and test results | Both pass OR max cycles reached |
+
+**Pipeline rules:**
+- Compilation check is absolute priority — no broken code passes review under any circumstance
+- Maximum rework cycles: 2
+- After 2 failed cycles: request status = FAILED, DevOps does NOT run
+- DevOps only runs when BOTH gates pass
+- Each rework cycle includes BOTH code review AND testing (not just one)
+
+#### 7.1.4 Demo Tasks
 
 | Stage | Description | Exit Criteria |
 |-------|------------|---------------|
@@ -362,7 +456,7 @@ The system tracks four categories of tasks, each with distinct lifecycle stages:
 | Delivered | Demo presented to stakeholders | Feedback captured |
 | Follow-up | Action items tracked from demo feedback | Items added to backlog |
 
-### 6.2 Task Management Requirements
+### 7.2 Task Management Requirements
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
@@ -374,9 +468,53 @@ The system tracks four categories of tasks, each with distinct lifecycle stages:
 
 ---
 
-## 7. Demo Creation
+## Document Persistence & Knowledge Base
 
-### 7.1 Demo Feature Design
+### Requirements
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| DP-001 | Store every agent's output as a first-class document in a `documents` table with type, title, content, agent_id, version, tags | Critical |
+| DP-002 | Auto-extract keyword tags from document content (technology, domain, feature names) | High |
+| DP-003 | Before running the pipeline, search existing documents for matching/similar requirements | Critical |
+| DP-004 | If matching PRD found (confidence > 70%), skip PRD + Story creation stages and reuse existing documents | Critical |
+| DP-005 | Show "Similar requests found" in the UI when user types a description that matches existing work | High |
+| DP-006 | Skipped agents show "Reused from REQ-XXX" badge in the Request Detail timeline | Medium |
+| DP-007 | User can click "Regenerate" to force fresh PRD/story creation even when match exists | Medium |
+| DP-008 | Document versioning — rework cycles increment the version number | Medium |
+| DP-009 | Provide a searchable documents API: GET /api/v1/documents/search?q=... | High |
+| DP-010 | All document types persisted: PRD, user stories, code review, test report, deploy report | High |
+
+### Document Types
+
+| Type | Source Agent | Content |
+|------|------------|---------|
+| `prd` | PRD Specialist | Full PRD markdown with numbered requirements |
+| `user_stories` | User Story Author | All stories with acceptance criteria |
+| `backend_code` | Backend Specialist | Implementation code with file paths |
+| `frontend_code` | Frontend Specialist | React/TypeScript components |
+| `code_review` | Code Reviewer | Review report with findings and verdict |
+| `test_report` | Tester Specialist | Test plan, results, evidence |
+| `deploy_report` | DevOps Specialist | Deployment checklist and status |
+
+### Pipeline Skip Logic
+
+When a matching document is found:
+```
+Pipeline (normal):     PRD → Stories → Dev → Review → Test → DevOps
+Pipeline (with reuse): ────skip────── → Dev → Review → Test → DevOps
+```
+
+Reuse conditions:
+- Keyword match confidence > 70%
+- Existing PRD status is from a completed request
+- User confirms reuse (or auto-reuse if exact match)
+
+---
+
+## 8. Demo Creation
+
+### 8.1 Demo Feature Design
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
@@ -385,7 +523,7 @@ The system tracks four categories of tasks, each with distinct lifecycle stages:
 | DM-003 | Include sample data that illustrates realistic usage scenarios | Medium |
 | DM-004 | Provide a guided walkthrough script for presenters | Medium |
 
-### 7.2 Demo Testing Framework
+### 8.2 Demo Testing Framework
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
@@ -396,9 +534,9 @@ The system tracks four categories of tasks, each with distinct lifecycle stages:
 
 ---
 
-## 8. Edge Cases & Risk Mitigation
+## 9. Edge Cases & Risk Mitigation
 
-### 8.1 Code Review Process
+### 9.1 Code Review Process
 
 | Risk | Mitigation |
 |------|-----------|
@@ -407,7 +545,7 @@ The system tracks four categories of tasks, each with distinct lifecycle stages:
 | Coverage gaming (low-value tests to hit 80%) | Code Reviewer evaluates test quality, not just coverage numbers |
 | Disagreements on review feedback | Escalation path: developer can request re-review with justification |
 
-### 8.2 GitHub Repository Maintenance
+### 9.2 GitHub Repository Maintenance
 
 | Task | Frequency | Description |
 |------|-----------|-------------|
@@ -416,7 +554,7 @@ The system tracks four categories of tasks, each with distinct lifecycle stages:
 | Issue triage | Weekly | Review open issues, close stale ones, re-prioritize |
 | Label audit | Monthly | Ensure labels are consistent and up-to-date |
 
-### 8.3 Task Priority Management
+### 9.3 Task Priority Management
 
 | Priority | SLA | Examples |
 |----------|-----|---------|
@@ -425,7 +563,7 @@ The system tracks four categories of tasks, each with distinct lifecycle stages:
 | Medium | Next 1-2 sprints | Enhancements, tech debt, documentation improvements |
 | Low | Backlog — address as capacity allows | Nice-to-haves, cosmetic fixes |
 
-### 8.4 Scaling Risks
+### 9.4 Scaling Risks
 
 | Risk | Mitigation |
 |------|-----------|
@@ -437,9 +575,9 @@ The system tracks four categories of tasks, each with distinct lifecycle stages:
 
 ---
 
-## 9. Expected Output Formats
+## 10. Expected Output Formats
 
-### 9.1 PRD Document Format
+### 10.1 PRD Document Format
 
 PRD documents must be written in Markdown with the following structure:
 
@@ -459,7 +597,7 @@ Each requirement must have:
 - A clear description
 - A priority level (Critical / High / Medium / Low)
 
-### 9.2 User Story Documentation Format
+### 10.2 User Story Documentation Format
 
 User stories follow this template (designed for junior developer clarity):
 
@@ -487,7 +625,7 @@ User stories follow this template (designed for junior developer clarity):
 [Simple ASCII or Mermaid diagram showing the workflow]
 ```
 
-### 9.3 Task Management Report Format
+### 10.3 Task Management Report Format
 
 Weekly reports include:
 
@@ -517,9 +655,22 @@ Weekly reports include:
 - [Priorities for the coming week]
 ```
 
+### 10.4 Agent Output Quality Standards
+
+All agents must adhere to these non-negotiable quality standards:
+
+| Standard | Applies To | Enforcement |
+|----------|-----------|-------------|
+| Complete files only | Backend, Frontend Specialists | No truncated code, no placeholders, no "..." or "TODO" |
+| Compilation verification | Backend, Frontend Specialists | Self-verification checklist before submission |
+| Compilation gate | Code Reviewer | FIRST checks every file compiles before quality review |
+| Structured reports | All agents | Must follow the specified output template for their role |
+| No clarification questions | All agents | Produce output directly from provided context |
+| Combined quality gate | Code Reviewer + Tester | Both must pass before DevOps runs |
+
 ---
 
-## 10. Constraints
+## 11. Constraints
 
 All thresholds are configurable in `config/thresholds.yaml`. Default values:
 
@@ -534,9 +685,9 @@ All thresholds are configurable in `config/thresholds.yaml`. Default values:
 
 ---
 
-## 11. Evaluation Criteria
+## 12. Evaluation Criteria
 
-### 11.1 PRD Document Quality
+### 12.1 PRD Document Quality
 
 | Criteria | Measurement |
 |---------|-------------|
@@ -545,7 +696,7 @@ All thresholds are configurable in `config/thresholds.yaml`. Default values:
 | Consistency | Terminology, formatting, and priority levels are uniform across the document |
 | Traceability | Every requirement links to at least one user story |
 
-### 11.2 User Story Documentation Clarity
+### 12.2 User Story Documentation Clarity
 
 | Criteria | Measurement |
 |---------|-------------|
@@ -554,7 +705,7 @@ All thresholds are configurable in `config/thresholds.yaml`. Default values:
 | Completeness | Every feature has corresponding user stories |
 | Diagram Usage | Complex workflows include visual aids |
 
-### 11.3 Task Management Efficiency
+### 12.3 Task Management Efficiency
 
 | Criteria | Measurement |
 |---------|-------------|
@@ -565,7 +716,7 @@ All thresholds are configurable in `config/thresholds.yaml`. Default values:
 
 ---
 
-### 11.4 Configuration System Quality
+### 12.4 Configuration System Quality
 
 | Criteria | Measurement |
 |---------|-------------|
@@ -576,7 +727,7 @@ All thresholds are configurable in `config/thresholds.yaml`. Default values:
 
 ---
 
-## 12. Sample User Stories
+## 13. Sample User Stories
 
 ### Story: [US-001] Set Up GitHub Repository
 
@@ -615,7 +766,7 @@ All thresholds are configurable in `config/thresholds.yaml`. Default values:
 
 **Acceptance Criteria:**
 - [ ] Given the template exists, when a new PRD is needed, then the specialist can copy and fill it in
-- [ ] Given the template, when reviewed, then it contains all sections listed in Section 9.1
+- [ ] Given the template, when reviewed, then it contains all sections listed in Section 10.1
 - [ ] Given the template, when used by a junior developer, then all sections are self-explanatory
 
 ---
@@ -662,9 +813,9 @@ All thresholds are configurable in `config/thresholds.yaml`. Default values:
 
 ---
 
-## 13. Appendix
+## 14. Appendix
 
-### 13.1 Glossary
+### 14.1 Glossary
 
 | Term | Definition |
 |------|-----------|
@@ -678,21 +829,22 @@ All thresholds are configurable in `config/thresholds.yaml`. Default values:
 | Quality Gate | A pass/fail check that must succeed before a workflow stage can proceed |
 | Working Lead | An agent that both performs specialist work AND coordinates their team |
 
-### 13.2 Related Documents
+### 14.2 Related Documents
 
 | Document | Path | Description |
 |----------|------|-------------|
 | System Architecture | [docs/architecture.md](architecture.md) | Full config schemas, component design, YAML examples |
 | Expansion Playbook | [docs/expansion-playbook.md](expansion-playbook.md) | Step-by-step guide to add agents, teams, workflows |
 
-### 13.3 External References
+### 14.3 External References
 
 - Existing PRD: `C:\ai-projects\agent-team\references\prd-agent-team.md`
 - Agent Team Plan: `C:\ai-projects\agent-team\AGENT_TEAM_PLAN.md`
 
-### 13.4 Revision History
+### 14.4 Revision History
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 2026-04-04 | Chandramouli | Initial draft — 7 agents, linear workflow |
 | 2.0 | 2026-04-04 | Chandramouli | Scalable architecture — 8 agents, team hierarchy, DAG workflows, config-driven system |
+| 3.0 | 2026-04-06 | Chandramouli | Added Section 5 (UI Features & Enhancements) — light/dark theme toggle, 6 themes, screenshot attachments, live activity feed, agent output visibility, markdown rendering, cost dashboard. Renumbered sections 6-14. |
