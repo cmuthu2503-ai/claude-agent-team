@@ -344,6 +344,61 @@ Changes implemented after the initial 144-task plan was completed:
 | Research Team | New Research Specialist agent for assessment reports. research_request trigger, research workflow. Structured output: findings, analysis, comparison, recommendation. | Config: research_specialist.yaml, workflows.yaml, teams.yaml. Backend: TaskType enum, implementations.py, factory.py. Frontend: type dropdown. |
 | Content Team | New Content Creator agent for presentations and documents. content_request trigger, content_creation workflow. Supports slide decks, documents, technical guides. | Config: content_creator.yaml, workflows.yaml, teams.yaml. Backend: TaskType enum, implementations.py, factory.py. Frontend: type dropdown. |
 | Level 3 Autonomous Deployment | Code Commit stage: parse agent code → write files → compile → test → git push. Sidecar supervisor: watches deployment_state → builds Docker → deploys staging → health check → deploys prod → health check. Rollback: git revert + Docker retag. State machine resumable across restarts. | Backend: code_writer.py, deployment_state table/model/CRUD, orchestrator code_commit stage. Sidecar: supervisor/deploy_supervisor.py. Config: DevOps prompt updated, workflows.yaml code_commit stage. Frontend: deployment status on RequestDetail, real Releases page. |
+| Story Board Redesign | Rich Kanban board matching story-board-view.html mockup: pipeline overview bar with stage dots, aggregate stats, tab bar (Board/Timeline/Outputs/Tests), color-coded agent badges, test cases per story, coverage bars, PR badges, acceptance criteria checkboxes, reviewer comments. | Frontend: StoryBoard.tsx full rewrite (~300 lines). Backend: AC parser, test case linker, coverage extractor (~150 lines). |
+
+---
+
+## Story Board Redesign — Detailed Task Breakdown
+
+Reference mockup: `docs/mockups/story-board-view.html`
+
+### Phase 1: Backend (Data Parsing)
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| SBD-01 | Parse acceptance criteria | Extract Given/When/Then ACs from User Story Author output, store as structured JSON per story | M | — | `[ ]` |
+| SBD-02 | Parse test cases and link to stories | Extract TC-XXX with "Traces To: US-XXX AC-X" from Tester output, store in `test_cases` table with story_id link | L | — | `[ ]` |
+| SBD-03 | Extract coverage per story | Parse coverage % from Tester output per story, update `stories.coverage_pct` | S | SBD-02 | `[ ]` |
+| SBD-04 | API: story detail with ACs and test cases | `GET /api/v1/requests/:id/stories` returns stories with nested `acceptance_criteria[]` and `test_cases[]` | M | SBD-01, SBD-02 | `[ ]` |
+
+### Phase 2: Frontend (No Data Dependencies)
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| SBD-05 | Pipeline overview bar | Dot indicators per stage (PRD ✓, Stories ✓, Dev 3, Review 1, Testing 0, Done 1) with connectors and pulse animation | M | — | `[ ]` |
+| SBD-07 | Tab bar | Story Board / Agent Timeline / Outputs / Test Report tabs. Timeline + Outputs reuse RequestDetail components. | M | — | `[ ]` |
+| SBD-08 | Color-coded agent badges | Green=backend, pink=frontend, yellow=tester, blue=reviewer. Pulsing dot for active. | S | — | `[ ]` |
+| SBD-12 | PR badge on story cards | "PR #44 — Open" / "Merged" / "Under Review" placeholder | S | — | `[ ]` |
+| SBD-13 | Card styling | Left border accent per column color, hover shadow lift, active card blue left border | S | — | `[ ]` |
+| SBD-14 | Breadcrumb navigation | Command Center > REQ-XXX > Story Board | S | — | `[ ]` |
+
+### Phase 3: Frontend (Data-Dependent)
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| SBD-06 | Aggregate stats row | Stories count, Tests X/Y passing, Coverage avg %, PR count | S | SBD-04 | `[ ]` |
+| SBD-09 | Test cases on story cards | Per-story test list with pass/fail/running/pending icons. Count badge (3/5). | M | SBD-04 | `[ ]` |
+| SBD-10 | Coverage bar on story cards | Green ≥80%, yellow 60-79%, red <60%. Per-story value from API. | S | SBD-03, SBD-04 | `[ ]` |
+| SBD-11 | Acceptance criteria checkboxes | Given/When/Then as checkbox list on Done cards. Checked = met. | M | SBD-04 | `[ ]` |
+| SBD-15 | Reviewer comment on cards | Inline comment from Code Reviewer on cards in Review column | S | SBD-04 | `[ ]` |
+
+### Phase 4: Integration
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| SBD-16 | Wire AC parsing into orchestrator | After User Story Author completes, parse ACs and save per story | M | SBD-01 | `[ ]` |
+| SBD-17 | Wire test case linking into orchestrator | After Tester completes, parse TCs and link to stories | M | SBD-02 | `[ ]` |
+| SBD-18 | End-to-end test | Submit request → stories with ACs → tests linked → board renders with full data | M | All above | `[ ]` |
+
+### Progress Summary
+
+| Phase | Tasks | Done | In Progress | Not Started |
+|-------|-------|------|-------------|-------------|
+| Phase 1: Backend | 4 | 0 | 0 | 4 |
+| Phase 2: Frontend (no deps) | 6 | 0 | 0 | 6 |
+| Phase 3: Frontend (data) | 5 | 0 | 0 | 5 |
+| Phase 4: Integration | 3 | 0 | 0 | 3 |
+| **Total** | **18** | **0** | **0** | **18** |
 
 ---
 

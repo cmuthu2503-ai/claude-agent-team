@@ -376,6 +376,31 @@ The system supports these expansions through YAML-only changes:
 | UI-019 | Expand All / Collapse All buttons for batch viewing | Medium |
 | UI-020 | Agent outputs deduplicated — shows best version when rework creates duplicates | Medium |
 
+### Story Board Redesign (Mockup: story-board-view.html)
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| SB-001 | Pipeline overview bar with dot indicators per stage (PRD, Stories, Dev, Review, Testing, Done) showing story counts, connectors, and animation for active stages | High |
+| SB-002 | Aggregate stats row: total stories, tests passing/total, average coverage %, PR count | High |
+| SB-003 | Tab bar: Story Board / Agent Timeline / Outputs / Test Report — switching views without navigation | High |
+| SB-004 | Story cards with color-coded agent badges: green=backend, pink=frontend, yellow=tester, blue=reviewer, with pulsing dot for active agents | Medium |
+| SB-005 | Test cases displayed per story card with pass ✓ / fail ✗ / running ○ / pending ○ icons, linked via "Traces To: US-XXX" from Tester output | Critical |
+| SB-006 | Coverage bar per story card: green ≥80%, yellow 60-79%, red <60%, extracted from Tester output | Medium |
+| SB-007 | PR badge per story card showing PR number and status (Open / Under Review / Merged) | Medium |
+| SB-008 | Acceptance criteria checkboxes per story card, parsed from User Story Author's Given/When/Then output | High |
+| SB-009 | Reviewer comment inline on story cards in Review column | Low |
+| SB-010 | Card styling: left border accent per column color, hover shadow lift, active card blue left border | Medium |
+| SB-011 | Breadcrumb navigation: Command Center > REQ-XXX > Story Board | Low |
+
+### Data Requirements for Story Board
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| SD-001 | Parse acceptance criteria from User Story Author output and store per story in database | High |
+| SD-002 | Parse test cases from Tester output, link to story IDs via "Traces To: US-XXX AC-X", store in test_cases table | Critical |
+| SD-003 | Extract coverage percentage per story from Tester output, update stories.coverage_pct | Medium |
+| SD-004 | Pipeline stage counts computed from story statuses (count per column) | Medium |
+
 ### Markdown Rendering
 
 | ID | Requirement | Priority |
