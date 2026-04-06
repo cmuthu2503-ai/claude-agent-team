@@ -7,23 +7,6 @@ from typing import Any
 from src.agents.base import BaseAgent
 
 
-class EngineeringLeadAgent(BaseAgent):
-    """Decomposes requests and delegates to team leads."""
-
-    def _parse_output(self, text: str) -> dict[str, Any]:
-        # Try to parse JSON delegation plan
-        try:
-            # Find JSON block in output
-            match = re.search(r'\{[\s\S]*\}', text)
-            if match:
-                return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
-        return {"delegation_plan": text}
-
-    def _extract_artifacts(self, text: str) -> list[str]:
-        return []  # Engineering Lead produces plans, not file artifacts
-
 
 class PRDSpecialistAgent(BaseAgent):
     """Creates Product Requirements Documents."""

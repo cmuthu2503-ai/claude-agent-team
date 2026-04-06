@@ -37,7 +37,7 @@
           "description": { "type": "string" },
           "category": {
             "type": "string",
-            "enum": ["planning", "development", "review", "testing", "deployment"]
+            "enum": ["planning", "development", "review", "testing", "deployment", "research", "content"]
           }
         }
       }
