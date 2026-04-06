@@ -19,9 +19,16 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-# Configuration
-PROJECT_ROOT = Path(__file__).parent.parent
-DB_PATH = PROJECT_ROOT / "data" / "agent_team.db"
+# Configuration — works both on host and inside Docker container
+# Inside Docker: DB at /app/data/agent_team.db, project at /app/project
+# On host: DB at ./data/agent_team.db, project at .
+PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT", "/app/project"))
+DB_PATH = Path(os.getenv("DB_PATH", "/app/data/agent_team.db"))
+
+# Fallback for running directly on host
+if not DB_PATH.parent.exists():
+    PROJECT_ROOT = Path(__file__).parent.parent
+    DB_PATH = PROJECT_ROOT / "data" / "agent_team.db"
 POLL_INTERVAL = 5  # seconds
 HEALTH_CHECK_RETRIES = 10
 HEALTH_CHECK_INTERVAL = 3  # seconds
