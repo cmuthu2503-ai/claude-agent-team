@@ -51,6 +51,20 @@ clean: ## Remove all containers, volumes, and images for this project
 	@echo "Cleaned local dev environment"
 
 # ============================================
+# Supervisor (standalone — survives app rebuilds)
+# ============================================
+
+supervisor: ## Start the deployment supervisor (standalone container)
+	docker compose -f docker-compose.supervisor.yml up -d --build
+	@echo "Supervisor running. Logs: make supervisor-logs"
+
+supervisor-logs: ## Tail supervisor logs
+	docker compose -f docker-compose.supervisor.yml logs -f
+
+supervisor-stop: ## Stop the supervisor
+	docker compose -f docker-compose.supervisor.yml down
+
+# ============================================
 # Staging / Production / Demo (P6)
 # ============================================
 

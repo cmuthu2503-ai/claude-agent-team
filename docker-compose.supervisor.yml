@@ -1,0 +1,25 @@
+# Standalone Supervisor — runs independently from the main app stack.
+# This container survives when the main app is rebuilt/restarted.
+#
+# Start:  docker compose -f docker-compose.supervisor.yml up -d --build
+# Logs:   docker compose -f docker-compose.supervisor.yml logs -f
+# Stop:   docker compose -f docker-compose.supervisor.yml down
+
+services:
+  supervisor:
+    build:
+      context: .
+      dockerfile: Dockerfile.supervisor
+    container_name: agent-team-supervisor
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent-team-data:/app/data
+      - .:/app/project
+    working_dir: /app/project
+    restart: unless-stopped
+
+# Use the SAME named volume as the main app so supervisor can read the DB
+volumes:
+  agent-team-data:
+    external: true
+    name: claude-agent-team_agent-team-data
