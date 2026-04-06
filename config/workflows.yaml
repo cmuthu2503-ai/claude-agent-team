@@ -143,3 +143,27 @@ workflows:
         agents: [tester_specialist]
         inputs: [demo_environment, demo_test_plan]
         outputs: [demo_test_report]
+
+  # ──────────────────────────────────────────────
+  # Research workflow
+  # ──────────────────────────────────────────────
+  research:
+    description: "Research and assessment on a given topic"
+    trigger: research_request
+    stages:
+
+      research:
+        agents: [research_specialist]
+        outputs: [research_report]
+
+  # ──────────────────────────────────────────────
+  # Content creation workflow
+  # ──────────────────────────────────────────────
+  content_creation:
+    description: "Create presentations, documents, and guides"
+    trigger: content_request
+    stages:
+
+      create:
+        agents: [content_creator]
+        outputs: [content_artifact]

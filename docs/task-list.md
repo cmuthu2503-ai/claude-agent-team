@@ -341,6 +341,8 @@ Changes implemented after the initial 144-task plan was completed:
 | Agent Persona Overhaul | All 7 agents upgraded with: project tech stack context, structured output formats, cross-agent traceability (REQ→US→Code→Review→Test), output size caps, user story notes reading. | Config: all 7 agent YAML prompts rewritten. PRD Specialist switched Opus→Sonnet. Stale responsibilities cleaned. |
 | Markdown Rendering | Agent outputs render as formatted HTML instead of raw text. Custom MarkdownRenderer handles headings, tables, code blocks, lists, checkboxes. | Frontend: MarkdownRenderer.tsx component, RequestDetail.tsx and StoryBoard.tsx updated. |
 | Cost Tracking Wired | Token usage now recorded per agent per request. Cost calculated from pricing config. Cost Dashboard shows breakdowns by model, agent, request. | Backend: orchestrator calls TokenTracker.record() after each agent. API: cost/dashboard returns full breakdowns. Frontend: CostDashboard.tsx redesigned. |
+| Research Team | New Research Specialist agent for assessment reports. research_request trigger, research workflow. Structured output: findings, analysis, comparison, recommendation. | Config: research_specialist.yaml, workflows.yaml, teams.yaml. Backend: TaskType enum, implementations.py, factory.py. Frontend: type dropdown. |
+| Content Team | New Content Creator agent for presentations and documents. content_request trigger, content_creation workflow. Supports slide decks, documents, technical guides. | Config: content_creator.yaml, workflows.yaml, teams.yaml. Backend: TaskType enum, implementations.py, factory.py. Frontend: type dropdown. |
 
 ---
 

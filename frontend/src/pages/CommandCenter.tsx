@@ -193,6 +193,8 @@ export function CommandCenterPage() {
               <option value="bug_report">Bug Fix</option>
               <option value="doc_request">Docs</option>
               <option value="demo_request">Demo</option>
+              <option value="research_request">Research</option>
+              <option value="content_request">Content</option>
             </select>
             <div style={{ display: "flex", gap: 4 }}>
               {["high", "medium", "low"].map((p) => (

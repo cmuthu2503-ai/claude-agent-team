@@ -99,6 +99,47 @@ The agent team is a **hierarchical, configuration-driven system** consisting of 
 | 7 | `devops_specialist` | **DevOps Specialist** (Delivery Lead) | delivery | engineering_lead | tester_specialist |
 | 8 | `tester_specialist` | **Tester Specialist** | delivery | devops_specialist | — |
 
+### Multi-Team Architecture
+
+The system supports three specialized teams, each with their own workflow:
+
+| Team | Trigger | Agents | Workflow |
+|------|---------|--------|----------|
+| **Engineering** | `feature_request`, `bug_report`, `doc_request`, `demo_request` | PRD Specialist, User Story Author, Backend Specialist, Frontend Specialist, Code Reviewer, Tester Specialist, DevOps Specialist (7 agents) | Full development pipeline with combined feedback loop |
+| **Research** | `research_request` | Research Specialist (1 agent) | Research → Assessment Report |
+| **Content** | `content_request` | Content Creator (1 agent) | Create → Content Artifact |
+
+#### Request Routing
+
+The orchestrator routes requests to the correct team based on `task_type`:
+
+| Request Type | Team | Pipeline |
+|-------------|------|----------|
+| `feature_request` | Engineering | PRD → Stories → Dev → Review → Test → DevOps |
+| `bug_report` | Engineering | Triage → Fix → Review+Test → DevOps |
+| `doc_request` | Engineering | PRD → Stories |
+| `research_request` | Research | Research Specialist → Report |
+| `content_request` | Content | Content Creator → Artifact |
+
+### Research Team
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| RT-001 | Research Specialist agent produces structured assessment reports on any given topic | Critical |
+| RT-002 | Report includes: executive summary, key findings with confidence levels, pros/cons analysis, comparison tables, recommendation | Critical |
+| RT-003 | Research output saved as document type `research_report` in the knowledge base | High |
+| RT-004 | Research reports searchable via /api/v1/documents/search | High |
+
+### Content Team
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| CT-001 | Content Creator agent produces presentations, professional documents, and technical guides | Critical |
+| CT-002 | Presentations formatted as slide decks (Slide 1: Title, Visual, Speaker Notes, Key Points) | Critical |
+| CT-003 | Documents formatted as structured markdown with clear headings and tables | Critical |
+| CT-004 | Content output saved as document type `content_artifact` in the knowledge base | High |
+| CT-005 | Content artifacts searchable via /api/v1/documents/search | High |
+
 ### 3.4 Team Definitions
 
 | Team | Lead | Members | Domain |

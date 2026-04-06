@@ -305,6 +305,8 @@ class Orchestrator(AgentExecutor):
         "code_reviewer": "code_review",
         "tester_specialist": "test_report",
         "devops_specialist": "deploy_report",
+        "research_specialist": "research_report",
+        "content_creator": "content_artifact",
     }
 
     async def _save_document(self, request_id: str, agent_id: str, content: str) -> None:

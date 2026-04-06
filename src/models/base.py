@@ -31,6 +31,8 @@ class TaskType(StrEnum):
     BUG = "bug_report"
     DOCS = "doc_request"
     DEMO = "demo_request"
+    RESEARCH = "research_request"
+    CONTENT = "content_request"
 
 
 class TaskPriority(StrEnum):

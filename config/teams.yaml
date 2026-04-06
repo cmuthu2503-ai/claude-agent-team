@@ -26,6 +26,20 @@ teams:
     domain: [testing, deployment, ci-cd, infrastructure, monitoring, e2e]
     parent_team: engineering
 
+  research:
+    display_name: "Research Team"
+    lead: research_specialist
+    members: [research_specialist]
+    domain: [research, analysis, assessment, comparison, evaluation]
+    parent_team: engineering
+
+  content:
+    display_name: "Content Team"
+    lead: content_creator
+    members: [content_creator]
+    domain: [presentation, documentation, content, writing, slides, guide, tutorial]
+    parent_team: engineering
+
 hierarchy:
   root: engineering
   delegation_direction: top_down

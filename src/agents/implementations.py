@@ -100,3 +100,23 @@ class TesterSpecialistAgent(BaseAgent):
     def _extract_artifacts(self, text: str) -> list[str]:
         paths = re.findall(r'(?:tests|e2e)/[\w/.-]+\.(?:py|ts)', text)
         return paths
+
+
+class ResearchSpecialistAgent(BaseAgent):
+    """Conducts research and produces assessment reports."""
+
+    def _parse_output(self, text: str) -> dict[str, Any]:
+        return {"research_report": text}
+
+    def _extract_artifacts(self, text: str) -> list[str]:
+        return []
+
+
+class ContentCreatorAgent(BaseAgent):
+    """Creates presentations, documents, and guides."""
+
+    def _parse_output(self, text: str) -> dict[str, Any]:
+        return {"content_artifact": text}
+
+    def _extract_artifacts(self, text: str) -> list[str]:
+        return []

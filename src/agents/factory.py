@@ -8,9 +8,11 @@ from src.agents.base import BaseAgent
 from src.agents.implementations import (
     BackendSpecialistAgent,
     CodeReviewerAgent,
+    ContentCreatorAgent,
     DevOpsSpecialistAgent,
     FrontendSpecialistAgent,
     PRDSpecialistAgent,
+    ResearchSpecialistAgent,
     TesterSpecialistAgent,
     UserStoryAuthorAgent,
 )
@@ -27,6 +29,8 @@ AGENT_CLASS_MAP: dict[str, type[BaseAgent]] = {
     "frontend_specialist": FrontendSpecialistAgent,
     "devops_specialist": DevOpsSpecialistAgent,
     "tester_specialist": TesterSpecialistAgent,
+    "research_specialist": ResearchSpecialistAgent,
+    "content_creator": ContentCreatorAgent,
 }
 
 
