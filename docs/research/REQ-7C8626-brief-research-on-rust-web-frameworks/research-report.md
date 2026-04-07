@@ -1,0 +1,5 @@
+## Research Report: Rust Web Frameworks
+
+> **Sources:** Live web search performed at request time. Primary sources cited in the Findings table.
+
+Based on current 2026 data, the Rust web framework landscape has matured significantly with five major contenders: **Axum** (v0.8.8, January 2026) has emerged as the modern default choice, offering type-safe extractors and seamless Tower ecosystem integration; **Actix Web** (v4.12.1, November 2025) remains the performance leader with its actor model architecture; **Rocket** (v0.5.1) provides a batteries-included developer experience; **Warp** (v0.4.1, August 2025) offers functional composition through filters; and **Salvo** (v0.89.1, December 2025) introduces cutting-edge features like HTTP/3 support and automatic TLS/ACME. The choice largely depends on priorities: Axum for general-purpose APIs and Tower compatibility, Actix Web for maximum performance in high-traffic scenarios, Rocket for rapid development with built-in features, Warp for functional programming approaches, and Salvo for modern protocol support and ease of deployment.
