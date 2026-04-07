@@ -1,14 +1,19 @@
-"""Code Writer — parses agent code output, writes files, compiles, commits to git."""
+"""Code Writer — parses agent code output, writes files, compiles, publishes to GitHub.
+
+Compilation/test steps use ruff/tsc/pytest binaries that ARE installed in the
+backend container. Git publishing uses the GitHub Trees API (no `git` CLI), so
+this module works without git installed in the container.
+"""
 
 import asyncio
 import re
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import structlog
 
+from src.core.github_publisher import GitHubPublishError, GitHubPublisher
 from src.models.base import DeploymentState, DeploymentStep
 from src.state.base import StateStore
 
@@ -22,16 +27,20 @@ class CodeWriteError(Exception):
 
 
 class CodeWriter:
-    """Parses code blocks from agent output, writes to disk, compiles, and pushes to git."""
+    """Parses code blocks from agent output, writes to disk, compiles, and publishes to GitHub.
+
+    Publishing uses the GitHub Trees API via GitHubPublisher — no `git` CLI required.
+    """
 
     def __init__(self, state: StateStore, project_root: str = ".") -> None:
         self.state = state
         self.root = Path(project_root)
+        self.github = GitHubPublisher()
 
     async def commit_code(
         self, request_id: str, description: str, agent_outputs: dict[str, str]
     ) -> DeploymentState:
-        """Full code commit pipeline: parse → write → compile → test → git push.
+        """Full code commit pipeline: parse → write → compile → test → publish.
 
         Args:
             request_id: The request ID this code belongs to
@@ -50,23 +59,22 @@ class CodeWriter:
             request_id=request_id,
         )
 
-        # Get current HEAD as rollback point
-        rollback_sha = await self._git_head_sha()
-        dep_state.rollback_sha = rollback_sha
-
         try:
-            # Step 1: Parse code blocks from agent outputs and write to files
-            all_files: list[str] = []
+            # Step 1: Parse code blocks from agent outputs, write to disk, collect content
+            all_file_content: dict[str, str] = {}  # rel_path → content
             for agent_id, output_text in agent_outputs.items():
                 if not output_text:
                     continue
                 files = self._parse_and_write_files(output_text, agent_id)
-                all_files.extend(files)
-                logger.info("files_written", agent=agent_id, count=len(files), files=files)
+                all_file_content.update(files)
+                logger.info(
+                    "files_written", agent=agent_id, count=len(files), files=list(files.keys())
+                )
 
-            if not all_files:
+            if not all_file_content:
                 raise CodeWriteError("No code files were produced by any agent")
 
+            all_files = list(all_file_content.keys())
             dep_state.files_committed = all_files
             self._record_step(dep_state, "files_written", "done", f"{len(all_files)} files written")
 
@@ -84,15 +92,38 @@ class CodeWriter:
             await self._run_tests()
             self._record_step(dep_state, "tests_passed", "done", "pytest passed")
 
-            # Step 5: Git commit and push
-            commit_sha = await self._git_commit_and_push(request_id, description, all_files)
-            dep_state.commit_sha = commit_sha
+            # Step 5: Publish to GitHub via Trees API (atomic multi-file commit)
+            file_list = "\n".join(f"- {f}" for f in all_files)
+            commit_msg = (
+                f"feat({request_id}): {description[:80]}\n\n"
+                f"Files:\n{file_list}\n\n"
+                f"Auto-committed by Agent Team pipeline"
+            )
+            try:
+                commit_info = await self.github.commit_files(
+                    {p: c for p, c in all_file_content.items()},
+                    commit_msg,
+                )
+            except GitHubPublishError as e:
+                raise CodeWriteError(f"GitHub publish failed: {e}") from e
+
+            dep_state.commit_sha = commit_info["short_sha"]
+            dep_state.rollback_sha = commit_info["parent_sha"]  # parent = pre-commit HEAD
             dep_state.current_step = DeploymentStep.CODE_COMMITTED
-            self._record_step(dep_state, "code_committed", "done", f"Pushed to GitHub: {commit_sha}")
+            self._record_step(
+                dep_state, "code_committed", "done",
+                f"Published to GitHub: {commit_info['short_sha']}",
+            )
 
             # Save state — sidecar will pick this up
             await self.state.create_deployment_state(dep_state)
-            logger.info("code_committed", request_id=request_id, sha=commit_sha, files=len(all_files))
+            logger.info(
+                "code_committed",
+                request_id=request_id,
+                sha=commit_info["short_sha"],
+                url=commit_info["url"],
+                files=len(all_files),
+            )
 
             return dep_state
 
@@ -108,9 +139,10 @@ class CodeWriter:
                 pass
             raise CodeWriteError(f"Code commit failed: {e}") from e
 
-    def _parse_and_write_files(self, output_text: str, agent_id: str) -> list[str]:
-        """Parse code blocks with file paths from agent output and write to disk."""
-        files_written: list[str] = []
+    def _parse_and_write_files(self, output_text: str, agent_id: str) -> dict[str, str]:
+        """Parse code blocks with file paths from agent output, write to disk, and
+        return a dict of {path: content} for downstream use (e.g., GitHub publishing)."""
+        files_written: dict[str, str] = {}
 
         # Pattern: ### `path/to/file.ext` or ### Full Source: `path/to/file.ext`
         # Followed by ```lang\n...\n```
@@ -129,11 +161,12 @@ class CodeWriter:
                 logger.warning("path_traversal_blocked", path=file_path, agent=agent_id)
                 continue
 
-            # Write the file
+            # Write the file (with trailing newline) and remember its content
             full_path = self.root / file_path
             full_path.parent.mkdir(parents=True, exist_ok=True)
-            full_path.write_text(content + "\n", encoding="utf-8")
-            files_written.append(file_path)
+            content_with_newline = content + "\n"
+            full_path.write_text(content_with_newline, encoding="utf-8")
+            files_written[file_path] = content_with_newline
             logger.debug("file_written", path=file_path, size=len(content))
 
         return files_written
@@ -163,47 +196,6 @@ class CodeWriter:
         if code != 0:
             error = stderr or stdout
             raise CodeWriteError(f"Tests failed:\n{error[:500]}")
-
-    async def _git_head_sha(self) -> str:
-        """Get the current HEAD commit SHA."""
-        code, stdout, _ = await self._run_cmd("git rev-parse HEAD", timeout=10)
-        return stdout.strip() if code == 0 else ""
-
-    async def _git_commit_and_push(
-        self, request_id: str, description: str, files: list[str]
-    ) -> str:
-        """Stage, commit, and push files to GitHub."""
-        # Stage all written files
-        for f in files:
-            await self._run_cmd(f"git add {f}", timeout=10)
-
-        # Check if there are actually changes staged
-        code, stdout, _ = await self._run_cmd("git diff --cached --name-only", timeout=10)
-        if not stdout.strip():
-            raise CodeWriteError("No changes to commit — files may be identical to existing")
-
-        # Commit
-        file_list = "\n".join(f"- {f}" for f in files)
-        commit_msg = (
-            f"feat({request_id}): {description[:80]}\n\n"
-            f"Files:\n{file_list}\n\n"
-            f"Auto-committed by Agent Team pipeline"
-        )
-        code, stdout, stderr = await self._run_cmd(
-            f'git commit -m "{commit_msg}"', timeout=30
-        )
-        if code != 0:
-            raise CodeWriteError(f"Git commit failed:\n{(stderr or stdout)[:300]}")
-
-        # Get commit SHA
-        sha = (await self._git_head_sha())[:8]
-
-        # Push
-        code, stdout, stderr = await self._run_cmd("git push origin main", timeout=60)
-        if code != 0:
-            raise CodeWriteError(f"Git push failed:\n{(stderr or stdout)[:300]}")
-
-        return sha
 
     def _record_step(self, state: DeploymentState, step: str, status: str, detail: str) -> None:
         """Record a step in the deployment history."""

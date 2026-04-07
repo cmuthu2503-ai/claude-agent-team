@@ -7,7 +7,7 @@
 
 | Field | Value |
 |-------|-------|
-| Document Version | 3.0 |
+| Document Version | 3.3 |
 | Created Date | 2026-04-04 |
 | Last Updated | 2026-04-06 |
 | Status | Draft |
@@ -451,6 +451,187 @@ The system supports these expansions through YAML-only changes:
 | IT-003 | Link PRs to issues for automatic status tracking | High |
 | IT-004 | Use GitHub milestones for sprint/release tracking | Medium |
 | IT-005 | Configure assignee and reviewer auto-assignment rules | Low |
+
+### 6.4 Research Publishing Pipeline
+
+When a user submits a `research_request`, the system runs a 3-stage workflow that produces structured artifacts and publishes them to both the local filesystem and the GitHub repository.
+
+**Workflow stages:**
+
+1. **Research** — `research_specialist` produces a structured research report (markdown)
+2. **Generate** — `content_creator` receives the research report as input and produces additional artifacts:
+   - `report.md` — polished, publication-ready version of the research
+   - `summary.md` — one-page executive summary (≤ 400 words)
+   - `slides.md` — 8-12 slide deck source (markdown, `---` separated)
+   - `architecture.mmd` — Mermaid diagram (only if applicable to the topic)
+3. **Publish** — system stage (`ResearchPublisher`) renders binary artifacts and commits everything to GitHub:
+   - Renders `report.md` → `report.pdf` via WeasyPrint
+   - Renders `slides.md` → `slides.pptx` via python-pptx
+   - Writes all files to `docs/research/REQ-<id>-<slug>/`
+   - Commits atomically to GitHub via the Trees API in a single commit
+
+**Storage convention:**
+
+```
+docs/research/
+  REQ-A3F2C1-vector-databases/
+    research-report.md     ← raw output from Research Specialist
+    report.md              ← polished markdown
+    report.pdf             ← rendered PDF
+    summary.md             ← executive summary
+    slides.md              ← slide deck source
+    slides.pptx            ← rendered PowerPoint
+    architecture.mmd       ← optional Mermaid diagram source
+```
+
+**GitHub publishing:**
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| RPP-001 | Use GitHub Trees API for atomic multi-file commits (no git CLI dependency in container) | High |
+| RPP-002 | Authenticate via `GITHUB_TOKEN` PAT with `contents:write` scope | High |
+| RPP-003 | Soft-fail on publish errors — request still completes successfully if research itself succeeded | High |
+| RPP-004 | Render slides as `.pptx` (not just markdown) so business users can open in PowerPoint | High |
+| RPP-005 | Render report as `.pdf` so it can be shared without requiring a markdown viewer | High |
+| RPP-006 | Folder naming: `REQ-<id>-<slug>` where slug is derived from the request title | Medium |
+| RPP-007 | Include source files (`.md`, `.mmd`) alongside rendered files for editability | Medium |
+| RPP-008 | Emit `research_publish.completed` event with commit SHA for UI display | Medium |
+
+**Future enhancements (not in current scope):**
+
+| ID | Enhancement | Priority |
+|----|-------------|----------|
+| FE-1 | "Published Artifacts" tab on the Story Board for research requests, showing clickable links to each file in the GitHub repo | High |
+| ~~FE-2~~ | ~~Refactor `CodeWriter._git_commit_and_push()` to use the same GitHub Trees API approach~~ — **DONE.** `src/core/github_publisher.py` is now a shared module used by both `ResearchPublisher` and `CodeWriter`. The git CLI dependency is gone. | ~~High~~ |
+| FE-3 | Versioning — if the same research topic is re-submitted, create `REQ-XXX-<slug>-v2/` instead of overwriting | Medium |
+| FE-4 | Bidirectional sync — if someone edits the report on GitHub, surface the updated version in the UI | Low |
+| FE-5 | Real Mermaid PNG rendering via `mermaid-cli` (requires Node.js sidecar) | Low |
+| FE-6 | Additional output formats: DOCX (via `python-docx`), Confluence page (via Atlassian API) | Low |
+
+### 6.5 Web Search Integration (Firecrawl)
+
+**Problem:** All Claude models have a knowledge cutoff (early 2025 for Sonnet 4). Without external data access, agents produce stale answers — especially research, where the user needs current market data, pricing, model versions, and trends.
+
+**Solution:** Integrate [Firecrawl](https://firecrawl.dev) as a web search + scraping service exposed to all agents as **two tools** they can call during their tool-use loop. The agent decides when to search based on the prompt. No tool wrapping work in the agent loop — the existing `BaseAgent._call_llm()` already handles Anthropic's tool-use protocol.
+
+**Why Firecrawl** (not Tavily, Brave, Serper, etc.):
+- Built for LLMs — returns clean markdown directly, no HTML parsing needed
+- Combines search + scrape in one API (Tavily-style) **plus** a separate scrape mode for known URLs
+- Handles JavaScript-rendered content (modern SPAs work)
+- Open-source core (self-hostable if needed)
+- Predictable credit-based pricing
+
+**Provider compatibility**: tool use is part of Anthropic's Messages API, supported on both **direct Anthropic API and Amazon Bedrock**. So adding Firecrawl works for both sides of the Command Center provider toggle — no code paths diverge.
+
+**Two tools exposed to agents:**
+
+| Tool | Calls | When the agent uses it | Returns |
+|------|-------|------------------------|---------|
+| `web_search` | Firecrawl `/search` with `scrapeOptions={formats:["markdown"]}` | "Find me articles about X" — discovery mode | List of `{url, title, markdown}` for top N results, each truncated to ~3000 chars |
+| `web_scrape` | Firecrawl `/scrape` with `formats=["markdown"]`, `onlyMainContent=true` | "Read this specific URL deeply" — when the agent already has a URL | Single `{url, title, markdown}` with full content |
+
+**Truncation strategy**: search results are capped at ~3000 chars per item. The agent can call `web_scrape` on any URL it wants to read in full. This keeps token usage sane while preserving the agent's ability to drill down.
+
+**No artificial call cap.** The natural ceiling comes from `BaseAgent.max_iterations = 5` — each agent run can issue at most a handful of tool batches. Every Firecrawl call is logged with `request_id`, `agent_id`, query/url, and result size for observability. A hard cap can be added later if logs show runaway behavior.
+
+**Soft-fail behavior**: if Firecrawl is unreachable or returns an error, the tool returns the error string in the tool result. The agent decides whether to retry, fall back to training-data answers, or summarize what it has.
+
+**Key requirements:**
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| WST-001 | All 9 agents have `web_search` and `web_scrape` available as tools | High |
+| WST-002 | Research Specialist system prompt MUST mandate `web_search` for any time-sensitive topic (market data, model versions, pricing, news) | High |
+| WST-003 | Tools work identically under both Anthropic and Bedrock provider modes | High |
+| WST-004 | `FIRECRAWL_API_KEY` configured via `.env` (no UI configuration) | High |
+| WST-005 | Soft-fail on Firecrawl errors — agent run continues, error visible in tool result | High |
+| WST-006 | Search results truncated to ~3000 chars per item to control token usage | Medium |
+| WST-007 | Every Firecrawl call logged with request_id + agent_id + query + result size | Medium |
+| WST-008 | Existing "knowledge cutoff disclaimer" in `research_specialist.yaml` removed/replaced — no longer accurate once web search is live | Medium |
+
+**Future enhancements (deferred):**
+
+| ID | Enhancement | Priority |
+|----|-------------|----------|
+| FE-9 | `web_crawl` tool — recursively crawl an entire site (Firecrawl `/crawl`). Useful for "scrape this competitor's docs" | Medium |
+| FE-10 | `web_extract` tool — schema-based structured extraction (Firecrawl `/extract`). Useful for building comparison tables | Medium |
+| FE-11 | Per-request cost tracking — count Firecrawl credits used per request and surface in cost dashboard | Medium |
+| FE-12 | Search result caching — if two agents in the same workflow search for the same query, hit a cache | Low |
+| FE-13 | Frontend display of "sources used" — show the URLs the agent fetched in the Outputs tab of Story Board | High |
+| FE-14 | Hard call cap via env var — add an emergency brake if logs show runaway behavior | Low |
+
+### 6.6 Prompt Studio
+
+**Problem:** Users know what they want the AI to do but write loose, unstructured prompts that don't follow prompt engineering best practices. Results are inconsistent, verbose, and miss key techniques like role definition, structured output, and chain-of-thought hints.
+
+**Solution:** A dedicated page where users enter their requirements via structured fields and receive 3 professionally-engineered prompt variants — each using a different approach — that they can copy, select, and iteratively refine.
+
+**This feature is NOT part of the agent pipeline.** It's a stateless one-shot LLM call (using the existing Anthropic or Bedrock client based on a per-page provider toggle) that returns 3 variants in a single API call. It does not touch the orchestrator, workflow runner, story board, or research publisher.
+
+**Key workflow:**
+
+1. User navigates to `Prompt Studio` from the top nav
+2. Optionally loads a starting template (Code Reviewer, Research Analyst, Marketing Copywriter, SQL Explainer, Customer Support Agent, Technical Writer)
+3. Fills in structured inputs: use case, target audience, desired output, tone, constraints
+4. Optionally configures advanced options: target LLM, output format, few-shot, chain-of-thought, length, use case category
+5. Clicks **Generate 3 Variants** → backend calls Claude with a carefully-crafted meta-prompt, parses the JSON response, returns 3 variants
+6. Each variant displayed side-by-side with: approach label, copyable prompt text, "Techniques applied" collapsible, Copy button, Select button
+7. User picks a variant → optionally enters refinement feedback ("make it more concise", "add JSON schema output") and clicks **Refine** → new 3 variants generated
+8. All sessions and variants persisted in the DB; user can revisit via the **History** tab
+
+**Meta-prompt design:**
+
+The backend's meta-prompt instructs Claude to produce 3 DISTINCT variants using different approaches:
+- **Variant 1 (Structured XML):** heavy `<context>`, `<task>`, `<output_format>` tags — best for Claude
+- **Variant 2 (Conversational Markdown):** natural prose with headers — best for GPT
+- **Variant 3 (Concise Imperative):** terse, action-oriented, minimal overhead
+
+Each variant explicitly applies: role definition, task statement, output format, constraints, structured delimiters. Few-shot examples and chain-of-thought hints are added only when the user enables those options.
+
+Claude returns a strict JSON object `{"variants": [{"approach", "prompt", "techniques": [...]}, ...]}` that the backend parses into `PromptVariant` rows.
+
+**Data model:**
+
+```sql
+prompt_sessions: session_id, user_id, created_at, use_case, target_audience,
+                 desired_output, tone, constraints, options (JSON), provider,
+                 template_id, selected_variant_id
+
+prompt_variants: variant_id, session_id, iteration, variant_index, approach,
+                 prompt_text, techniques (JSON array), feedback_applied,
+                 generated_at
+```
+
+- `iteration = 0` → initial generation, `iteration >= 1` → refinements
+- `variant_index` ∈ {1, 2, 3} within each iteration
+- `selected_variant_id` records which variant the user picked (drives refinement context)
+
+**Key requirements:**
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| PS-001 | Structured input: use case (required), audience, desired output, tone, constraints | High |
+| PS-002 | Advanced options collapsible: target LLM, output format, few-shot, CoT, length, category | High |
+| PS-003 | Per-page provider toggle (Claude/Bedrock), defaults from localStorage | High |
+| PS-004 | 3 variant generation in ONE LLM call, returned as parsed JSON | High |
+| PS-005 | Each variant has: approach label, prompt text, techniques applied, copy button, select button | High |
+| PS-006 | Starting templates loaded from `config/prompt_templates.yaml` (6 defaults) | High |
+| PS-007 | Iterative refinement: feedback on selected variant generates 3 new variants in a new iteration | High |
+| PS-008 | History tab: list past sessions (paginated, 20/page), click to reload | High |
+| PS-009 | All logged-in users can access (no role restriction) | High |
+| PS-010 | Techniques applied shown as collapsible section under each variant | Medium |
+
+**Future enhancements (deferred):**
+
+| ID | Enhancement | Priority |
+|----|-------------|----------|
+| FE-15 | User-defined templates saved to DB | Medium |
+| FE-16 | Share prompt via public URL (read-only snapshot) | Low |
+| FE-17 | Side-by-side variant comparison with diff highlighting | Medium |
+| FE-18 | Token count estimation for each variant before copying | Medium |
+| FE-19 | "Try this prompt" button that sends it to a test chat interface | Medium |
+| FE-20 | Public prompt library — browse high-quality community prompts | Low |
+| FE-21 | Export as JSON/YAML for programmatic use in other tools | Low |
 
 ---
 

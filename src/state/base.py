@@ -3,15 +3,19 @@
 from abc import ABC, abstractmethod
 
 from src.models.base import (
+    AcceptanceCriterion,
     AgentTrace,
     Artifact,
     Deployment,
     Document,
     Metric,
     Notification,
+    PromptSession,
+    PromptVariant,
     Request,
     Story,
     Subtask,
+    TestCase,
     TokenUsage,
     User,
 )
@@ -68,6 +72,54 @@ class StateStore(ABC):
 
     @abstractmethod
     async def update_story(self, story: Story) -> None: ...
+
+    # ── Acceptance Criteria ───────────────────────
+
+    @abstractmethod
+    async def create_acceptance_criterion(self, ac: AcceptanceCriterion) -> str: ...
+
+    @abstractmethod
+    async def get_acceptance_criteria_for_story(self, story_id: str) -> list[AcceptanceCriterion]: ...
+
+    @abstractmethod
+    async def update_acceptance_criterion(self, ac: AcceptanceCriterion) -> None: ...
+
+    # ── Test Cases ────────────────────────────────
+
+    @abstractmethod
+    async def create_test_case(self, tc: TestCase) -> str: ...
+
+    @abstractmethod
+    async def get_test_cases_for_story(self, story_id: str) -> list[TestCase]: ...
+
+    @abstractmethod
+    async def update_test_case(self, tc: TestCase) -> None: ...
+
+    # ── Prompt Studio ─────────────────────────────
+
+    @abstractmethod
+    async def create_prompt_session(self, session: PromptSession) -> str: ...
+
+    @abstractmethod
+    async def get_prompt_session(self, session_id: str) -> PromptSession | None: ...
+
+    @abstractmethod
+    async def list_prompt_sessions_for_user(
+        self, user_id: str, limit: int = 20, offset: int = 0
+    ) -> list[PromptSession]: ...
+
+    @abstractmethod
+    async def update_prompt_session_selection(
+        self, session_id: str, selected_variant_id: str
+    ) -> None: ...
+
+    @abstractmethod
+    async def create_prompt_variant(self, variant: PromptVariant) -> str: ...
+
+    @abstractmethod
+    async def get_prompt_variants_for_session(
+        self, session_id: str
+    ) -> list[PromptVariant]: ...
 
     # ── Users ────────────────────────────────────
 

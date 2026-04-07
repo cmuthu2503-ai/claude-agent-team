@@ -6,6 +6,7 @@ import { LoginPage } from "./pages/Login"
 import { CommandCenterPage } from "./pages/CommandCenter"
 import { RequestDetailPage } from "./pages/RequestDetail"
 import { StoryBoardPage } from "./pages/StoryBoard"
+import { PromptStudioPage } from "./pages/PromptStudio"
 import { HistoryPage } from "./pages/History"
 import { ReleasesPage } from "./pages/Releases"
 import { TeamStatusPage } from "./pages/TeamStatus"
@@ -53,6 +54,7 @@ function App() {
                     <Route path="/" element={<CommandCenterPage />} />
                     <Route path="/request/:requestId" element={<RequestDetailPage />} />
                     <Route path="/stories/:requestId" element={<StoryBoardPage />} />
+                    <Route path="/prompts" element={<PromptStudioPage />} />
                     <Route path="/history" element={<HistoryPage />} />
                     <Route path="/releases" element={<ReleasesPage />} />
                     <Route path="/team" element={<TeamStatusPage />} />

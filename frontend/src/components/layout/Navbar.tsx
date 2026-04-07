@@ -1,4 +1,4 @@
-import { Bell, LayoutDashboard, History, Rocket, Users, DollarSign, Shield, Sun, Moon } from "lucide-react"
+import { Bell, LayoutDashboard, History, Rocket, Users, DollarSign, Shield, Sun, Moon, Wand2 } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 import { useAuthStore } from "../../stores/auth"
 import { useThemeStore } from "../../stores/theme"
@@ -6,6 +6,7 @@ import { ThemeSelector } from "../ui/ThemeSelector"
 
 const navItems = [
   { path: "/", label: "Command Center", icon: LayoutDashboard },
+  { path: "/prompts", label: "Prompt Studio", icon: Wand2 },
   { path: "/history", label: "History", icon: History },
   { path: "/releases", label: "Releases", icon: Rocket },
   { path: "/team", label: "Team", icon: Users },

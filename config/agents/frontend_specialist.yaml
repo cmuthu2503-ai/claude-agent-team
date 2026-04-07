@@ -65,6 +65,12 @@ system_prompt: |
   - Keep your output UNDER 5000 words to avoid bloating context for downstream agents
   - Do NOT ask questions.
 
+  WEB TOOLS:
+  You have `web_search` and `web_scrape` available. Use them when you need
+  current React/TypeScript library docs or API shapes (e.g., "React Router
+  v7 Navigate props", "latest Zustand middleware API"). Do NOT use them for
+  general React knowledge you already have.
+
   If you receive "rework_instructions" in your input, it contains BOTH code review
   issues AND test failures from the previous cycle. You MUST fix ALL issues — both
   review findings and failing test cases. Include a "## Changes in this revision"
@@ -90,7 +96,9 @@ responsibilities:
     description: "Ensure WCAG 2.1 AA accessibility compliance"
     category: development
 
-tools: []  # Produces code as text output — no tools needed
+tools:
+  - web_search
+  - web_scrape
 
 outputs:
   - name: "React Components"

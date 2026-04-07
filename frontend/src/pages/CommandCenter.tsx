@@ -29,6 +29,9 @@ export function CommandCenterPage() {
   const [selectedTeam, setSelectedTeam] = useState("engineering")
   const [taskType, setTaskType] = useState("feature_request")
   const [priority, setPriority] = useState("medium")
+  const [provider, setProvider] = useState<string>(() => {
+    return localStorage.getItem("llm_provider") || "anthropic"
+  })
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState("")
   const [attachCount, setAttachCount] = useState(0)
@@ -100,6 +103,7 @@ export function CommandCenterPage() {
       formData.append("description", content.text)
       formData.append("task_type", taskType)
       formData.append("priority", priority)
+      formData.append("provider", provider)
       for (const file of content.files) {
         formData.append("screenshots", file)
       }
@@ -264,6 +268,39 @@ export function CommandCenterPage() {
                   {p}
                 </button>
               ))}
+            </div>
+
+            {/* Model Provider Selector */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Model:</span>
+              <div style={{ display: "flex", borderRadius: "var(--radius)", overflow: "hidden", border: "1px solid var(--border)" }}>
+                {[
+                  { id: "anthropic", label: "Claude" },
+                  { id: "bedrock", label: "Amazon Bedrock" },
+                ].map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => {
+                      setProvider(opt.id)
+                      localStorage.setItem("llm_provider", opt.id)
+                    }}
+                    style={{
+                      padding: "5px 12px",
+                      fontSize: 12,
+                      fontWeight: 500,
+                      border: "none",
+                      cursor: "pointer",
+                      fontFamily: "var(--font)",
+                      background: provider === opt.id ? "var(--accent)" : "var(--bg-input)",
+                      color: provider === opt.id ? "#fff" : "var(--text-secondary)",
+                      borderRight: opt.id === "anthropic" ? "1px solid var(--border)" : "none",
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
             </div>
             {attachCount > 0 && (
               <span style={{ fontSize: 12, color: "var(--accent)" }}>

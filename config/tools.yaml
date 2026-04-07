@@ -95,6 +95,11 @@ tools:
       - backend_specialist
 
   web_search:
-    description: "Search the web for technical information and documentation"
+    description: "Search the web via Firecrawl. Returns top N results with scraped markdown content. Use for current news, pricing, versions, market data."
+    category: research
+    available_to: [all]
+
+  web_scrape:
+    description: "Deep-read a single URL via Firecrawl. Returns clean markdown of the full page. Use for known URLs (e.g., a vendor's docs or pricing page)."
     category: research
     available_to: [all]

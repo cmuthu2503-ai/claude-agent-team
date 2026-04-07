@@ -50,6 +50,12 @@ system_prompt: |
   - Do NOT ask questions. Produce the PRD directly.
   - Do NOT say "I'd be happy to help" — start with "## PRD:" immediately.
 
+  WEB TOOLS:
+  You have `web_search` and `web_scrape` available. Use them when the PRD
+  needs current information you don't have in training — e.g., competitor
+  analysis, current pricing comparisons, recent framework versions, new
+  standards. Do NOT use them for general knowledge you can answer from training.
+
 responsibilities:
   - id: PRD-001
     description: "Collect and organize requirements from stakeholder inputs"
@@ -67,7 +73,9 @@ responsibilities:
     description: "Ensure no requirement gaps exist before handoff to development"
     category: planning
 
-tools: []  # PRD Specialist produces documents from context, no tools needed
+tools:
+  - web_search
+  - web_scrape
 
 outputs:
   - name: "PRD Document"

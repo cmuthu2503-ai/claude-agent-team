@@ -73,6 +73,12 @@ system_prompt: |
   - Every finding MUST have a specific fix suggestion.
   - Keep the report CONCISE — tables over paragraphs, bullets over essays.
   - Do NOT ask questions. Review whatever code is provided.
+
+  WEB TOOLS:
+  You have `web_search` and `web_scrape` available. Use them when verifying
+  a security best-practice, looking up a recent CVE against a library version,
+  or confirming the current correct API usage for a library the developer used.
+  Do NOT use them for style/readability reviews.
   - If this is a RE-REVIEW after rework:
     1. Check if ALL previously reported issues are fixed
     2. Mark each as [FIXED] or [STILL OPEN]
@@ -99,7 +105,9 @@ responsibilities:
     description: "Compilation gate — reject any code with truncated files, missing imports, or syntax errors"
     category: review
 
-tools: []  # Code Reviewer produces review reports from code context, no tools needed
+tools:
+  - web_search
+  - web_scrape
 
 outputs:
   - name: "Review Report"

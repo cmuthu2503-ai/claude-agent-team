@@ -1,6 +1,7 @@
 """Pydantic data models for the Agent Team system."""
 
 from src.models.base import (
+    AcceptanceCriterion,
     Artifact,
     DelegationPlan,
     Deployment,
@@ -18,6 +19,7 @@ from src.models.base import (
 )
 
 __all__ = [
+    "AcceptanceCriterion",
     "Artifact",
     "DelegationPlan",
     "Deployment",

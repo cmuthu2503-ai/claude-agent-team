@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -88,6 +89,11 @@ class Request(BaseModel):
     completed_at: datetime | None = None
     estimated_cost_usd: float | None = None
     actual_cost_usd: float | None = None
+    provider: str = "anthropic"  # anthropic | bedrock — LLM provider for this request
+    # Artifacts produced by the workflow (set by publish/code_commit handlers)
+    published_files: list[str] = Field(default_factory=list)  # repo-relative paths
+    commit_sha: str | None = None  # short SHA of the publish commit
+    commit_url: str | None = None  # GitHub commit URL
 
 
 class Subtask(BaseModel):
@@ -146,6 +152,18 @@ class Story(BaseModel):
     assigned_agent: str | None = None
     coverage_pct: float | None = None
     github_issue_number: int | None = None
+
+
+class AcceptanceCriterion(BaseModel):
+    """A single acceptance criterion for a user story (Given/When/Then)."""
+
+    ac_id: str
+    story_id: str
+    criterion_text: str  # Full text of the criterion
+    given_clause: str = ""
+    when_clause: str = ""
+    then_clause: str = ""
+    is_met: bool = False
 
 
 class TestCase(BaseModel):
@@ -303,3 +321,42 @@ class Metric(BaseModel):
     metric_value: float
     labels: dict[str, str] = Field(default_factory=dict)
     recorded_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── Prompt Studio Models ─────────────────────────
+
+
+class PromptSession(BaseModel):
+    """A single Prompt Studio session — structured inputs + metadata."""
+
+    session_id: str
+    user_id: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    # Structured input fields
+    use_case: str  # required
+    target_audience: str = ""
+    desired_output: str = ""
+    tone: str = ""
+    constraints: str = ""
+    # Advanced options as a flexible dict (target_model, output_format, few_shot, cot, length, category)
+    options: dict[str, Any] = Field(default_factory=dict)
+    # LLM provider used
+    provider: str = "anthropic"  # anthropic | bedrock
+    # Starting template id (if any)
+    template_id: str | None = None
+    # Which variant the user selected (drives refinement context)
+    selected_variant_id: str | None = None
+
+
+class PromptVariant(BaseModel):
+    """A single generated prompt variant within a session."""
+
+    variant_id: str
+    session_id: str
+    iteration: int = 0  # 0 = initial generation, 1+ = refinements
+    variant_index: int = 1  # 1, 2, 3 within an iteration
+    approach: str = ""  # e.g. "Structured XML", "Conversational Markdown"
+    prompt_text: str
+    techniques: list[str] = Field(default_factory=list)
+    feedback_applied: str = ""  # Only for iterations > 0
+    generated_at: datetime = Field(default_factory=datetime.utcnow)

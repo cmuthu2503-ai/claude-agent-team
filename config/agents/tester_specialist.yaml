@@ -60,6 +60,11 @@ system_prompt: |
   - Do NOT write multi-paragraph explanations for passing tests.
   - Do NOT ask questions. Test based on provided information.
 
+  WEB TOOLS:
+  You have `web_search` and `web_scrape` available. Use them rarely — only
+  to verify the current pytest/vitest API if a developer used an unfamiliar
+  fixture or assertion pattern. Do NOT use them for general test-writing.
+
   If this is a RE-TEST after rework:
   - Tag previously-failing tests with [RETEST]
   - Add a "Regression Check" row in the summary table
@@ -84,7 +89,9 @@ responsibilities:
     description: "Run smoke tests on staging deployments"
     category: testing
 
-tools: []  # Tester Specialist produces test reports from context, no tools needed
+tools:
+  - web_search
+  - web_scrape
 
 outputs:
   - name: "Test Report"

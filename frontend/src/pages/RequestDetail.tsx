@@ -2,8 +2,37 @@ import { useState, useEffect } from "react"
 import { useParams, Link } from "react-router-dom"
 import { api } from "../lib/api"
 import { StatusBadge } from "../components/ui/StatusBadge"
-import { ArrowLeft, ChevronDown, ChevronRight, FileText, ExternalLink } from "lucide-react"
+import { ArrowLeft, ChevronDown, ChevronRight, FileText, ExternalLink, Github, FileType, Presentation, FileImage, Code } from "lucide-react"
 import { MarkdownRenderer } from "../components/ui/MarkdownRenderer"
+
+// Map filename extension → icon component
+function fileIcon(path: string) {
+  const ext = path.toLowerCase().split('.').pop() || ''
+  if (['md', 'markdown'].includes(ext)) return FileText
+  if (ext === 'pdf') return FileType
+  if (['pptx', 'ppt'].includes(ext)) return Presentation
+  if (['png', 'jpg', 'jpeg', 'svg', 'gif'].includes(ext)) return FileImage
+  if (['py', 'ts', 'tsx', 'js', 'jsx', 'java', 'go', 'rs'].includes(ext)) return Code
+  return FileText
+}
+
+// Friendly label for a published-file path: extract just the filename
+function fileLabel(path: string) {
+  return path.split('/').pop() || path
+}
+
+// Map doc_type → human-readable label
+const DOC_TYPE_LABELS: Record<string, string> = {
+  prd: "PRD Document",
+  user_stories: "User Stories",
+  backend_code: "Backend Code",
+  frontend_code: "Frontend Code",
+  code_review: "Code Review Report",
+  test_report: "Test Report",
+  deploy_report: "Deployment Report",
+  research_report: "Research Report",
+  content_artifact: "Content Artifact",
+}
 
 export function RequestDetailPage() {
   const { requestId } = useParams()
@@ -79,7 +108,104 @@ export function RequestDetailPage() {
         )}
       </div>
 
-      {/* Agent Pipeline with Outputs */}
+      {/* Artifacts Panel */}
+      {data.artifacts && (data.artifacts.documents?.length > 0 || data.artifacts.published_files?.length > 0) && (
+        <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 24 }}>
+          <h2 style={{ fontSize: 18, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 16px 0" }}>
+            Artifacts Produced
+          </h2>
+
+          {/* Files committed to GitHub */}
+          {data.artifacts.published_files?.length > 0 && (
+            <div style={{ marginBottom: data.artifacts.documents?.length > 0 ? 20 : 0 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <h3 style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.5, margin: 0 }}>
+                  Files Published ({data.artifacts.published_files.length})
+                </h3>
+                {data.artifacts.commit_url && (
+                  <a
+                    href={data.artifacts.commit_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 6,
+                      fontSize: 12, color: "var(--accent)", textDecoration: "none",
+                      padding: "4px 10px", borderRadius: "var(--radius)",
+                      background: "var(--accent-subtle)",
+                    }}
+                  >
+                    <Github size={13} />
+                    {data.artifacts.commit_sha || 'view commit'}
+                    <ExternalLink size={11} />
+                  </a>
+                )}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {data.artifacts.published_files.map((path: string) => {
+                  const Icon = fileIcon(path)
+                  return (
+                    <div
+                      key={path}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 8,
+                        padding: "8px 12px", borderRadius: "var(--radius)",
+                        background: "var(--bg-input)", border: "1px solid var(--border)",
+                        fontSize: 13,
+                      }}
+                    >
+                      <Icon size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
+                      <span style={{ color: "var(--text-primary)", fontFamily: "var(--font-mono)" }}>
+                        {fileLabel(path)}
+                      </span>
+                      <span style={{ color: "var(--text-muted)", fontSize: 11, marginLeft: "auto", fontFamily: "var(--font-mono)" }}>
+                        {path}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Documents produced by agents */}
+          {data.artifacts.documents?.length > 0 && (
+            <div>
+              <h3 style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.5, margin: "0 0 10px 0" }}>
+                Documents ({data.artifacts.documents.length})
+              </h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {data.artifacts.documents.map((doc: any) => (
+                  <div
+                    key={doc.document_id}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      padding: "8px 12px", borderRadius: "var(--radius)",
+                      background: "var(--bg-input)", border: "1px solid var(--border)",
+                      fontSize: 13,
+                    }}
+                  >
+                    <FileText size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
+                    <span style={{ color: "var(--text-primary)", fontWeight: 500 }}>
+                      {DOC_TYPE_LABELS[doc.doc_type] || doc.doc_type}
+                    </span>
+                    <span style={{
+                      fontSize: 10, padding: "2px 6px", borderRadius: "var(--radius)",
+                      background: "var(--accent-subtle)", color: "var(--accent)",
+                    }}>
+                      {doc.agent_id?.replace(/_/g, " ")}
+                    </span>
+                    <span style={{ color: "var(--text-muted)", fontSize: 11, marginLeft: "auto", fontFamily: "var(--font-mono)" }}>
+                      v{doc.version}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Agent Pipeline */}
       {data.subtasks?.length > 0 && (
         <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 24 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
@@ -162,18 +288,32 @@ export function RequestDetailPage() {
                     )}
                   </div>
 
-                  {/* Expanded Output */}
+                  {/* Expanded Output — Option B: collapsible "View raw output" */}
                   {isExpanded && hasOutput && (
                     <div style={{
                       margin: "4px 0 8px 48px",
-                      padding: 16,
+                      padding: "8px 12px",
                       background: "var(--bg-input)",
                       border: "1px solid var(--border)",
                       borderRadius: "var(--radius)",
-                      maxHeight: 600,
-                      overflowY: "auto",
+                      fontSize: 12,
                     }}>
-                      <MarkdownRenderer content={s.output_text} />
+                      <div style={{
+                        display: "flex", alignItems: "center", justifyContent: "space-between",
+                        color: "var(--text-muted)", marginBottom: 6,
+                      }}>
+                        <span>Raw agent output ({Math.round(s.output_text.length / 1000)} KB)</span>
+                        <span style={{ fontSize: 10, fontStyle: "italic" }}>
+                          (Option B: shown on expand for debugging)
+                        </span>
+                      </div>
+                      <div style={{
+                        maxHeight: 500, overflowY: "auto",
+                        padding: 12, background: "var(--bg-card)",
+                        border: "1px solid var(--border)", borderRadius: "var(--radius)",
+                      }}>
+                        <MarkdownRenderer content={s.output_text} />
+                      </div>
                     </div>
                   )}
 

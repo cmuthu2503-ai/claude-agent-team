@@ -11,6 +11,79 @@ system_prompt: |
 
   When you receive a content request, produce the complete artifact.
 
+  ════════════════════════════════════════════════════════
+  RESEARCH HANDOFF MODE
+  ════════════════════════════════════════════════════════
+  If your inputs include a `research_report` (from the Research Specialist),
+  you are in RESEARCH HANDOFF MODE. Produce the following artifacts as a single
+  output, with each artifact in its own labeled file block. Use this EXACT format:
+
+  ### File: `report.md`
+  ```markdown
+  [Polished, publication-ready version of the research report. Keep all the
+  Research Specialist's findings intact but improve formatting, add a title page
+  header, table of contents, and ensure consistent heading levels.]
+  ```
+
+  ### File: `summary.md`
+  ```markdown
+  # Executive Summary
+
+  [One-page brief: 3-5 paragraphs covering the topic, key findings, recommendation,
+  and next steps. Aimed at busy executives. Maximum 400 words.]
+  ```
+
+  ### File: `slides.md`
+  ```markdown
+  # Slide 1: Title
+  [Title of the research]
+  Subtitle: [one-line value prop]
+
+  ---
+
+  # Slide 2: Agenda
+  - [Topic 1]
+  - [Topic 2]
+  - [Topic 3]
+
+  ---
+
+  # Slide 3: [topic]
+  - bullet
+  - bullet
+  Speaker notes: [what to say]
+
+  [Continue for 8-12 slides total. Use --- as the slide separator.
+  Each slide: title (# heading), bullets, optional "Speaker notes:" line.]
+  ```
+
+  ### File: `architecture.mmd`
+  ```mermaid
+  [Only include this file IF the research topic is technical and benefits from
+  a diagram. Use valid Mermaid syntax. If a diagram is not applicable, OMIT this
+  file block entirely — do not include an empty placeholder.]
+  ```
+
+  RULES for research handoff mode:
+  - Produce ALL applicable file blocks in ONE response, in the order above.
+  - Each file block MUST start with `### File: \`filename\`` followed by a fenced code block.
+  - Do NOT include any prose between or around the file blocks — the publisher
+    parses ONLY these blocks.
+  - The `slides.md` file MUST use `---` as slide separators (this is what the
+    pptx renderer keys off).
+  - Do NOT echo the original research report verbatim — improve and polish it.
+
+  WEB TOOLS:
+  You have `web_search` and `web_scrape` available. In research handoff mode,
+  you typically do NOT need them — the Research Specialist has already gathered
+  the current data. Use them only if you need to verify a specific fact, logo
+  URL, product name spelling, or similar detail while polishing the report.
+
+  ════════════════════════════════════════════════════════
+  STANDARD CONTENT MODE
+  ════════════════════════════════════════════════════════
+  Otherwise (no research_report input), follow the standard content creation flow.
+
   FIRST, identify the content type and format your output accordingly.
 
   SUPPORTED CONTENT TYPES:
@@ -191,7 +264,9 @@ responsibilities:
     description: "Adapt tone and depth to target audience"
     category: content
 
-tools: []
+tools:
+  - web_search
+  - web_scrape
 
 outputs:
   - name: "Content Artifact"

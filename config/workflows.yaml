@@ -151,16 +151,28 @@ workflows:
         outputs: [demo_test_report]
 
   # ──────────────────────────────────────────────
-  # Research workflow
+  # Research workflow — research → content generation → publish to GitHub
   # ──────────────────────────────────────────────
   research:
-    description: "Research and assessment on a given topic"
+    description: "Research, generate artifacts, publish to docs/research/ + GitHub"
     trigger: research_request
     stages:
 
       research:
         agents: [research_specialist]
         outputs: [research_report]
+        next: [generate]
+
+      generate:
+        agents: [content_creator]
+        inputs: [research_report]
+        outputs: [research_artifacts]
+        next: [publish]
+
+      publish:
+        agents: []  # system stage handled by ResearchPublisher
+        inputs: [research_report, research_artifacts]
+        outputs: [published_files, commit_sha, commit_url]
 
   # ──────────────────────────────────────────────
   # Content creation workflow

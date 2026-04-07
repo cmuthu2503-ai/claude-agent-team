@@ -35,9 +35,12 @@ async def submit_request(
     description: str = Form(...),
     task_type: str = Form("feature_request"),
     priority: str = Form("medium"),
+    provider: str = Form("anthropic"),
     screenshots: list[UploadFile] = File(default=[]),
     user: dict = Depends(require_role("developer", "admin")),
 ):
+    if provider not in ("anthropic", "bedrock"):
+        raise HTTPException(400, f"Invalid provider '{provider}'. Must be 'anthropic' or 'bedrock'.")
     # Save uploaded screenshots
     saved_files: list[dict[str, str]] = []
     for file in screenshots:
@@ -74,12 +77,14 @@ async def submit_request(
         task_type=task_type,
         priority=priority,
         created_by=user.get("username", ""),
+        provider=provider,
     )
     return _envelope({
         "request_id": result.request_id,
         "status": result.status,
         "description": result.description,
         "priority": result.priority,
+        "provider": result.provider,
         "created_at": result.created_at.isoformat(),
         "attachments": saved_files,
     })
@@ -119,6 +124,7 @@ async def list_requests(
                 "created_by": r.created_by,
                 "created_at": r.created_at.isoformat(),
                 "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+                "provider": r.provider,
             }
             for r in requests
         ],
@@ -139,7 +145,44 @@ async def get_request_detail(
     subtasks = await state.get_subtasks_for_request(request_id)
     stories = await state.get_stories_for_request(request_id)
     token_usage = await state.get_token_usage_for_request(request_id)
+    documents = await state.get_documents_for_request(request_id)
     total_cost = sum(u.cost_usd for u in token_usage)
+
+    # Build stories with nested acceptance criteria + test cases (async)
+    stories_data = []
+    for st in stories:
+        acs = await state.get_acceptance_criteria_for_story(st.story_id)
+        tcs = await state.get_test_cases_for_story(st.story_id)
+        stories_data.append({
+            "story_id": st.story_id,
+            "title": st.title,
+            "description": st.description or "",
+            "status": st.status,
+            "priority": st.priority,
+            "assigned_agent": st.assigned_agent,
+            "coverage_pct": st.coverage_pct,
+            "github_issue_number": st.github_issue_number,
+            "acceptance_criteria": [
+                {
+                    "ac_id": ac.ac_id,
+                    "criterion_text": ac.criterion_text,
+                    "given": ac.given_clause,
+                    "when": ac.when_clause,
+                    "then": ac.then_clause,
+                    "is_met": ac.is_met,
+                }
+                for ac in acs
+            ],
+            "test_cases": [
+                {
+                    "test_id": tc.test_id,
+                    "name": tc.name,
+                    "status": tc.status,
+                    "last_run_at": tc.last_run_at.isoformat() if tc.last_run_at else None,
+                }
+                for tc in tcs
+            ],
+        })
 
     return _envelope({
         "request_id": req.request_id,
@@ -147,6 +190,7 @@ async def get_request_detail(
         "task_type": req.task_type,
         "priority": req.priority,
         "status": req.status,
+        "provider": req.provider,
         "created_at": req.created_at.isoformat(),
         "completed_at": req.completed_at.isoformat() if req.completed_at else None,
         "subtasks": [
@@ -163,20 +207,24 @@ async def get_request_detail(
             }
             for s in subtasks
         ],
-        "stories": [
-            {
-                "story_id": st.story_id,
-                "title": st.title,
-                "description": st.description or "",
-                "status": st.status,
-                "priority": st.priority,
-                "assigned_agent": st.assigned_agent,
-                "coverage_pct": st.coverage_pct,
-                "github_issue_number": st.github_issue_number,
-            }
-            for st in stories
-        ],
+        "stories": stories_data,
         "total_cost": {"cost_usd": round(total_cost, 4)},
+        "artifacts": {
+            "documents": [
+                {
+                    "document_id": d.document_id,
+                    "doc_type": d.doc_type,
+                    "title": d.title,
+                    "agent_id": d.agent_id,
+                    "version": d.version,
+                    "created_at": d.created_at.isoformat() if d.created_at else None,
+                }
+                for d in documents
+            ],
+            "published_files": req.published_files or [],
+            "commit_sha": req.commit_sha,
+            "commit_url": req.commit_url,
+        },
     })
 
 
@@ -199,8 +247,9 @@ async def retry_request(
         task_type=req.task_type,
         priority=req.priority,
         created_by=user.get("username", ""),
+        provider=req.provider,
     )
-    return _envelope({"request_id": result.request_id, "status": result.status})
+    return _envelope({"request_id": result.request_id, "status": result.status, "provider": result.provider})
 
 
 @router.get("/{request_id}/stories")
@@ -211,8 +260,11 @@ async def get_stories(
 ):
     state = request.app.state.state_store
     stories = await state.get_stories_for_request(request_id)
-    return _envelope([
-        {
+    stories_data = []
+    for st in stories:
+        acs = await state.get_acceptance_criteria_for_story(st.story_id)
+        tcs = await state.get_test_cases_for_story(st.story_id)
+        stories_data.append({
             "story_id": st.story_id,
             "title": st.title,
             "description": st.description,
@@ -221,6 +273,25 @@ async def get_stories(
             "assigned_agent": st.assigned_agent,
             "coverage_pct": st.coverage_pct,
             "github_issue_number": st.github_issue_number,
-        }
-        for st in stories
-    ])
+            "acceptance_criteria": [
+                {
+                    "ac_id": ac.ac_id,
+                    "criterion_text": ac.criterion_text,
+                    "given": ac.given_clause,
+                    "when": ac.when_clause,
+                    "then": ac.then_clause,
+                    "is_met": ac.is_met,
+                }
+                for ac in acs
+            ],
+            "test_cases": [
+                {
+                    "test_id": tc.test_id,
+                    "name": tc.name,
+                    "status": tc.status,
+                    "last_run_at": tc.last_run_at.isoformat() if tc.last_run_at else None,
+                }
+                for tc in tcs
+            ],
+        })
+    return _envelope(stories_data)

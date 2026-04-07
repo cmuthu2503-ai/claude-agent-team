@@ -119,7 +119,7 @@ export function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               style={inputStyle}
-              placeholder="admin123"
+              placeholder="demo123"
               onKeyDown={(e) => e.key === "Enter" && handleClick()}
             />
           </div>
@@ -154,7 +154,7 @@ export function LoginPage() {
             color: "var(--text-muted)",
           }}
         >
-          Default: admin / admin123
+          Default: admin / demo123
         </p>
       </div>
     </div>

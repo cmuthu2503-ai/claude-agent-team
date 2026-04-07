@@ -16,6 +16,7 @@ services:
       - ./config:/app/config
       - ./tests:/app/tests
       - ./demo:/app/demo
+      - ./docs:/app/docs
       - agent-team-data:/app/data
       - agent-team-reports:/app/reports
       - agent-team-backups:/app/backups

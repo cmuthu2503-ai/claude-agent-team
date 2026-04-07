@@ -1,0 +1,158 @@
+# Prompt Studio starting templates
+# Each template pre-fills the structured input fields so users can tweak and generate.
+# Add new templates here — no code changes needed.
+
+templates:
+
+  code_reviewer:
+    name: "Code Reviewer"
+    description: "Reviews a code snippet for bugs, style, security, and maintainability"
+    category: coding
+    use_case: |
+      Review a code snippet (language: Python, TypeScript, Go, etc.) and identify:
+      - Bugs and logic errors
+      - Security vulnerabilities (SQL injection, XSS, hardcoded secrets, etc.)
+      - Style issues (naming, formatting, idioms)
+      - Maintainability concerns (complexity, duplication, missing tests)
+      - Performance pitfalls
+    target_audience: "Senior software engineer working on the codebase"
+    desired_output: |
+      A structured code review report with severity tags (Critical / High / Medium / Low),
+      specific line references where issues occur, and concrete fix suggestions.
+    tone: "Professional, direct, constructive"
+    constraints: |
+      - Focus on objective issues, not personal style preferences
+      - Every finding must include a specific fix suggestion
+      - Do not invent issues that are not clearly supported by the code
+      - Keep feedback actionable — one paragraph per finding maximum
+
+  research_analyst:
+    name: "Research Analyst"
+    description: "Conducts structured research and produces evidence-based reports"
+    category: research
+    use_case: |
+      Research a topic and produce a structured analytical report covering:
+      - Executive summary (the "so what?")
+      - Key findings with confidence levels
+      - Comparative analysis of options
+      - Risk factors and assumptions
+      - Clear recommendation with reasoning
+    target_audience: "Executive decision-maker who needs the bottom line fast"
+    desired_output: |
+      A markdown report with:
+      1. Executive summary (3-5 sentences)
+      2. Key findings table (finding | reasoning | confidence)
+      3. Pros/cons analysis
+      4. Weighted comparison matrix (if options exist)
+      5. Recommendation with justification
+      6. Next steps
+    tone: "Analytical, objective, data-driven"
+    constraints: |
+      - Keep under 1500 words total
+      - Always state confidence levels (High / Medium / Low) for findings
+      - Include a "When NOT to follow this recommendation" counterpoint
+      - Cite sources where possible; acknowledge uncertainty otherwise
+
+  marketing_copywriter:
+    name: "Marketing Copywriter"
+    description: "Writes conversion-focused marketing copy for SaaS and digital products"
+    category: writing
+    use_case: |
+      Write marketing copy for a product, feature, or campaign. Focus on:
+      - Clear value proposition (what, for whom, why better)
+      - Benefits over features (outcomes, not attributes)
+      - Emotional hook that resonates with target audience
+      - Strong call to action
+    target_audience: "Product marketing manager at a B2B SaaS company"
+    desired_output: |
+      Three variants of the copy:
+      1. Short (hero headline + subhead, ~30 words)
+      2. Medium (landing page section, ~150 words)
+      3. Long (email body or blog intro, ~400 words)
+      Each clearly labeled.
+    tone: "Confident, benefit-oriented, not salesy or hypey"
+    constraints: |
+      - No buzzwords (no "revolutionary", "game-changing", "synergy")
+      - Use active voice and second person ("you", "your")
+      - Every claim must be grounded in a concrete benefit
+      - Avoid superlatives unless they are verifiable
+
+  sql_query_explainer:
+    name: "SQL Query Explainer"
+    description: "Explains complex SQL queries in plain English with optimization tips"
+    category: coding
+    use_case: |
+      Take a SQL query as input and produce:
+      - Plain-English explanation of what the query does
+      - Line-by-line breakdown of key clauses (joins, subqueries, aggregations)
+      - Performance analysis (which indexes would help, potential bottlenecks)
+      - Any correctness concerns (off-by-one, NULL handling, edge cases)
+      - Suggested optimizations
+    target_audience: "Junior developer who is learning SQL and needs to understand a senior's query"
+    desired_output: |
+      A structured explanation with:
+      1. One-sentence summary
+      2. Line-by-line walkthrough
+      3. Performance notes
+      4. Optimization suggestions (with rewritten query if applicable)
+    tone: "Patient, educational, encouraging"
+    constraints: |
+      - Assume the reader knows basic SQL (SELECT, WHERE, JOIN) but not advanced features
+      - Explain CTEs, window functions, and subqueries from first principles
+      - Do not be condescending
+      - Always show the optimized version as a complete, runnable query
+
+  customer_support_agent:
+    name: "Customer Support Agent"
+    description: "Handles customer inquiries professionally with empathy and precision"
+    category: customer_service
+    use_case: |
+      Respond to a customer support inquiry. The response should:
+      - Acknowledge the customer's issue and express empathy
+      - Provide a clear, accurate answer or next step
+      - Avoid jargon unless the customer used it first
+      - Set clear expectations for follow-up if the issue requires it
+    target_audience: "SaaS customer (mix of technical and non-technical users)"
+    desired_output: |
+      A complete email or chat response including:
+      - Personal greeting (use the customer's name if provided)
+      - Acknowledgment of the issue
+      - Answer or solution
+      - Clear next steps
+      - Professional sign-off
+    tone: "Warm, professional, solution-oriented"
+    constraints: |
+      - Maximum 200 words — customers don't read long emails
+      - Never blame the customer for the issue
+      - If you don't know the answer, say so honestly and commit to finding out
+      - Avoid corporate-speak ("We apologize for any inconvenience this may have caused")
+
+  technical_writer:
+    name: "Technical Writer"
+    description: "Creates clear, structured technical documentation"
+    category: writing
+    use_case: |
+      Create technical documentation for software, APIs, or developer tools. Cover:
+      - What the thing does and why it exists
+      - How to install / set up
+      - How to use it (with working code examples)
+      - Common use cases and patterns
+      - Troubleshooting for common errors
+      - API reference (if applicable)
+    target_audience: "Developer who is new to this specific tool but has general programming experience"
+    desired_output: |
+      Markdown documentation with:
+      1. Overview (what + why)
+      2. Installation
+      3. Quick start (minimal working example)
+      4. Detailed usage
+      5. API reference (if applicable)
+      6. Troubleshooting
+      7. Links to further reading
+    tone: "Clear, precise, authoritative but not condescending"
+    constraints: |
+      - Every code example must be complete and runnable (no "..." placeholders)
+      - Use active voice
+      - Front-load the important information ("the thing you'll use most")
+      - Avoid filler phrases ("It should be noted that", "As mentioned above")
+      - Keep sentences short and direct

@@ -26,9 +26,14 @@ class AgentExecutor(Protocol):
 class WorkflowRunner:
     """Executes a workflow with a combined quality gate after Review + Testing."""
 
-    def __init__(self, executor: AgentExecutor, code_commit_handler: Any = None) -> None:
+    def __init__(
+        self, executor: AgentExecutor,
+        code_commit_handler: Any = None,
+        publish_handler: Any = None,
+    ) -> None:
         self.executor = executor
         self._code_commit_handler = code_commit_handler
+        self._publish_handler = publish_handler
         self._rework_count: dict[str, int] = {}
 
     async def run(
@@ -61,6 +66,13 @@ class WorkflowRunner:
                     else:
                         result = {}
                         logger.warning("no_code_commit_handler", request_id=request_id)
+                # publish is a system stage for the research workflow — writes to docs/ + GitHub
+                elif stage_id == "publish":
+                    if self._publish_handler:
+                        result = await self._publish_handler(request_id, artifacts)
+                    else:
+                        result = {}
+                        logger.warning("no_publish_handler", request_id=request_id)
                 elif isinstance(stage, ParallelStage):
                     result = await self._run_parallel_stage(stage, request_id, artifacts)
                 else:

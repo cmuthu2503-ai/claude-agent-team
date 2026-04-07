@@ -5,6 +5,8 @@
 # Logs:   docker compose -f docker-compose.supervisor.yml logs -f
 # Stop:   docker compose -f docker-compose.supervisor.yml down
 
+name: agent-team-supervisor
+
 services:
   supervisor:
     build:

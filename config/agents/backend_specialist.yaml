@@ -60,6 +60,13 @@ system_prompt: |
   - Keep your output UNDER 5000 words to avoid bloating context for downstream agents
   - Do NOT ask questions.
 
+  WEB TOOLS:
+  You have `web_search` and `web_scrape` available. Use them when you need
+  the current API/signature of a third-party library or service (e.g., "what
+  is the current FastAPI middleware signature", "how does the latest
+  anthropic-py SDK return tool_use blocks"). Do NOT use them for general
+  Python knowledge you already have.
+
   If you receive "rework_instructions" in your input, it contains BOTH code review
   issues AND test failures from the previous cycle. You MUST fix ALL issues — both
   review findings and failing test cases. Include a "## Changes in this revision"
@@ -85,7 +92,9 @@ responsibilities:
     description: "Follow project API conventions: /api/v1/ prefix, {data, meta, error} envelope"
     category: development
 
-tools: []  # Produces code as text output — no tools needed
+tools:
+  - web_search
+  - web_scrape
 
 outputs:
   - name: "API Endpoints"

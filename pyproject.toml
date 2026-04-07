@@ -10,7 +10,7 @@ authors = [
 ]
 
 dependencies = [
-    "anthropic>=0.52.0",
+    "anthropic[bedrock]>=0.52.0",
     "pydantic>=2.7.0",
     "pyyaml>=6.0.1",
     "aiosqlite>=0.20.0",
@@ -24,6 +24,11 @@ dependencies = [
     "slowapi>=0.1.9",
     "alembic>=1.13.0",
     "python-multipart>=0.0.9",
+    "python-pptx>=1.0.0",
+    "weasyprint>=62.3",
+    "markdown>=3.6",
+    "python-slugify>=8.0.4",
+    "firecrawl-py>=2.0.0",
 ]
 
 [project.optional-dependencies]

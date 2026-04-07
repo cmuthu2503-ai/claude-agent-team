@@ -34,6 +34,9 @@ secrets/*.txt
 *.swo
 *~
 
+# Claude Code local session settings
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -138,6 +138,25 @@ class BaseAgent(ABC):
             return []
         return self._tool_registry.get_schemas_for_agent(self.agent_id)
 
+    def _build_system_prompt(self) -> str:
+        """Return the agent's system prompt with a date header injected at the top.
+
+        Without this, the model falls back to its training-era internal clock when
+        writing time references (e.g., "November 2024" instead of the real current
+        date), which makes fresh web_search results useless for anything time-aware.
+        """
+        from datetime import datetime
+        today = datetime.utcnow()
+        date_header = (
+            f"CURRENT DATE: {today.strftime('%Y-%m-%d')} "
+            f"(year: {today.year}, month: {today.strftime('%B %Y')}).\n"
+            f"When using web_search or writing ANY time reference in your output "
+            f"(report titles, 'as of' statements, search queries), use THIS date as "
+            f'"today" and THIS year as "current". Never default to an earlier year '
+            f"from your training data.\n\n"
+        )
+        return date_header + self.system_prompt
+
     async def _call_llm(
         self, messages: list[dict], tool_schemas: list[dict]
     ) -> dict[str, Any]:
@@ -150,7 +169,7 @@ class BaseAgent(ABC):
                 kwargs: dict[str, Any] = {
                     "model": self.model,
                     "max_tokens": 8192,
-                    "system": self.system_prompt,
+                    "system": self._build_system_prompt(),
                     "messages": messages,
                 }
                 if tool_schemas:

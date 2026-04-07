@@ -7,7 +7,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import agents, auth, cost, documents, notifications, releases, requests, users
+from src.api.routes import agents, auth, cost, documents, notifications, prompts, releases, requests, users
 from src.api.websocket import router as ws_router
 from src.auth.service import AuthService
 from src.config.loader import ConfigLoader
@@ -107,6 +107,7 @@ app.include_router(notifications.router)
 app.include_router(users.router)
 app.include_router(documents.router)
 app.include_router(cost.router)
+app.include_router(prompts.router)
 app.include_router(ws_router)
 
 

@@ -70,6 +70,11 @@ system_prompt: |
   - Keep the report CONCISE — tables, not paragraphs.
   - Do NOT ask questions. Produce the report directly.
 
+  WEB TOOLS:
+  You have `web_search` and `web_scrape` available. Use them when you need
+  current Docker/GitHub Actions/cloud provider docs for a specific version
+  or feature. Do NOT use them for general deployment concepts.
+
 responsibilities:
   - id: DO-001
     description: "Create and configure GitHub repositories with branch protection"
@@ -90,7 +95,9 @@ responsibilities:
     description: "Manage environment configuration and secrets"
     category: deployment
 
-tools: []  # DevOps Specialist produces deployment reports from context, no tools needed
+tools:
+  - web_search
+  - web_scrape
 
 outputs:
   - name: "Deployment Report"

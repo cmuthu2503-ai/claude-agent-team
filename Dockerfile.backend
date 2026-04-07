@@ -8,6 +8,8 @@ WORKDIR /app
 # System deps for bcrypt and cryptography
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libffi-dev \
+    libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 \
+    fonts-dejavu \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./
@@ -32,6 +34,8 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libffi-dev \
+    libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 \
+    fonts-dejavu \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user

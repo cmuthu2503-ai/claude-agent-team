@@ -356,10 +356,10 @@ Reference mockup: `docs/mockups/story-board-view.html`
 
 | ID | Task | Description | Effort | Depends On | Status |
 |----|------|-------------|--------|-----------|--------|
-| SBD-01 | Parse acceptance criteria | Extract Given/When/Then ACs from User Story Author output, store as structured JSON per story | M | — | `[ ]` |
-| SBD-02 | Parse test cases and link to stories | Extract TC-XXX with "Traces To: US-XXX AC-X" from Tester output, store in `test_cases` table with story_id link | L | — | `[ ]` |
-| SBD-03 | Extract coverage per story | Parse coverage % from Tester output per story, update `stories.coverage_pct` | S | SBD-02 | `[ ]` |
-| SBD-04 | API: story detail with ACs and test cases | `GET /api/v1/requests/:id/stories` returns stories with nested `acceptance_criteria[]` and `test_cases[]` | M | SBD-01, SBD-02 | `[ ]` |
+| SBD-01 | Parse acceptance criteria | Extract Given/When/Then ACs from User Story Author output, store as structured JSON per story | M | — | `[x]` |
+| SBD-02 | Parse test cases and link to stories | Extract TC-XXX with "Traces To: US-XXX AC-X" from Tester output, store in `test_cases` table with story_id link | L | — | `[x]` |
+| SBD-03 | Extract coverage per story | Parse coverage % from Tester output per story, update `stories.coverage_pct` | S | SBD-02 | `[x]` |
+| SBD-04 | API: story detail with ACs and test cases | `GET /api/v1/requests/:id/stories` returns stories with nested `acceptance_criteria[]` and `test_cases[]` | M | SBD-01, SBD-02 | `[x]` |
 
 ### Phase 2: Frontend (No Data Dependencies)
 
@@ -386,19 +386,183 @@ Reference mockup: `docs/mockups/story-board-view.html`
 
 | ID | Task | Description | Effort | Depends On | Status |
 |----|------|-------------|--------|-----------|--------|
-| SBD-16 | Wire AC parsing into orchestrator | After User Story Author completes, parse ACs and save per story | M | SBD-01 | `[ ]` |
-| SBD-17 | Wire test case linking into orchestrator | After Tester completes, parse TCs and link to stories | M | SBD-02 | `[ ]` |
+| SBD-16 | Wire AC parsing into orchestrator | After User Story Author completes, parse ACs and save per story | M | SBD-01 | `[x]` |
+| SBD-17 | Wire test case linking into orchestrator | After Tester completes, parse TCs and link to stories | M | SBD-02 | `[x]` |
 | SBD-18 | End-to-end test | Submit request → stories with ACs → tests linked → board renders with full data | M | All above | `[ ]` |
 
 ### Progress Summary
 
 | Phase | Tasks | Done | In Progress | Not Started |
 |-------|-------|------|-------------|-------------|
-| Phase 1: Backend | 4 | 0 | 0 | 4 |
+| Phase 1: Backend | 4 | 4 | 0 | 0 |
 | Phase 2: Frontend (no deps) | 6 | 0 | 0 | 6 |
 | Phase 3: Frontend (data) | 5 | 0 | 0 | 5 |
-| Phase 4: Integration | 3 | 0 | 0 | 3 |
-| **Total** | **18** | **0** | **0** | **18** |
+| Phase 4: Integration | 3 | 2 | 0 | 1 |
+| **Total** | **18** | **6** | **0** | **12** |
+
+---
+
+## Research Publishing Pipeline — Detailed Task Breakdown
+
+When a `research_request` is submitted, the system runs research → content generation → publish to `docs/research/REQ-XXX-<slug>/` and atomically commits to GitHub via the Trees API.
+
+Reference design: PRD §6.4 "Research Publishing Pipeline"
+
+### Phase 1: Backend
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| RPP-01 | Add `python-pptx`, `weasyprint`, `markdown`, `python-slugify` to `pyproject.toml` | Plus weasyprint system deps (libpango, libcairo2, fonts-dejavu) in `Dockerfile.backend` | S | — | `[x]` |
+| RPP-02 | Mount `./docs:/app/docs` in `docker-compose.yml` | So the publisher can write artifacts to the host filesystem | S | — | `[x]` |
+| RPP-03 | Add `GITHUB_TOKEN`, `GITHUB_REPO`, `GITHUB_BRANCH` to `.env` / `.env.example` | PAT scoped to `contents:write` for the target repo | S | — | `[x]` |
+| RPP-04 | Extend `research` workflow in `workflows.yaml` to 3 stages | research → generate → publish; publish is `agents: []` (system stage) | S | RPP-01 | `[x]` |
+| RPP-05 | Add "research handoff mode" branch to `content_creator` system prompt | When input contains `research_report`, produce `### File: <name>` blocks for report.md, summary.md, slides.md, architecture.mmd | M | RPP-04 | `[x]` |
+| RPP-06 | Build `src/core/research_publisher.py` | Parses file blocks, writes to `docs/research/REQ-<id>-<slug>/`, renders PDF + PPTX, publishes via GitHub Trees API | L | RPP-05 | `[x]` |
+| RPP-07 | Wire `publish` system stage into `WorkflowRunner` | Mirror the existing `code_commit` system-stage handling pattern | S | RPP-06 | `[x]` |
+| RPP-08 | Inject `ResearchPublisher` into `Orchestrator` | Add `_handle_publish` callback, register with `WorkflowRunner` constructor | S | RPP-07 | `[x]` |
+| RPP-09 | End-to-end test: submit `research_request`, verify local files + GitHub commit | Submit via Command Center, check `docs/research/REQ-XXX-<slug>/` exists, check GitHub repo has the new commit | M | All above | `[ ]` |
+| RPP-12 | **FE-2 fix** — Extract `src/core/github_publisher.py` shared module | `GitHubPublisher.commit_files({path: bytes\|str}, msg)` returns `{sha, short_sha, url, parent_sha}`. Used by both `ResearchPublisher` and `CodeWriter`. No git CLI required in container. | M | RPP-06 | `[x]` |
+| RPP-13 | **FE-2 fix** — Refactor `CodeWriter` to use `GitHubPublisher` | Remove `_git_head_sha` and `_git_commit_and_push` (git CLI calls). Restructure `_parse_and_write_files` to also collect file content. Use `GitHubPublisher.commit_files()` for the publish step. Get `rollback_sha` from the returned `parent_sha`. Compile/test steps unchanged (ruff/tsc/pytest binaries are in the container). | M | RPP-12 | `[x]` |
+
+### Phase 2: Frontend (Future)
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| RPP-10 | "Published Artifacts" tab on Story Board for research requests | Show clickable links to each file in the GitHub repo, plus the commit URL | M | RPP-09 | `[ ]` |
+| RPP-11 | Surface `research_publish.completed` event in Command Center activity feed | Display commit SHA + link when publishing completes | S | RPP-09 | `[ ]` |
+
+### Future Enhancements
+
+These are tracked here so they don't get lost. **Not in current scope.**
+
+| ID | Enhancement | Priority | Notes |
+|----|-------------|----------|-------|
+| FE-1 | "Published Artifacts" tab on Story Board for research requests | High | Same as RPP-10; promoted to a future enhancement once RPP MVP ships |
+| ~~FE-2~~ | ~~Refactor `CodeWriter._git_commit_and_push()` to use GitHub Trees API~~ | ~~High~~ | **DONE** — see RPP-12 / RPP-13. `src/core/github_publisher.py` is now a shared module used by both `ResearchPublisher` and `CodeWriter`. No git CLI in the backend container. |
+| FE-3 | Versioning for re-submitted research topics | Medium | If the same topic is submitted twice, create `REQ-XXX-<slug>-v2/` instead of overwriting the original folder |
+| FE-4 | Bidirectional sync — surface GitHub-edited reports back in the UI | Low | Detect upstream commits to `docs/research/` and refresh the cached version in the request detail view |
+| FE-5 | Real Mermaid PNG rendering via `mermaid-cli` | Low | Requires Node.js sidecar container or installing Node in the backend image. Currently the `.mmd` source file is committed but not rendered to PNG. |
+| FE-6 | Additional output formats: DOCX, Confluence | Low | Use `python-docx` for DOCX, Atlassian REST API for Confluence pages |
+| FE-7 | Auto-generated index page at `docs/research/INDEX.md` | Low | Scans all `REQ-*` folders and lists them with links — gives a single discoverable entry point |
+| FE-8 | Cost attribution for research artifacts | Medium | Track and display the LLM cost specifically for the research workflow (research_specialist + content_creator) so users see what each report cost to generate |
+
+### Progress Summary
+
+| Phase | Tasks | Done | In Progress | Not Started |
+|-------|-------|------|-------------|-------------|
+| Phase 1: Backend | 11 | 10 | 0 | 1 |
+| Phase 2: Frontend | 2 | 0 | 0 | 2 |
+| **Total** | **13** | **10** | **0** | **3** |
+
+---
+
+## Web Search Tools — Detailed Task Breakdown
+
+Integrate Firecrawl as `web_search` and `web_scrape` tools available to all 9 agents. Solves the staleness problem (Claude's training cutoff is early 2025) by giving agents live web access during their tool-use loop. Works under both Anthropic and Bedrock provider modes.
+
+Reference design: PRD §6.5 "Web Search Integration (Firecrawl)"
+
+### Phase 1: Backend Integration
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| WST-01 | Add `firecrawl-py` dependency | `pyproject.toml` adds `firecrawl-py>=2.0.0`. No system deps needed. | S | — | `[x]` |
+| WST-02 | Add `FIRECRAWL_API_KEY` env var | `.env` and `.env.example` get the API key entry | S | — | `[x]` |
+| WST-03 | Build `src/tools/firecrawl_tools.py` | New module: `WebSearchTool` and `WebScrapeTool` classes implementing `schema()` + `execute()`. Returns markdown. Truncates search results to ~3000 chars per item. Soft-fails on errors. Logs every call. | M | WST-01, WST-02 | `[x]` |
+| WST-04 | Register tools in `AgentSystemExecutor` | `src/agents/executor.py`: register WebSearchTool and WebScrapeTool in the tool registry alongside existing tools | S | WST-03 | `[x]` |
+| WST-05 | Declare tools in `config/tools.yaml` | Add both tools with `available_to: [all 9 agents]` | S | WST-04 | `[x]` |
+| WST-06 | Wire tools to all 9 agent configs | Add `web_search` and `web_scrape` to the `tools:` list of every `config/agents/*.yaml` file | S | WST-05 | `[x]` |
+
+### Phase 2: Agent Prompt Updates
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| WST-07 | Update `research_specialist` system prompt | Add MANDATE: "ALWAYS web_search for time-sensitive topics before producing the report. Your training data is stale; web_search returns current data. Cite real URLs in the Findings table." | S | WST-06 | `[x]` |
+| WST-08 | Remove staleness disclaimer from `research_specialist` | Strip "based on AI training data up to early 2025" — no longer accurate. Replace with "Live web search performed at request time. Verify time-sensitive data against authoritative sources." | S | WST-07 | `[x]` |
+| WST-09 | Add brief web-tool note to other 8 agent prompts | One-paragraph note to PRD specialist, user_story_author, code_reviewer, backend, frontend, devops, tester, content_creator: "You have web_search and web_scrape tools. Use them when you need current data not in your training. Don't use them for general knowledge questions you can answer from training." | M | WST-06 | `[x]` |
+
+### Phase 3: Verification
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| WST-10 | Smoke test: import + instantiate + real Firecrawl call | Inside the running container, import both tools, run a real `web_search` for "latest claude model 2025", verify Firecrawl returns valid markdown | S | WST-04 | `[x]` |
+| WST-11 | End-to-end research test (Anthropic provider) | Submit a `research_request` requiring current data, watch the agent call `web_search` in logs, verify the published report cites real recent URLs and contains data newer than the model's training cutoff | M | WST-09 | `[-]` Skipped: Anthropic account credit balance too low |
+| WST-12 | End-to-end research test (Bedrock provider) | Same as WST-11 via Bedrock toggle. REQ-340112 published to GitHub commit b88e303a with 3 web_search calls + 2 web_scrape calls pulling live data from anthropic.com and openai.com pricing pages. 7 files published including report.pdf + slides.pptx. | S | WST-11 | `[x]` |
+
+### Future Enhancements
+
+| ID | Enhancement | Priority | Notes |
+|----|-------------|----------|-------|
+| FE-9 | `web_crawl` tool — recursively crawl an entire site | Medium | Firecrawl `/crawl` endpoint. Useful for "scrape this competitor's docs site". Long-running jobs need polling support. |
+| FE-10 | `web_extract` tool — schema-based structured extraction | Medium | Firecrawl `/extract` endpoint. Useful for building comparison tables — agent passes a Pydantic-style schema, gets back JSON. |
+| FE-11 | Per-request cost tracking for Firecrawl credits | Medium | Surface in Cost Dashboard. Need to know Firecrawl's exact credit pricing per call type. |
+| FE-12 | Search result caching | Low | If two agents in the same workflow search for the same query, hit a cache (Redis or in-memory). Cuts duplicate calls. |
+| FE-13 | Frontend "Sources Used" tab on Story Board | High | Show clickable list of URLs the agent fetched, in the Outputs tab. Builds user trust in the research output. |
+| FE-14 | Optional hard call cap via env var | Low | Currently no artificial cap (natural ceiling is `BaseAgent.max_iterations = 5`). Add `FIRECRAWL_MAX_CALLS_PER_TASK` if logs ever show runaway behavior. |
+
+### Progress Summary
+
+| Phase | Tasks | Done | In Progress | Not Started |
+|-------|-------|------|-------------|-------------|
+| Phase 1: Backend | 6 | 6 | 0 | 0 |
+| Phase 2: Prompts | 3 | 3 | 0 | 0 |
+| Phase 3: Verification | 3 | 2 | 0 | 1 (WST-11 skipped: Anthropic credits) |
+| **Total** | **12** | **11** | **0** | **1** |
+
+---
+
+## Prompt Studio — Detailed Task Breakdown
+
+A dedicated page where users enter structured requirements and get 3 professionally-engineered prompt variants back, with iterative refinement and history. Uses the existing LLM clients (Anthropic + Bedrock) with a per-page provider toggle.
+
+Reference design: PRD §6.6 "Prompt Studio"
+
+### Phase 1: Backend
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PS-01 | Update PRD with §6.6 | Feature description, meta-prompt design, data model, requirements PS-001..PS-010, 7 future enhancements | S | — | `[x]` |
+| PS-02 | Update task-list with PS section | This section | S | PS-01 | `[x]` |
+| PS-03 | Add PromptSession + PromptVariant models | `src/models/base.py`: pydantic models with full field set | S | — | `[ ]` |
+| PS-04 | Add prompt DB tables + CRUD | `src/state/sqlite_store.py`: CREATE TABLE for prompt_sessions and prompt_variants, ALTER TABLE migrations, 8+ CRUD methods. Abstract methods in `src/state/base.py`. | M | PS-03 | `[ ]` |
+| PS-05 | Create `config/prompt_templates.yaml` | 6 starting templates: Code Reviewer, Research Analyst, Marketing Copywriter, SQL Explainer, Customer Support Agent, Technical Writer | S | — | `[ ]` |
+| PS-06 | Build `src/core/prompt_engineer.py` | `PromptEngineer` class. Constructs the meta-prompt, calls the LLM (Anthropic or Bedrock based on provider param), parses JSON response into variants. Has `generate_variants()` and `refine_variants()` methods. | L | PS-05 | `[ ]` |
+| PS-07 | Build `src/api/routes/prompts.py` | 5 endpoints: POST /generate, POST /:id/refine, PUT /:id/select, GET / (list), GET /:id (detail), GET /templates | M | PS-04, PS-06 | `[ ]` |
+| PS-08 | Register prompts router | `src/main.py`: add `app.include_router(prompts.router)` | S | PS-07 | `[ ]` |
+
+### Phase 2: Frontend
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PS-09 | Build `frontend/src/pages/PromptStudio.tsx` | Full page with Generator + History tabs. Template picker, structured input, collapsible advanced options, 3 variant cards side-by-side, refinement panel, history list. Reuses existing theme CSS variables. | XL | PS-08 | `[ ]` |
+| PS-10 | Add nav item + route | `Navbar.tsx`: add "Prompt Studio" link. `App.tsx`: add `/prompts` route. | S | PS-09 | `[ ]` |
+
+### Phase 3: Verification
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PS-11 | End-to-end test | Load template → fill inputs → generate 3 variants → copy one → refine with feedback → select → verify History tab shows session with both iterations | M | PS-10 | `[ ]` |
+
+### Future Enhancements
+
+| ID | Enhancement | Priority | Notes |
+|----|-------------|----------|-------|
+| FE-15 | User-defined templates saved to DB | Medium | Currently templates are YAML-only. DB-backed ones would let each user save their own starting points. |
+| FE-16 | Share prompt via public URL | Low | Read-only snapshot at `/prompts/share/:id` with no auth |
+| FE-17 | Side-by-side variant comparison with diff highlighting | Medium | Useful when variants are 80% identical and the meaningful differences are small |
+| FE-18 | Token count estimation per variant | Medium | Use anthropic SDK's `count_tokens` helper so users know which variant is cheapest |
+| FE-19 | "Try this prompt" button → test chat interface | Medium | One-off chat with the selected prompt as the system prompt, lets users validate before copying |
+| FE-20 | Public prompt library | Low | Browse high-quality community prompts. Needs moderation. |
+| FE-21 | Export as JSON/YAML | Low | For programmatic use in other tools or CI/CD |
+
+### Progress Summary
+
+| Phase | Tasks | Done | In Progress | Not Started |
+|-------|-------|------|-------------|-------------|
+| Phase 1: Backend | 8 | 2 | 0 | 6 |
+| Phase 2: Frontend | 2 | 0 | 0 | 2 |
+| Phase 3: Verification | 1 | 0 | 0 | 1 |
+| **Total** | **11** | **2** | **0** | **9** |
 
 ---
 

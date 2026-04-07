@@ -3,10 +3,12 @@
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import aiosqlite
 
 from src.models.base import (
+    AcceptanceCriterion,
     AgentTrace,
     DeploymentState,
     Document,
@@ -14,10 +16,13 @@ from src.models.base import (
     Deployment,
     Metric,
     Notification,
+    PromptSession,
+    PromptVariant,
     Request,
     RequestStatus,
     Story,
     Subtask,
+    TestCase,
     TokenUsage,
     User,
     UserRole,
@@ -37,7 +42,11 @@ CREATE TABLE IF NOT EXISTS requests (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP,
     estimated_cost_usd REAL,
-    actual_cost_usd REAL
+    actual_cost_usd REAL,
+    provider TEXT NOT NULL DEFAULT 'anthropic',
+    published_files TEXT DEFAULT '[]',
+    commit_sha TEXT,
+    commit_url TEXT
 );
 
 CREATE TABLE IF NOT EXISTS subtasks (
@@ -76,6 +85,17 @@ CREATE TABLE IF NOT EXISTS stories (
     coverage_pct REAL,
     github_issue_number INTEGER,
     FOREIGN KEY (request_id) REFERENCES requests(request_id)
+);
+
+CREATE TABLE IF NOT EXISTS acceptance_criteria (
+    ac_id TEXT PRIMARY KEY,
+    story_id TEXT NOT NULL,
+    criterion_text TEXT NOT NULL,
+    given_clause TEXT DEFAULT '',
+    when_clause TEXT DEFAULT '',
+    then_clause TEXT DEFAULT '',
+    is_met BOOLEAN DEFAULT 0,
+    FOREIGN KEY (story_id) REFERENCES stories(story_id)
 );
 
 CREATE TABLE IF NOT EXISTS test_cases (
@@ -218,11 +238,44 @@ CREATE TABLE IF NOT EXISTS documents (
     updated_at TIMESTAMP
 );
 
+-- Prompt Studio
+CREATE TABLE IF NOT EXISTS prompt_sessions (
+    session_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    use_case TEXT NOT NULL,
+    target_audience TEXT DEFAULT '',
+    desired_output TEXT DEFAULT '',
+    tone TEXT DEFAULT '',
+    constraints TEXT DEFAULT '',
+    options TEXT DEFAULT '{}',
+    provider TEXT NOT NULL DEFAULT 'anthropic',
+    template_id TEXT,
+    selected_variant_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS prompt_variants (
+    variant_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    iteration INTEGER NOT NULL DEFAULT 0,
+    variant_index INTEGER NOT NULL DEFAULT 1,
+    approach TEXT DEFAULT '',
+    prompt_text TEXT NOT NULL,
+    techniques TEXT DEFAULT '[]',
+    feedback_applied TEXT DEFAULT '',
+    generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (session_id) REFERENCES prompt_sessions(session_id)
+);
+
 -- Indexes
+CREATE INDEX IF NOT EXISTS idx_prompt_sessions_user ON prompt_sessions(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_prompt_variants_session ON prompt_variants(session_id, iteration, variant_index);
+
 CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
 CREATE INDEX IF NOT EXISTS idx_requests_created ON requests(created_at);
 CREATE INDEX IF NOT EXISTS idx_subtasks_request ON subtasks(request_id);
 CREATE INDEX IF NOT EXISTS idx_stories_request ON stories(request_id);
+CREATE INDEX IF NOT EXISTS idx_acceptance_criteria_story ON acceptance_criteria(story_id);
 CREATE INDEX IF NOT EXISTS idx_test_cases_story ON test_cases(story_id);
 CREATE INDEX IF NOT EXISTS idx_token_usage_request ON token_usage(request_id);
 CREATE INDEX IF NOT EXISTS idx_token_usage_recorded ON token_usage(recorded_at);
@@ -254,12 +307,19 @@ class SQLiteStateStore(StateStore):
     async def initialize(self) -> None:
         db = await self._get_db()
         await db.executescript(SCHEMA_SQL)
-        # Migrate: add output_text column if missing (for existing DBs)
-        try:
-            await db.execute("ALTER TABLE subtasks ADD COLUMN output_text TEXT DEFAULT ''")
-            await db.commit()
-        except Exception:
-            pass  # Column already exists
+        # Migrate: add columns that newer schema versions added (for existing DBs)
+        migrations = [
+            "ALTER TABLE subtasks ADD COLUMN output_text TEXT DEFAULT ''",
+            "ALTER TABLE requests ADD COLUMN provider TEXT NOT NULL DEFAULT 'anthropic'",
+            "ALTER TABLE requests ADD COLUMN published_files TEXT DEFAULT '[]'",
+            "ALTER TABLE requests ADD COLUMN commit_sha TEXT",
+            "ALTER TABLE requests ADD COLUMN commit_url TEXT",
+        ]
+        for stmt in migrations:
+            try:
+                await db.execute(stmt)
+            except Exception:
+                pass  # Column already exists — ignore
         await db.commit()
 
     async def close(self) -> None:
@@ -274,8 +334,9 @@ class SQLiteStateStore(StateStore):
         await db.execute(
             """INSERT INTO requests
                (request_id, description, task_type, priority, status, tags,
-                created_by, created_at, estimated_cost_usd)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                created_by, created_at, estimated_cost_usd, provider,
+                published_files, commit_sha, commit_url)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 request.request_id,
                 request.description,
@@ -286,6 +347,10 @@ class SQLiteStateStore(StateStore):
                 request.created_by,
                 request.created_at.isoformat(),
                 request.estimated_cost_usd,
+                request.provider,
+                json.dumps(request.published_files),
+                request.commit_sha,
+                request.commit_url,
             ),
         )
         await db.commit()
@@ -304,12 +369,16 @@ class SQLiteStateStore(StateStore):
     async def update_request(self, request: Request) -> None:
         db = await self._get_db()
         await db.execute(
-            """UPDATE requests SET status=?, completed_at=?, actual_cost_usd=?
+            """UPDATE requests SET status=?, completed_at=?, actual_cost_usd=?,
+               published_files=?, commit_sha=?, commit_url=?
                WHERE request_id=?""",
             (
                 request.status,
                 request.completed_at.isoformat() if request.completed_at else None,
                 request.actual_cost_usd,
+                json.dumps(request.published_files),
+                request.commit_sha,
+                request.commit_url,
                 request.request_id,
             ),
         )
@@ -330,6 +399,19 @@ class SQLiteStateStore(StateStore):
         return [self._row_to_request(r) for r in rows]
 
     def _row_to_request(self, row: aiosqlite.Row) -> Request:
+        # Some columns may not exist in older DBs — guard each
+        def _safe_get(name: str, default: Any = None) -> Any:
+            try:
+                return row[name]
+            except (IndexError, KeyError):
+                return default
+
+        provider = _safe_get("provider") or "anthropic"
+        published_files_raw = _safe_get("published_files") or "[]"
+        try:
+            published_files = json.loads(published_files_raw) if published_files_raw else []
+        except Exception:
+            published_files = []
         return Request(
             request_id=row["request_id"],
             description=row["description"],
@@ -346,6 +428,10 @@ class SQLiteStateStore(StateStore):
             ),
             estimated_cost_usd=row["estimated_cost_usd"],
             actual_cost_usd=row["actual_cost_usd"],
+            provider=provider,
+            published_files=published_files,
+            commit_sha=_safe_get("commit_sha"),
+            commit_url=_safe_get("commit_url"),
         )
 
     # ── Subtasks ─────────────────────────────────
@@ -505,6 +591,208 @@ class SQLiteStateStore(StateStore):
              story.github_issue_number, story.story_id),
         )
         await db.commit()
+
+    # ── Acceptance Criteria ───────────────────────
+
+    async def create_acceptance_criterion(self, ac: AcceptanceCriterion) -> str:
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO acceptance_criteria
+               (ac_id, story_id, criterion_text, given_clause, when_clause, then_clause, is_met)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                ac.ac_id, ac.story_id, ac.criterion_text,
+                ac.given_clause, ac.when_clause, ac.then_clause, ac.is_met,
+            ),
+        )
+        await db.commit()
+        return ac.ac_id
+
+    async def get_acceptance_criteria_for_story(self, story_id: str) -> list[AcceptanceCriterion]:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM acceptance_criteria WHERE story_id = ?", (story_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [
+            AcceptanceCriterion(
+                ac_id=r["ac_id"], story_id=r["story_id"],
+                criterion_text=r["criterion_text"],
+                given_clause=r["given_clause"] or "",
+                when_clause=r["when_clause"] or "",
+                then_clause=r["then_clause"] or "",
+                is_met=bool(r["is_met"]),
+            )
+            for r in rows
+        ]
+
+    async def update_acceptance_criterion(self, ac: AcceptanceCriterion) -> None:
+        db = await self._get_db()
+        await db.execute(
+            "UPDATE acceptance_criteria SET is_met=? WHERE ac_id=?",
+            (ac.is_met, ac.ac_id),
+        )
+        await db.commit()
+
+    # ── Test Cases ────────────────────────────────
+
+    async def create_test_case(self, tc: TestCase) -> str:
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO test_cases
+               (test_id, story_id, name, status, last_run_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (tc.test_id, tc.story_id, tc.name, tc.status, tc.last_run_at),
+        )
+        await db.commit()
+        return tc.test_id
+
+    async def get_test_cases_for_story(self, story_id: str) -> list[TestCase]:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM test_cases WHERE story_id = ?", (story_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [
+            TestCase(
+                test_id=r["test_id"], story_id=r["story_id"],
+                name=r["name"], status=r["status"],
+                last_run_at=r["last_run_at"],
+            )
+            for r in rows
+        ]
+
+    async def update_test_case(self, tc: TestCase) -> None:
+        db = await self._get_db()
+        await db.execute(
+            "UPDATE test_cases SET status=?, last_run_at=? WHERE test_id=?",
+            (tc.status, tc.last_run_at, tc.test_id),
+        )
+        await db.commit()
+
+    # ── Prompt Studio ─────────────────────────────
+
+    async def create_prompt_session(self, session: PromptSession) -> str:
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO prompt_sessions
+               (session_id, user_id, created_at, use_case, target_audience,
+                desired_output, tone, constraints, options, provider,
+                template_id, selected_variant_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                session.session_id, session.user_id,
+                session.created_at.isoformat(),
+                session.use_case, session.target_audience,
+                session.desired_output, session.tone, session.constraints,
+                json.dumps(session.options),
+                session.provider, session.template_id, session.selected_variant_id,
+            ),
+        )
+        await db.commit()
+        return session.session_id
+
+    async def get_prompt_session(self, session_id: str) -> PromptSession | None:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM prompt_sessions WHERE session_id = ?", (session_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        return self._row_to_prompt_session(row)
+
+    async def list_prompt_sessions_for_user(
+        self, user_id: str, limit: int = 20, offset: int = 0
+    ) -> list[PromptSession]:
+        db = await self._get_db()
+        async with db.execute(
+            """SELECT * FROM prompt_sessions
+               WHERE user_id = ?
+               ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+            (user_id, limit, offset),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_prompt_session(r) for r in rows]
+
+    async def update_prompt_session_selection(
+        self, session_id: str, selected_variant_id: str
+    ) -> None:
+        db = await self._get_db()
+        await db.execute(
+            "UPDATE prompt_sessions SET selected_variant_id=? WHERE session_id=?",
+            (selected_variant_id, session_id),
+        )
+        await db.commit()
+
+    async def create_prompt_variant(self, variant: PromptVariant) -> str:
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO prompt_variants
+               (variant_id, session_id, iteration, variant_index, approach,
+                prompt_text, techniques, feedback_applied, generated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                variant.variant_id, variant.session_id, variant.iteration,
+                variant.variant_index, variant.approach, variant.prompt_text,
+                json.dumps(variant.techniques), variant.feedback_applied,
+                variant.generated_at.isoformat(),
+            ),
+        )
+        await db.commit()
+        return variant.variant_id
+
+    async def get_prompt_variants_for_session(
+        self, session_id: str
+    ) -> list[PromptVariant]:
+        db = await self._get_db()
+        async with db.execute(
+            """SELECT * FROM prompt_variants
+               WHERE session_id = ?
+               ORDER BY iteration ASC, variant_index ASC""",
+            (session_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_prompt_variant(r) for r in rows]
+
+    def _row_to_prompt_session(self, row: aiosqlite.Row) -> PromptSession:
+        opts_raw = row["options"] or "{}"
+        try:
+            options = json.loads(opts_raw)
+        except Exception:
+            options = {}
+        return PromptSession(
+            session_id=row["session_id"],
+            user_id=row["user_id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            use_case=row["use_case"],
+            target_audience=row["target_audience"] or "",
+            desired_output=row["desired_output"] or "",
+            tone=row["tone"] or "",
+            constraints=row["constraints"] or "",
+            options=options,
+            provider=row["provider"] or "anthropic",
+            template_id=row["template_id"],
+            selected_variant_id=row["selected_variant_id"],
+        )
+
+    def _row_to_prompt_variant(self, row: aiosqlite.Row) -> PromptVariant:
+        techs_raw = row["techniques"] or "[]"
+        try:
+            techniques = json.loads(techs_raw)
+        except Exception:
+            techniques = []
+        return PromptVariant(
+            variant_id=row["variant_id"],
+            session_id=row["session_id"],
+            iteration=row["iteration"],
+            variant_index=row["variant_index"],
+            approach=row["approach"] or "",
+            prompt_text=row["prompt_text"],
+            techniques=techniques,
+            feedback_applied=row["feedback_applied"] or "",
+            generated_at=datetime.fromisoformat(row["generated_at"]),
+        )
 
     # ── Users ────────────────────────────────────
 

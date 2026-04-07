@@ -14,7 +14,7 @@ from src.core.dispatcher import Dispatcher
 from src.core.events import EventEmitter
 import re
 
-from src.models.base import Document, Request, RequestStatus, Story, StoryStatus, Subtask, SubtaskStatus
+from src.models.base import AcceptanceCriterion, Document, Request, RequestStatus, Story, StoryStatus, Subtask, SubtaskStatus, TestCase
 from src.state.base import StateStore
 from src.workflows.loader import WorkflowLoader
 from src.workflows.runner import AgentExecutor, WorkflowRunner
@@ -50,7 +50,11 @@ class Orchestrator(AgentExecutor):
         self.aggregator = Aggregator()
         self.workflow_loader = WorkflowLoader(config)
         self.workflow_loader.load_all()
-        self.runner = WorkflowRunner(executor=self, code_commit_handler=self._handle_code_commit)
+        self.runner = WorkflowRunner(
+            executor=self,
+            code_commit_handler=self._handle_code_commit,
+            publish_handler=self._handle_publish,
+        )
         self._agent_executor: Any = None  # Set by agent system in Phase 3
         self._background_tasks: set[asyncio.Task] = set()
 
@@ -62,12 +66,17 @@ class Orchestrator(AgentExecutor):
         from src.core.code_writer import CodeWriter
         self._code_writer = CodeWriter(state)
 
+        # Research publisher for the research → docs/ + GitHub flow
+        from src.core.research_publisher import ResearchPublisher
+        self._research_publisher = ResearchPublisher()
+
     def set_agent_executor(self, executor: Any) -> None:
         """Inject the real agent executor (set during Phase 3 agent system init)."""
         self._agent_executor = executor
 
     async def submit(self, description: str, task_type: str = "feature_request",
-                     priority: str = "medium", created_by: str = "") -> Request:
+                     priority: str = "medium", created_by: str = "",
+                     provider: str = "anthropic") -> Request:
         request_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
         request = Request(
             request_id=request_id,
@@ -75,6 +84,7 @@ class Orchestrator(AgentExecutor):
             task_type=task_type,
             priority=priority,
             created_by=created_by,
+            provider=provider,
         )
         await self.state.create_request(request)
         await self.events.emit("request.created", {
@@ -162,10 +172,14 @@ class Orchestrator(AgentExecutor):
             )
 
             # Check if pipeline was escalated (max rework cycles exceeded)
+            # Re-fetch the request from DB so we don't overwrite fields that
+            # handlers (e.g., _handle_publish) may have persisted during the run.
+            fresh_request = await self.state.get_request(request_id) or request
+
             if result.get("escalation_reason"):
-                request.status = RequestStatus.FAILED
-                request.completed_at = datetime.utcnow()
-                await self.state.update_request(request)
+                fresh_request.status = RequestStatus.FAILED
+                fresh_request.completed_at = datetime.utcnow()
+                await self.state.update_request(fresh_request)
                 rework_cycles = result.get("rework_cycle", 0)
                 error_msg = f"Pipeline failed after {rework_cycles} rework cycles. Quality gates did not pass."
                 await self.events.emit("request.failed", {
@@ -180,18 +194,18 @@ class Orchestrator(AgentExecutor):
                 failed_subtasks = [s for s in subtasks if s.status == "failed"]
 
                 if failed_subtasks:
-                    request.status = RequestStatus.FAILED
-                    request.completed_at = datetime.utcnow()
-                    await self.state.update_request(request)
+                    fresh_request.status = RequestStatus.FAILED
+                    fresh_request.completed_at = datetime.utcnow()
+                    await self.state.update_request(fresh_request)
                     failed_agents = [s.agent_id for s in failed_subtasks]
                     await self.events.emit("request.failed", {
                         "request_id": request_id,
                         "error": f"Agent failures: {', '.join(failed_agents)}",
                     })
                 else:
-                    request.status = RequestStatus.COMPLETED
-                    request.completed_at = datetime.utcnow()
-                    await self.state.update_request(request)
+                    fresh_request.status = RequestStatus.COMPLETED
+                    fresh_request.completed_at = datetime.utcnow()
+                    await self.state.update_request(fresh_request)
                     await self.events.emit("request.completed", {
                         "request_id": request_id, "result": str(result)[:200],
                     })
@@ -230,7 +244,12 @@ class Orchestrator(AgentExecutor):
 
             # Use real agent executor if available, otherwise simulate with delay
             if self._agent_executor:
-                result = await self._agent_executor.execute(agent_id, request_id, inputs)
+                # Look up the request to determine which provider to use
+                req = await self.state.get_request(request_id)
+                provider = req.provider if req else "anthropic"
+                result = await self._agent_executor.execute(
+                    agent_id, request_id, inputs, provider=provider,
+                )
             else:
                 result = await self._mock_execute(agent_id, request_id, inputs)
 
@@ -267,6 +286,8 @@ class Orchestrator(AgentExecutor):
                 await self._update_story_statuses(request_id, agent_id, StoryStatus.REVIEW)
             elif agent_id == "tester_specialist":
                 await self._update_story_statuses(request_id, agent_id, StoryStatus.TESTING)
+                if subtask.output_text:
+                    await self._parse_and_save_test_cases(request_id, subtask.output_text)
             elif agent_id == "devops_specialist":
                 await self._update_story_statuses(request_id, agent_id, StoryStatus.DONE)
 
@@ -324,6 +345,21 @@ class Orchestrator(AgentExecutor):
             description = artifacts.get("description", request_id)[:80]
             dep_state = await self._code_writer.commit_code(request_id, description, agent_outputs)
 
+            # Persist artifact metadata on the Request so the UI can display it after page reload
+            try:
+                req = await self.state.get_request(request_id)
+                if req:
+                    req.published_files = dep_state.files_committed or []
+                    req.commit_sha = dep_state.commit_sha
+                    # Build a GitHub commit URL from the configured repo + sha if available
+                    import os as _os
+                    repo = _os.getenv("GITHUB_REPO", "")
+                    if repo and dep_state.commit_sha:
+                        req.commit_url = f"https://github.com/{repo}/commit/{dep_state.commit_sha}"
+                    await self.state.update_request(req)
+            except Exception as e:
+                logger.warning("code_commit_persist_failed", request_id=request_id, error=str(e))
+
             await self.events.emit("code_commit.completed", {
                 "request_id": request_id,
                 "commit_sha": dep_state.commit_sha,
@@ -343,6 +379,52 @@ class Orchestrator(AgentExecutor):
             })
             logger.error("code_commit_failed", request_id=request_id, error=str(e))
             raise RuntimeError(f"Code commit failed: {e}")
+
+    async def _handle_publish(self, request_id: str, artifacts: dict[str, Any]) -> dict[str, Any]:
+        """Publish research artifacts to docs/research/ and GitHub. Soft-fails on errors."""
+        await self.events.emit("research_publish.started", {"request_id": request_id})
+        logger.info("research_publish_started", request_id=request_id)
+
+        description = artifacts.get("description", request_id)
+        result = await self._research_publisher.publish(request_id, description, artifacts)
+
+        # Persist artifact metadata on the Request so the UI can display it after page reload
+        try:
+            req = await self.state.get_request(request_id)
+            if req:
+                req.published_files = result.get("published_files", []) or []
+                req.commit_sha = result.get("commit_sha")
+                req.commit_url = result.get("commit_url")
+                await self.state.update_request(req)
+        except Exception as e:
+            logger.warning("publish_persist_failed", request_id=request_id, error=str(e))
+
+        if result.get("publish_error"):
+            await self.events.emit("research_publish.partial", {
+                "request_id": request_id,
+                "error": result["publish_error"],
+                "files": result.get("published_files", []),
+            })
+            logger.warning(
+                "research_publish_partial",
+                request_id=request_id,
+                error=result["publish_error"],
+            )
+        else:
+            await self.events.emit("research_publish.completed", {
+                "request_id": request_id,
+                "commit_sha": result.get("commit_sha"),
+                "commit_url": result.get("commit_url"),
+                "files": result.get("published_files", []),
+            })
+            logger.info(
+                "research_published",
+                request_id=request_id,
+                commit_sha=result.get("commit_sha"),
+                files=len(result.get("published_files", [])),
+            )
+
+        return result
 
     # ── Document Persistence ───────────────────────
 
@@ -413,13 +495,27 @@ class Orchestrator(AgentExecutor):
         """Parse user stories from the User Story Author's output and save to DB."""
         try:
             stories = self._extract_stories(request_id, output_text)
+            # Split output into per-story blocks for AC extraction
+            story_blocks = re.split(r'(?=###\s+(?:Story:?\s*)?(?:US-|\[US-))', output_text)
+            block_map: dict[str, str] = {}
+            for block in story_blocks:
+                id_match = re.search(r'(US-\d+(?:-\d+)?)', block)
+                if id_match:
+                    block_map[id_match.group(1)] = block
+
             for story in stories:
                 await self.state.create_story(story)
+                # Parse and save acceptance criteria for this story
+                block_text = block_map.get(story.story_id, story.description)
+                acs = self._extract_acceptance_criteria(story.story_id, block_text)
+                for ac in acs:
+                    await self.state.create_acceptance_criterion(ac)
                 await self.events.emit("story.created", {
                     "request_id": request_id,
                     "story_id": story.story_id,
                     "title": story.title,
                     "status": story.status,
+                    "acceptance_criteria_count": len(acs),
                 })
             logger.info("stories_parsed", request_id=request_id, count=len(stories))
         except Exception as e:
@@ -488,6 +584,172 @@ class Orchestrator(AgentExecutor):
                     counter += 1
 
         return stories
+
+    def _extract_acceptance_criteria(
+        self, story_id: str, block_text: str
+    ) -> list[AcceptanceCriterion]:
+        """Extract Given/When/Then acceptance criteria from a story text block."""
+        criteria: list[AcceptanceCriterion] = []
+
+        # Find the "Acceptance Criteria:" section
+        ac_match = re.search(
+            r'\*{0,2}Acceptance\s+Criteria:?\*{0,2}\s*\n(.*?)(?:\n\*{0,2}(?:Notes|Priority|Effort|Traces|---)|$)',
+            block_text,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if not ac_match:
+            return criteria
+
+        ac_section = ac_match.group(1)
+
+        # Split into individual criteria (bullet points starting with - or *)
+        bullets = re.findall(r'[-*]\s+(.+?)(?=\n[-*]\s+|\Z)', ac_section, re.DOTALL)
+
+        for idx, bullet in enumerate(bullets, start=1):
+            text = bullet.strip().replace("\n", " ").strip()
+            if not text:
+                continue
+
+            # Parse Given / When / Then clauses
+            given, when, then = "", "", ""
+            gwt = re.match(
+                r'[Gg]iven\s+(.+?),?\s+[Ww]hen\s+(.+?),?\s+[Tt]hen\s+(.+)',
+                text,
+            )
+            if gwt:
+                given = gwt.group(1).strip().rstrip(",")
+                when = gwt.group(2).strip().rstrip(",")
+                then = gwt.group(3).strip().rstrip(".")
+            else:
+                # Try alternate format: just "When X, Then Y" (no Given)
+                wt = re.match(r'[Ww]hen\s+(.+?),?\s+[Tt]hen\s+(.+)', text)
+                if wt:
+                    when = wt.group(1).strip().rstrip(",")
+                    then = wt.group(2).strip().rstrip(".")
+
+            ac_id = f"{story_id}-AC-{idx:02d}"
+            criteria.append(AcceptanceCriterion(
+                ac_id=ac_id,
+                story_id=story_id,
+                criterion_text=text,
+                given_clause=given,
+                when_clause=when,
+                then_clause=then,
+            ))
+
+        return criteria
+
+    async def _parse_and_save_test_cases(
+        self, request_id: str, output_text: str
+    ) -> None:
+        """Parse test cases from Tester output, link to stories, and extract coverage."""
+        try:
+            stories = await self.state.get_stories_for_request(request_id)
+            story_map = {s.story_id: s for s in stories}
+
+            test_cases = self._extract_test_cases(output_text, story_map)
+
+            # Group TCs by story for coverage calculation
+            story_tc_stats: dict[str, dict[str, int]] = {}  # story_id -> {total, passed}
+            for tc in test_cases:
+                await self.state.create_test_case(tc)
+                stats = story_tc_stats.setdefault(tc.story_id, {"total": 0, "passed": 0})
+                stats["total"] += 1
+                if tc.status == "pass":
+                    stats["passed"] += 1
+
+            # SBD-03: Update coverage_pct per story based on pass rate
+            for story_id, stats in story_tc_stats.items():
+                if story_id in story_map and stats["total"] > 0:
+                    story = story_map[story_id]
+                    story.coverage_pct = round(stats["passed"] / stats["total"] * 100, 1)
+                    await self.state.update_story(story)
+
+            logger.info(
+                "test_cases_parsed",
+                request_id=request_id,
+                count=len(test_cases),
+                stories_with_coverage=len(story_tc_stats),
+            )
+        except Exception as e:
+            logger.warning("test_case_parsing_failed", request_id=request_id, error=str(e))
+
+    def _extract_test_cases(
+        self, text: str, story_map: dict[str, Story]
+    ) -> list[TestCase]:
+        """Extract test cases from Tester markdown table output."""
+        test_cases: list[TestCase] = []
+
+        # Match table rows: | TC-XXX | name | US-XXX AC-X | type | status | notes |
+        row_pattern = re.compile(
+            r'\|\s*(TC-\d+)\s*\|\s*(.+?)\s*\|\s*(US-\S+)\s*(AC-\d+)?\s*\|\s*\w+\s*\|\s*'
+            r'(.+?)\s*\|\s*.*?\|'
+        )
+        for match in row_pattern.finditer(text):
+            tc_id = match.group(1)
+            tc_name = match.group(2).strip()
+            story_ref = match.group(3).strip()
+            status_raw = match.group(5).strip()
+
+            # Normalize status
+            status = "pending"
+            if "PASS" in status_raw.upper() or "\u2705" in status_raw:
+                status = "pass"
+            elif "FAIL" in status_raw.upper() or "\u274c" in status_raw:
+                status = "fail"
+            elif "SKIP" in status_raw.upper() or "\u26a0" in status_raw:
+                status = "pending"
+
+            # Resolve story_id — try exact match, then with request prefix
+            story_id = story_ref
+            if story_id not in story_map:
+                # Try matching by suffix (e.g., "US-001" might map to "US-001-001")
+                for sid in story_map:
+                    if sid.startswith(story_ref) or sid.endswith(story_ref.replace("US-", "")):
+                        story_id = sid
+                        break
+
+            # Only create TC if we have a valid story to link to
+            if story_id in story_map:
+                test_cases.append(TestCase(
+                    test_id=tc_id,
+                    story_id=story_id,
+                    name=tc_name,
+                    status=status,
+                    last_run_at=datetime.utcnow() if status in ("pass", "fail") else None,
+                ))
+
+        # Fallback: try simpler line-based format if no table rows found
+        if not test_cases:
+            line_pattern = re.compile(
+                r'(TC-\d+)\s*[:\|]\s*(.+?)\s*[:\|]\s*(US-\S+).*?(PASS|FAIL|SKIP)',
+                re.IGNORECASE,
+            )
+            for match in line_pattern.finditer(text):
+                tc_id = match.group(1)
+                tc_name = match.group(2).strip()
+                story_ref = match.group(3).strip()
+                status = match.group(4).strip().lower()
+                if status == "skip":
+                    status = "pending"
+
+                story_id = story_ref
+                if story_id not in story_map:
+                    for sid in story_map:
+                        if sid.startswith(story_ref):
+                            story_id = sid
+                            break
+
+                if story_id in story_map:
+                    test_cases.append(TestCase(
+                        test_id=tc_id,
+                        story_id=story_id,
+                        name=tc_name,
+                        status=status,
+                        last_run_at=datetime.utcnow() if status in ("pass", "fail") else None,
+                    ))
+
+        return test_cases
 
     async def _update_story_statuses(
         self, request_id: str, agent_id: str, new_status: StoryStatus
@@ -578,7 +840,26 @@ def _mock_agent_output(agent_id: str, request_id: str, inputs: dict[str, Any]) -
             "deployment_report": f"Deployed {request_id} to staging → production. Health checks passed.",
         },
         "tester_specialist": {
-            "test_report": f"All tests passed for {request_id}. Coverage: 87%. 0 regressions.",
+            "test_report": (
+                f"## Test Results\n\n"
+                f"| # | Test Case | Traces To | Type | Status | Notes |\n"
+                f"|---|-----------|-----------|------|--------|-------|\n"
+                f"| TC-001 | Core feature validation | US-001 AC-1 | Unit | ✅ PASS | — |\n"
+                f"| TC-002 | Input validation checks | US-001 AC-2 | Unit | ✅ PASS | — |\n"
+                f"| TC-003 | Error handling paths | US-001 AC-3 | Unit | ✅ PASS | — |\n"
+                f"| TC-004 | UI component rendering | US-002 AC-1 | Integration | ✅ PASS | — |\n"
+                f"| TC-005 | Form submission flow | US-002 AC-2 | Integration | ✅ PASS | — |\n"
+                f"| TC-006 | Negative test scenario | US-002 AC-3 | E2E | ❌ FAIL | Edge case timeout |\n"
+                f"| TC-007 | Test suite coverage | US-003 AC-1 | Unit | ✅ PASS | — |\n\n"
+                f"## Summary\n\n"
+                f"| Metric | Value |\n"
+                f"|--------|-------|\n"
+                f"| Total | 7 |\n"
+                f"| Passed | 6 ✅ |\n"
+                f"| Failed | 1 ❌ |\n"
+                f"| Pass Rate | 86% |\n\n"
+                f"## Verdict\n**NEEDS FIXES** — 1 test failing on edge case timeout in form submission"
+            ),
             "artifacts": [f"tests/e2e/{request_id.lower()}_test.py"],
         },
     }
