@@ -1,0 +1,9 @@
+# Executive Summary
+
+The large language model landscape has fundamentally shifted in April 2026, with three clear leaders emerging from intense competition: Google Gemini 3.1 Pro, Anthropic Claude Opus 4.6, and OpenAI GPT-5.2. The most striking development is the dramatic price reduction across all models — OpenAI's GPT-5.2 now costs $1.75/$14 per million tokens, representing a 90% reduction from earlier GPT-4 pricing, while capabilities have converged to >90% performance on most benchmarks.
+
+Google Gemini 3.1 Pro emerges as the value leader at $2/$12 per million tokens, offering the best price-performance ratio while leading most technical benchmarks and providing a massive 1 million token context window — 5x larger than competitors. This enables processing entire code repositories, full contract sets, and 20+ research papers without chunking, creating a significant operational advantage for document-heavy workflows.
+
+Claude Opus 4.6 commands a premium at $15/$75 per million tokens but justifies this cost through superior human preference evaluations, consistently winning with 1633 vs 1317 Elo scores against competitors. For organizations where output quality is paramount — high-end consulting, legal analysis, creative writing — Claude's human-preferred outputs outweigh the 7x cost difference.
+
+The strategic implication is clear: no single model dominates all use cases, making multi-model strategies optimal. Organizations should adopt Gemini 3.1 Pro as their primary workhorse for cost-effective, high-volume processing, while reserving Claude Opus for quality-critical tasks and leveraging GPT-5.2 for Microsoft/Azure-integrated environments. Immediate next steps include pilot testing all three models by April 15, implementing multi-model routing by April 30, and continuously monitoring pricing as competitive pressures continue driving costs down.
