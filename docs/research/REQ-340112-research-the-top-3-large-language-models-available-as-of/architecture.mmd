@@ -1,0 +1,28 @@
+graph TD
+    A[LLM Selection Decision] --> B{Use Case Type}
+    
+    B -->|Large Document Processing| C[Gemini 1.5 Pro]
+    B -->|General Purpose Applications| D[GPT-4o]
+    B -->|Cost-Sensitive Workloads| E[Gemini 1.5 Flash]
+    B -->|Complex Reasoning Tasks| F[Claude 3.5 Sonnet]
+    
+    C --> G[Context: 2M tokens<br/>Price: $1.25/$5.00]
+    D --> H[Context: 128K tokens<br/>Price: $2.50/$10.00]
+    E --> I[Context: 1M tokens<br/>Price: $0.075/$0.30]
+    F --> J[Context: 200K tokens<br/>Price: $3.00/$15.00]
+    
+    G --> K[Implementation Strategy]
+    H --> K
+    I --> K
+    J --> K
+    
+    K --> L[Multi-Model Architecture]
+    L --> M[API Integration Layer]
+    L --> N[Cost Optimization]
+    L --> O[Performance Monitoring]
+    
+    style C fill:#4285f4
+    style D fill:#00a96e
+    style E fill:#4285f4
+    style F fill:#ff6b35
+    style K fill:#ffd700
