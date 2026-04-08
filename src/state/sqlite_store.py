@@ -398,6 +398,43 @@ class SQLiteStateStore(StateStore):
             rows = await cursor.fetchall()
         return [self._row_to_request(r) for r in rows]
 
+    async def delete_request(self, request_id: str) -> None:
+        """Cascade-delete a request and every table that references it.
+
+        SQLite FKs are advisory by default in this schema (no ON DELETE CASCADE),
+        so we delete children explicitly in dependency order inside a single
+        transaction. Nothing is raised if rows don't exist — the operation is
+        idempotent by design so the caller can re-try a failed delete safely.
+        """
+        db = await self._get_db()
+        # Children of stories must go before stories themselves
+        await db.execute(
+            "DELETE FROM acceptance_criteria WHERE story_id IN "
+            "(SELECT story_id FROM stories WHERE request_id=?)",
+            (request_id,),
+        )
+        await db.execute(
+            "DELETE FROM test_cases WHERE story_id IN "
+            "(SELECT story_id FROM stories WHERE request_id=?)",
+            (request_id,),
+        )
+        # Direct children of requests
+        for table in (
+            "stories",
+            "artifacts",
+            "subtasks",
+            "deployments",
+            "deployment_states",
+            "token_usage",
+            "agent_traces",
+            "documents",
+            "notifications",
+        ):
+            await db.execute(f"DELETE FROM {table} WHERE request_id=?", (request_id,))
+        # Finally the request itself
+        await db.execute("DELETE FROM requests WHERE request_id=?", (request_id,))
+        await db.commit()
+
     def _row_to_request(self, row: aiosqlite.Row) -> Request:
         # Some columns may not exist in older DBs — guard each
         def _safe_get(name: str, default: Any = None) -> Any:
@@ -406,7 +443,7 @@ class SQLiteStateStore(StateStore):
             except (IndexError, KeyError):
                 return default
 
-        provider = _safe_get("provider") or "anthropic"
+        provider = _safe_get("provider") or "anthropic_sonnet"
         published_files_raw = _safe_get("published_files") or "[]"
         try:
             published_files = json.loads(published_files_raw) if published_files_raw else []
@@ -771,7 +808,7 @@ class SQLiteStateStore(StateStore):
             tone=row["tone"] or "",
             constraints=row["constraints"] or "",
             options=options,
-            provider=row["provider"] or "anthropic",
+            provider=row["provider"] or "anthropic_sonnet",
             template_id=row["template_id"],
             selected_variant_id=row["selected_variant_id"],
         )

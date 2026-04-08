@@ -94,6 +94,20 @@ cost:
     claude-sonnet-4-6:
       input: 3.00
       output: 15.00
+    # OpenAI — rough placeholders; verify against OpenAI platform pricing
+    # Keep the older IDs too so existing rows that logged gpt-5 / o3 still resolve.
+    gpt-5:
+      input: 3.00
+      output: 15.00
+    gpt-5.4:
+      input: 3.00
+      output: 15.00
+    o3:
+      input: 15.00
+      output: 60.00
+    o4-mini:
+      input: 3.00
+      output: 12.00
   budget:
     daily_limit_usd: 50.00
     monthly_limit_usd: 500.00

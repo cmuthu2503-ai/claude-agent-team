@@ -29,6 +29,7 @@ dependencies = [
     "markdown>=3.6",
     "python-slugify>=8.0.4",
     "firecrawl-py>=2.0.0",
+    "openai>=1.50.0",
 ]
 
 [project.optional-dependencies]

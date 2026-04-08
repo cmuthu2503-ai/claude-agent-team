@@ -40,6 +40,17 @@ class StateStore(ABC):
         self, status: str | None = None, limit: int = 20, offset: int = 0
     ) -> list[Request]: ...
 
+    @abstractmethod
+    async def delete_request(self, request_id: str) -> None:
+        """Hard-delete a request and all rows that reference it (cascade).
+
+        Implementations must remove: subtasks, artifacts, stories (+ their
+        acceptance_criteria and test_cases), deployments, deployment_states,
+        token_usage, agent_traces, documents, notifications, and finally the
+        request row itself. Use a single transaction.
+        """
+        ...
+
     # ── Subtasks ─────────────────────────────────
 
     @abstractmethod

@@ -3,7 +3,30 @@ import { api } from "../lib/api"
 import { StatusBadge } from "../components/ui/StatusBadge"
 import { RichTextInput, type RichTextInputHandle } from "../components/ui/RichTextInput"
 import { Link } from "react-router-dom"
-import { Plus, Send } from "lucide-react"
+import { Plus, Send, X, Trash2 } from "lucide-react"
+import { useAuthStore } from "../stores/auth"
+
+// Terminal states where a request is safe to hard-delete (nothing will be
+// writing to its rows in the background).
+const TERMINAL_STATUSES = ["completed", "failed", "cancelled"] as const
+function isTerminal(status: string): boolean {
+  return (TERMINAL_STATUSES as readonly string[]).includes(status)
+}
+
+// 5-button provider selector. Each button forces ALL agents to a single model
+// for the duration of a request (mirrors the existing Bedrock override pattern).
+// The two OpenAI buttons point at the latest models on OpenAI's API as of
+// 2026-04-08: gpt-5.4 (flagship, 2026-03-05) and o4-mini (latest o-series
+// reasoning, 2025-04-16). Override via OPENAI_GPT5_MODEL_ID / OPENAI_O3_MODEL_ID
+// in .env without touching this file.
+// Keep in sync with PromptStudio.tsx and src/agents/executor.py::VALID_PROVIDERS.
+const PROVIDER_OPTIONS: { id: string; label: string; title: string }[] = [
+  { id: "anthropic_opus",   label: "Opus",     title: "Claude Opus 4.6 (direct Anthropic API)" },
+  { id: "anthropic_sonnet", label: "Sonnet",   title: "Claude Sonnet 4.6 (direct Anthropic API)" },
+  { id: "bedrock",          label: "Bedrock",  title: "Claude Sonnet 4 via Amazon Bedrock" },
+  { id: "openai_gpt5",      label: "GPT-5.4",  title: "OpenAI GPT-5.4 — latest flagship (2026-03-05)" },
+  { id: "openai_o3",        label: "o4-mini",  title: "OpenAI o4-mini — latest reasoning model (2025-04-16)" },
+]
 
 interface RequestItem {
   request_id: string
@@ -12,6 +35,7 @@ interface RequestItem {
   priority: string
   status: string
   created_at: string
+  created_by?: string
 }
 
 interface ActivityEvent {
@@ -30,7 +54,9 @@ export function CommandCenterPage() {
   const [taskType, setTaskType] = useState("feature_request")
   const [priority, setPriority] = useState("medium")
   const [provider, setProvider] = useState<string>(() => {
-    return localStorage.getItem("llm_provider") || "anthropic"
+    const stored = localStorage.getItem("llm_provider") || "anthropic_sonnet"
+    // Migrate legacy "anthropic" value → new "anthropic_sonnet"
+    return stored === "anthropic" ? "anthropic_sonnet" : stored
   })
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState("")
@@ -118,8 +144,49 @@ export function CommandCenterPage() {
     setSubmitting(false)
   }
 
-  const active = requests.filter((r) => !["completed", "failed"].includes(r.status))
-  const completed = requests.filter((r) => ["completed", "failed"].includes(r.status)).slice(0, 5)
+  // Track per-request in-flight cancel/delete so buttons disable while action runs
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const currentUser = useAuthStore((s) => s.user)
+
+  const canMutate = (r: RequestItem): boolean => {
+    // Matches backend permission: admin OR creator (owner) can cancel/delete.
+    // If created_by is missing from the list payload, fall back to allowing —
+    // backend will still enforce 403 if the user isn't allowed.
+    if (!currentUser) return false
+    if (currentUser.role === "admin") return true
+    const owner = (r as any).created_by
+    if (!owner) return true
+    return owner === currentUser.username
+  }
+
+  const handleCancel = async (requestId: string) => {
+    if (!window.confirm(`Cancel request ${requestId}?\n\nThe workflow will be stopped and marked as cancelled. You can delete it afterward.`)) return
+    setBusyId(requestId)
+    try {
+      await api.post(`/requests/${requestId}/cancel`)
+      await loadRequests()
+    } catch (err: any) {
+      alert(`Cancel failed: ${err?.message || err}`)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const handleDelete = async (requestId: string) => {
+    if (!window.confirm(`Permanently delete request ${requestId}?\n\nThis removes the request and all its subtasks, stories, documents, and cost records from the database. This cannot be undone.`)) return
+    setBusyId(requestId)
+    try {
+      await api.delete(`/requests/${requestId}`)
+      await loadRequests()
+    } catch (err: any) {
+      alert(`Delete failed: ${err?.message || err}`)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const active = requests.filter((r) => !isTerminal(r.status))
+  const completed = requests.filter((r) => isTerminal(r.status)).slice(0, 5)
 
   return (
     <div style={{ maxWidth: 1280, margin: "0 auto", padding: 24, display: "flex", flexDirection: "column", gap: 32 }}>
@@ -274,13 +341,11 @@ export function CommandCenterPage() {
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Model:</span>
               <div style={{ display: "flex", borderRadius: "var(--radius)", overflow: "hidden", border: "1px solid var(--border)" }}>
-                {[
-                  { id: "anthropic", label: "Claude" },
-                  { id: "bedrock", label: "Amazon Bedrock" },
-                ].map((opt) => (
+                {PROVIDER_OPTIONS.map((opt, i) => (
                   <button
                     key={opt.id}
                     type="button"
+                    title={opt.title}
                     onClick={() => {
                       setProvider(opt.id)
                       localStorage.setItem("llm_provider", opt.id)
@@ -294,7 +359,7 @@ export function CommandCenterPage() {
                       fontFamily: "var(--font)",
                       background: provider === opt.id ? "var(--accent)" : "var(--bg-input)",
                       color: provider === opt.id ? "#fff" : "var(--text-secondary)",
-                      borderRight: opt.id === "anthropic" ? "1px solid var(--border)" : "none",
+                      borderRight: i < PROVIDER_OPTIONS.length - 1 ? "1px solid var(--border)" : "none",
                     }}
                   >
                     {opt.label}
@@ -341,16 +406,13 @@ export function CommandCenterPage() {
           </h2>
           <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
             {active.map((r) => (
-              <Link
+              <div
                 key={r.request_id}
-                to={`/request/${r.request_id}`}
                 style={{
-                  display: "block",
+                  position: "relative",
                   background: "var(--bg-card)",
                   border: "1px solid var(--border)",
                   borderRadius: "var(--radius)",
-                  padding: 16,
-                  textDecoration: "none",
                   transition: "border-color 0.15s, box-shadow 0.15s",
                 }}
                 onMouseEnter={(e) => {
@@ -362,21 +424,69 @@ export function CommandCenterPage() {
                   e.currentTarget.style.boxShadow = "none"
                 }}
               >
-                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
-                    {r.request_id}
-                  </span>
-                  <StatusBadge status={r.status} />
-                </div>
-                <p style={{ marginTop: 8, fontSize: 14, color: "var(--text-secondary)", overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
-                  {r.description}
-                </p>
-                <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-muted)" }}>
-                  <span style={{ textTransform: "capitalize" }}>{r.task_type.replace("_", " ")}</span>
-                  <span>·</span>
-                  <span style={{ textTransform: "capitalize" }}>{r.priority}</span>
-                </div>
-              </Link>
+                <Link
+                  to={`/request/${r.request_id}`}
+                  style={{ display: "block", padding: 16, textDecoration: "none", color: "inherit" }}
+                >
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                    <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
+                      {r.request_id}
+                    </span>
+                    <StatusBadge status={r.status} />
+                  </div>
+                  <p style={{ marginTop: 8, fontSize: 14, color: "var(--text-secondary)", overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+                    {r.description}
+                  </p>
+                  <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-muted)" }}>
+                    <span style={{ textTransform: "capitalize" }}>{r.task_type.replace("_", " ")}</span>
+                    <span>·</span>
+                    <span style={{ textTransform: "capitalize" }}>{r.priority}</span>
+                  </div>
+                </Link>
+                {canMutate(r) && (
+                  <div style={{ position: "absolute", top: 12, right: 56, display: "flex", gap: 4 }}>
+                    <button
+                      type="button"
+                      title="Cancel this request"
+                      disabled={busyId === r.request_id}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        handleCancel(r.request_id)
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 3,
+                        padding: "2px 6px",
+                        fontSize: 10,
+                        fontWeight: 500,
+                        fontFamily: "var(--font)",
+                        background: "transparent",
+                        color: "var(--text-muted)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "var(--radius)",
+                        cursor: busyId === r.request_id ? "wait" : "pointer",
+                        opacity: busyId === r.request_id ? 0.5 : 1,
+                        transition: "background 0.15s, color 0.15s, border-color 0.15s",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = "var(--danger-subtle)"
+                        e.currentTarget.style.color = "var(--danger)"
+                        e.currentTarget.style.borderColor = "var(--danger)"
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "transparent"
+                        e.currentTarget.style.color = "var(--text-muted)"
+                        e.currentTarget.style.borderColor = "var(--border)"
+                      }}
+                    >
+                      <X size={10} />
+                      {busyId === r.request_id ? "..." : "Cancel"}
+                    </button>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         </section>
@@ -397,29 +507,83 @@ export function CommandCenterPage() {
             }}
           >
             {completed.map((r, i) => (
-              <Link
+              <div
                 key={r.request_id}
-                to={`/request/${r.request_id}`}
                 style={{
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "space-between",
+                  gap: 12,
                   padding: "12px 16px",
-                  textDecoration: "none",
                   borderTop: i > 0 ? "1px solid var(--border)" : "none",
                   transition: "background 0.15s",
                 }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)" }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = "transparent" }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
+                <Link
+                  to={`/request/${r.request_id}`}
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    textDecoration: "none",
+                  }}
+                >
+                  <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-muted)", flexShrink: 0 }}>
                     {r.request_id}
                   </span>
-                  <span style={{ fontSize: 14, color: "var(--text-secondary)" }}>{r.description}</span>
+                  <span style={{ fontSize: 14, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {r.description}
+                  </span>
+                </Link>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  <StatusBadge status={r.status} />
+                  {canMutate(r) && (
+                    <button
+                      type="button"
+                      title="Delete this request permanently"
+                      disabled={busyId === r.request_id}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        handleDelete(r.request_id)
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 3,
+                        padding: "3px 7px",
+                        fontSize: 11,
+                        fontWeight: 500,
+                        fontFamily: "var(--font)",
+                        background: "transparent",
+                        color: "var(--text-muted)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "var(--radius)",
+                        cursor: busyId === r.request_id ? "wait" : "pointer",
+                        opacity: busyId === r.request_id ? 0.5 : 1,
+                        transition: "background 0.15s, color 0.15s, border-color 0.15s",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = "var(--danger-subtle)"
+                        e.currentTarget.style.color = "var(--danger)"
+                        e.currentTarget.style.borderColor = "var(--danger)"
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "transparent"
+                        e.currentTarget.style.color = "var(--text-muted)"
+                        e.currentTarget.style.borderColor = "var(--border)"
+                      }}
+                    >
+                      <Trash2 size={11} />
+                      {busyId === r.request_id ? "..." : "Delete"}
+                    </button>
+                  )}
                 </div>
-                <StatusBadge status={r.status} />
-              </Link>
+              </div>
             ))}
           </div>
         </section>

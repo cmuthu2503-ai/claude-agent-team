@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from src.agents.executor import VALID_PROVIDERS
 from src.auth.service import get_current_user, require_role
 
 router = APIRouter(prefix="/api/v1/requests", tags=["requests"])
@@ -35,12 +36,15 @@ async def submit_request(
     description: str = Form(...),
     task_type: str = Form("feature_request"),
     priority: str = Form("medium"),
-    provider: str = Form("anthropic"),
+    provider: str = Form("anthropic_sonnet"),
     screenshots: list[UploadFile] = File(default=[]),
     user: dict = Depends(require_role("developer", "admin")),
 ):
-    if provider not in ("anthropic", "bedrock"):
-        raise HTTPException(400, f"Invalid provider '{provider}'. Must be 'anthropic' or 'bedrock'.")
+    if provider not in VALID_PROVIDERS:
+        raise HTTPException(
+            400,
+            f"Invalid provider '{provider}'. Must be one of: {sorted(VALID_PROVIDERS)}",
+        )
     # Save uploaded screenshots
     saved_files: list[dict[str, str]] = []
     for file in screenshots:
@@ -238,8 +242,11 @@ async def retry_request(
     req = await state.get_request(request_id)
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
-    if req.status != "failed":
-        raise HTTPException(status_code=400, detail="Only failed requests can be retried")
+    if req.status not in ("failed", "cancelled"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only failed or cancelled requests can be retried",
+        )
 
     orchestrator = request.app.state.orchestrator
     result = await orchestrator.submit(
@@ -250,6 +257,78 @@ async def retry_request(
         provider=req.provider,
     )
     return _envelope({"request_id": result.request_id, "status": result.status, "provider": result.provider})
+
+
+def _assert_owner_or_admin(req: Any, user: dict) -> None:
+    """Permission check: the request's creator OR any admin may mutate it.
+
+    Raises HTTPException(403) otherwise. Viewers are blocked by the route's
+    require_role dependency before this runs, so we only need to distinguish
+    developer-who-owns-it from developer-who-doesnt.
+    """
+    if user.get("role") == "admin":
+        return
+    if req.created_by and req.created_by == user.get("username"):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Only the request owner or an admin can cancel or delete this request",
+    )
+
+
+@router.post("/{request_id}/cancel")
+async def cancel_request(
+    request_id: str,
+    request: Request,
+    user: dict = Depends(require_role("developer", "admin")),
+):
+    """Cancel an in-flight request. Idempotent — terminal requests return unchanged."""
+    state = request.app.state.state_store
+    req = await state.get_request(request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    _assert_owner_or_admin(req, user)
+
+    orchestrator = request.app.state.orchestrator
+    updated = await orchestrator.cancel(request_id)
+    return _envelope({
+        "request_id": updated.request_id,
+        "status": updated.status,
+        "completed_at": updated.completed_at.isoformat() if updated.completed_at else None,
+    })
+
+
+@router.delete("/{request_id}")
+async def delete_request(
+    request_id: str,
+    request: Request,
+    user: dict = Depends(require_role("developer", "admin")),
+):
+    """Hard-delete a request and all cascaded rows (subtasks, stories, traces, etc.).
+
+    Only allowed when the request is in a terminal state (completed, failed,
+    cancelled). Running requests must be cancelled first to avoid deleting
+    state that a live background task is still writing to.
+    """
+    state = request.app.state.state_store
+    req = await state.get_request(request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    _assert_owner_or_admin(req, user)
+
+    if req.status not in ("completed", "failed", "cancelled"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot delete a request in '{req.status}' state. "
+                "Cancel it first, then delete."
+            ),
+        )
+
+    await state.delete_request(request_id)
+    return _envelope({"request_id": request_id, "deleted": True})
 
 
 @router.get("/{request_id}/stories")

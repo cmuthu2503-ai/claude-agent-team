@@ -56,7 +56,10 @@ class Orchestrator(AgentExecutor):
             publish_handler=self._handle_publish,
         )
         self._agent_executor: Any = None  # Set by agent system in Phase 3
-        self._background_tasks: set[asyncio.Task] = set()
+        # Background tasks keyed by request_id so cancel() can find and kill a
+        # specific in-flight workflow. A request can only have one running task
+        # at a time (submit → one task; retry reuses the same request_id).
+        self._background_tasks: dict[str, asyncio.Task] = {}
 
         # Token tracker for cost recording
         from src.core.token_tracker import TokenTracker
@@ -76,7 +79,7 @@ class Orchestrator(AgentExecutor):
 
     async def submit(self, description: str, task_type: str = "feature_request",
                      priority: str = "medium", created_by: str = "",
-                     provider: str = "anthropic") -> Request:
+                     provider: str = "anthropic_sonnet") -> Request:
         request_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
         request = Request(
             request_id=request_id,
@@ -135,10 +138,73 @@ class Orchestrator(AgentExecutor):
         task = asyncio.create_task(
             self._run_workflow(request, description, skip_stages, reused_artifacts)
         )
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
+        self._background_tasks[request_id] = task
+        # When the task finishes (normal completion, error, or cancel), drop it
+        # from the tracking dict so cancel() doesn't try to re-cancel a dead task.
+        task.add_done_callback(lambda _t, rid=request_id: self._background_tasks.pop(rid, None))
 
         return request
+
+    async def cancel(self, request_id: str) -> Request | None:
+        """Cancel an in-flight request.
+
+        - Cancels the background asyncio task (if any) running its workflow
+        - Marks the request as CANCELLED
+        - Marks any IN_PROGRESS / PENDING subtasks as CANCELLED
+        - Idempotent: re-cancelling a terminal request is a no-op (returns the
+          request unchanged) so the UI doesn't have to gate on status.
+
+        Returns the updated request, or None if the request doesn't exist.
+        """
+        request = await self.state.get_request(request_id)
+        if not request:
+            return None
+
+        # Terminal states — nothing to cancel
+        if request.status in (
+            RequestStatus.COMPLETED,
+            RequestStatus.FAILED,
+            RequestStatus.CANCELLED,
+        ):
+            return request
+
+        # Kill the background task if it's still alive. We best-effort wait a
+        # short window for it to unwind so its own state writes settle before
+        # we overwrite with CANCELLED, but we don't block indefinitely.
+        task = self._background_tasks.pop(request_id, None)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+            except Exception:
+                # Swallow anything else the task raised during unwind — we
+                # care about state, not its exit code.
+                logger.debug("cancel_task_unwind_exception", request_id=request_id)
+
+        # Fail any still-in-progress subtasks so the UI doesn't show them spinning
+        now = datetime.utcnow()
+        for subtask in await self.state.get_subtasks_for_request(request_id):
+            if subtask.status in (SubtaskStatus.IN_PROGRESS, SubtaskStatus.PENDING):
+                subtask.status = SubtaskStatus.CANCELLED
+                subtask.completed_at = now
+                subtask.error_message = "Cancelled by user"
+                await self.state.update_subtask(subtask)
+
+        # Flip the request itself. Re-fetch so we don't clobber any fields
+        # that settled between the get at the top of this method and now.
+        fresh = await self.state.get_request(request_id) or request
+        fresh.status = RequestStatus.CANCELLED
+        fresh.completed_at = now
+        await self.state.update_request(fresh)
+
+        await self.events.emit("request.cancelled", {
+            "request_id": request_id,
+            "cancelled_at": now.isoformat(),
+        })
+        logger.info("request_cancelled", request_id=request_id)
+        return fresh
 
     async def _run_workflow(
         self, request: Request, description: str,
@@ -246,7 +312,7 @@ class Orchestrator(AgentExecutor):
             if self._agent_executor:
                 # Look up the request to determine which provider to use
                 req = await self.state.get_request(request_id)
-                provider = req.provider if req else "anthropic"
+                provider = req.provider if req else "anthropic_sonnet"
                 result = await self._agent_executor.execute(
                     agent_id, request_id, inputs, provider=provider,
                 )
@@ -263,11 +329,16 @@ class Orchestrator(AgentExecutor):
                 subtask.output_text = "\n\n".join(str(v) for v in outputs.values() if v)
             await self.state.update_subtask(subtask)
 
-            # Record token usage for cost tracking
+            # Record token usage for cost tracking.
+            # Prefer the model reported by the executor (reflects per-call provider
+            # overrides like bedrock / opus / openai). Fall back to the YAML model
+            # if the result didn't include one (e.g., mock execution).
             input_tokens = result.get("input_tokens", 0)
             output_tokens = result.get("output_tokens", 0)
             if input_tokens > 0 or output_tokens > 0:
-                model = self.config.agents.get(agent_id, {}).get("model", "claude-sonnet-4-6")
+                model = result.get("model") or self.config.agents.get(agent_id, {}).get(
+                    "model", "claude-sonnet-4-6"
+                )
                 await self._token_tracker.record(
                     request_id=request_id,
                     subtask_id=subtask_id,

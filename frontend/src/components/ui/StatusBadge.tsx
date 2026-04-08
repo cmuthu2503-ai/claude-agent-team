@@ -18,6 +18,7 @@ const statusStyles: Record<string, StatusStyle> = {
   completed:   { bg: "var(--success-subtle)", text: "var(--success)", dot: "var(--success)" },
   done:        { bg: "var(--success-subtle)", text: "var(--success)", dot: "var(--success)" },
   failed:      { bg: "var(--danger-subtle)",  text: "var(--danger)",  dot: "var(--danger)" },
+  cancelled:   { bg: "var(--bg-hover)",       text: "var(--text-muted)", dot: "var(--text-muted)" },
   rolled_back: { bg: "var(--warning-subtle)", text: "var(--warning)", dot: "var(--warning)" },
   pending:     { bg: "var(--bg-hover)",       text: "var(--text-muted)", dot: "var(--text-muted)" },
   idle:        { bg: "var(--bg-hover)",       text: "var(--text-muted)", dot: "var(--text-muted)" },

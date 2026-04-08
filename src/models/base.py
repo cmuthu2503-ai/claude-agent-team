@@ -18,6 +18,7 @@ class RequestStatus(StrEnum):
     AGGREGATING = "aggregating"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"  # user killed the request before it finished
 
 
 class SubtaskStatus(StrEnum):
@@ -25,6 +26,7 @@ class SubtaskStatus(StrEnum):
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"  # parent request was cancelled while this was running
 
 
 class TaskType(StrEnum):
@@ -89,7 +91,7 @@ class Request(BaseModel):
     completed_at: datetime | None = None
     estimated_cost_usd: float | None = None
     actual_cost_usd: float | None = None
-    provider: str = "anthropic"  # anthropic | bedrock — LLM provider for this request
+    provider: str = "anthropic_sonnet"  # see src/agents/executor.py::VALID_PROVIDERS
     # Artifacts produced by the workflow (set by publish/code_commit handlers)
     published_files: list[str] = Field(default_factory=list)  # repo-relative paths
     commit_sha: str | None = None  # short SHA of the publish commit
@@ -340,8 +342,8 @@ class PromptSession(BaseModel):
     constraints: str = ""
     # Advanced options as a flexible dict (target_model, output_format, few_shot, cot, length, category)
     options: dict[str, Any] = Field(default_factory=dict)
-    # LLM provider used
-    provider: str = "anthropic"  # anthropic | bedrock
+    # LLM provider used — see src/agents/executor.py::VALID_PROVIDERS
+    provider: str = "anthropic_sonnet"
     # Starting template id (if any)
     template_id: str | None = None
     # Which variant the user selected (drives refinement context)

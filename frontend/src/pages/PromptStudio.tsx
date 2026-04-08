@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react"
 import { api } from "../lib/api"
-import { Wand2, Copy, Check, ChevronDown, ChevronRight, Sparkles, RefreshCw, History as HistoryIcon } from "lucide-react"
+import { Wand2, Copy, Check, ChevronDown, ChevronRight, Sparkles, RefreshCw, History as HistoryIcon, Play, Send, Trash2, Search } from "lucide-react"
+import { MarkdownRenderer } from "../components/ui/MarkdownRenderer"
 
 interface Template {
   template_id: string
@@ -48,9 +49,43 @@ const OUTPUT_FORMATS = ["freeform", "json", "markdown", "table", "xml"]
 const LENGTHS = ["concise", "standard", "comprehensive"]
 const CATEGORIES = ["general", "coding", "writing", "research", "analysis", "customer_service"]
 
+// ── Execute tab types ───────────────────────────────
+interface ToolCall {
+  id: string
+  name: string
+  input?: any
+  result_preview?: string
+  result_chars?: number
+  status: "running" | "done"
+}
+
+interface ChatTurn {
+  role: "user" | "assistant"
+  text: string
+  tool_calls?: ToolCall[]
+  tokens_in?: number
+  tokens_out?: number
+  cost_usd?: number
+  latency_ms?: number
+}
+
+// 5-button provider selector — keep in sync with CommandCenter.tsx
+// OpenAI buttons point at the latest models (gpt-5.4 and o4-mini); overridable
+// via OPENAI_GPT5_MODEL_ID / OPENAI_O3_MODEL_ID env vars in .env.
+const PROVIDER_OPTIONS: { id: string; label: string; title: string }[] = [
+  { id: "anthropic_opus",   label: "Opus",     title: "Claude Opus 4.6 (direct Anthropic API)" },
+  { id: "anthropic_sonnet", label: "Sonnet",   title: "Claude Sonnet 4.6 (direct Anthropic API)" },
+  { id: "bedrock",          label: "Bedrock",  title: "Claude Sonnet 4 via Amazon Bedrock" },
+  { id: "openai_gpt5",      label: "GPT-5.4",  title: "OpenAI GPT-5.4 — latest flagship (2026-03-05)" },
+  { id: "openai_o3",        label: "o4-mini",  title: "OpenAI o4-mini — latest reasoning model (2025-04-16)" },
+]
+
 export function PromptStudioPage() {
-  const [activeTab, setActiveTab] = useState<"generator" | "history">("generator")
-  const [provider, setProvider] = useState<string>(() => localStorage.getItem("llm_provider") || "anthropic")
+  const [activeTab, setActiveTab] = useState<"generator" | "execute" | "history">("generator")
+  const [provider, setProvider] = useState<string>(() => {
+    const stored = localStorage.getItem("llm_provider") || "anthropic_sonnet"
+    return stored === "anthropic" ? "anthropic_sonnet" : stored
+  })
 
   // Form state
   const [templates, setTemplates] = useState<Template[]>([])
@@ -86,7 +121,19 @@ export function PromptStudioPage() {
   const [historySessions, setHistorySessions] = useState<Session[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
 
+  // Execute (playground) state
+  const [executeSystemPrompt, setExecuteSystemPrompt] = useState("")
+  const [executeChatInput, setExecuteChatInput] = useState("")
+  const [executeConversation, setExecuteConversation] = useState<ChatTurn[]>([])
+  const [executeStreaming, setExecuteStreaming] = useState(false)
+  const [executeError, setExecuteError] = useState("")
+  const [executeAdvancedOpen, setExecuteAdvancedOpen] = useState(false)
+  const [executeTemperature, setExecuteTemperature] = useState(0.7)
+  const [executeMaxTokens, setExecuteMaxTokens] = useState(4096)
+  const [executeEnableTools, setExecuteEnableTools] = useState(false)
+
   const variantsEndRef = useRef<HTMLDivElement>(null)
+  const executeChatEndRef = useRef<HTMLDivElement>(null)
 
   // Load templates once
   useEffect(() => {
@@ -215,6 +262,194 @@ export function PromptStudioPage() {
     } catch {}
   }
 
+  // ── Send a generated prompt to the Execute tab ─────────
+  const tryInExecute = (variantPromptText: string) => {
+    setExecuteSystemPrompt(variantPromptText)
+    setExecuteConversation([])
+    setExecuteError("")
+    setExecuteChatInput("")
+    setActiveTab("execute")
+  }
+
+  // ── Auto-scroll: only if user is already at the bottom ─
+  // Standard chat UX: don't fight the user's manual scrolling. If they scrolled
+  // up to read earlier content, leave them alone. If they're at the bottom,
+  // follow the streaming response.
+  const SCROLL_THRESHOLD_PX = 150
+  const isUserAtBottom = (): boolean => {
+    const scrollPos = window.innerHeight + window.scrollY
+    const docHeight = document.documentElement.scrollHeight
+    return scrollPos >= docHeight - SCROLL_THRESHOLD_PX
+  }
+  const scrollToBottomIfAtBottom = (wasAtBottom: boolean) => {
+    if (!wasAtBottom) return
+    // Use "auto" not "smooth" — smooth fights rapid streaming updates
+    setTimeout(() => executeChatEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" }), 30)
+  }
+  const forceScrollToBottom = () => {
+    setTimeout(() => executeChatEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" }), 30)
+  }
+
+  // ── Execute tab: stream a chat turn from the backend ───
+  const sendChatMessage = async () => {
+    const text = executeChatInput.trim()
+    if (!text || executeStreaming) return
+    setExecuteError("")
+
+    // Append user turn + an empty assistant turn we'll stream into
+    const userTurn: ChatTurn = { role: "user", text }
+    const assistantTurn: ChatTurn = { role: "assistant", text: "", tool_calls: [] }
+    setExecuteConversation((prev) => [...prev, userTurn, assistantTurn])
+    setExecuteChatInput("")
+    setExecuteStreaming(true)
+    // Force-scroll once on Send so the user sees their own message at the bottom
+    forceScrollToBottom()
+
+    // Build the messages array for the request — include the new user message
+    const apiMessages = [
+      ...executeConversation.map((t) => ({ role: t.role, content: t.text })),
+      { role: "user" as const, content: text },
+    ]
+
+    try {
+      const token = localStorage.getItem("auth_token") || ""
+      const response = await fetch("/api/v1/prompts/execute/stream", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          system_prompt: executeSystemPrompt,
+          messages: apiMessages,
+          provider,
+          temperature: executeTemperature,
+          max_tokens: executeMaxTokens,
+          enable_tools: executeEnableTools,
+        }),
+      })
+
+      if (!response.ok || !response.body) {
+        const errText = await response.text().catch(() => "Stream failed")
+        throw new Error(errText.slice(0, 200))
+      }
+
+      // Read the SSE stream
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        // Parse SSE events out of the buffer (events are separated by \n\n)
+        let sepIdx
+        while ((sepIdx = buffer.indexOf("\n\n")) !== -1) {
+          const rawEvent = buffer.slice(0, sepIdx)
+          buffer = buffer.slice(sepIdx + 2)
+          // Parse "event: TYPE\ndata: JSON"
+          const lines = rawEvent.split("\n")
+          let eventType = ""
+          let dataStr = ""
+          for (const line of lines) {
+            if (line.startsWith("event: ")) eventType = line.slice(7).trim()
+            else if (line.startsWith("data: ")) dataStr = line.slice(6)
+          }
+          if (!eventType || !dataStr) continue
+          let data: any = {}
+          try { data = JSON.parse(dataStr) } catch { continue }
+          handleStreamEvent(eventType, data)
+        }
+      }
+    } catch (e: any) {
+      setExecuteError(e?.message || "Streaming error")
+      setExecuteConversation((prev) => {
+        if (prev.length === 0) return prev
+        const lastIdx = prev.length - 1
+        const last = prev[lastIdx]
+        if (last.role !== "assistant" || last.text) return prev
+        // Pure update — don't mutate
+        return [
+          ...prev.slice(0, lastIdx),
+          { ...last, text: `[Error: ${e?.message || "stream failed"}]` },
+        ]
+      })
+    } finally {
+      setExecuteStreaming(false)
+      // Do NOT auto-scroll here. If the user scrolled up during streaming,
+      // they want to stay where they are. The next message Send will scroll.
+    }
+  }
+
+  const handleStreamEvent = (eventType: string, data: any) => {
+    // CAPTURE scroll position BEFORE state update — once new content renders,
+    // the page height changes and the math is wrong.
+    const wasAtBottom = isUserAtBottom()
+
+    // PURE IMMUTABLE UPDATE — never mutate prev or any object inside it.
+    // React Strict Mode calls this updater twice in dev to detect mutations;
+    // mutation would cause every chunk to be applied twice (text doubling bug).
+    setExecuteConversation((prev) => {
+      if (prev.length === 0) return prev
+      const lastIdx = prev.length - 1
+      const last = prev[lastIdx]
+      if (last.role !== "assistant") return prev
+
+      // Build a fresh last turn object
+      let updatedLast: ChatTurn = { ...last }
+
+      if (eventType === "text_delta") {
+        updatedLast.text = last.text + (data.text || "")
+      } else if (eventType === "tool_use_start") {
+        updatedLast.tool_calls = [
+          ...(last.tool_calls || []),
+          {
+            id: data.id,
+            name: data.name,
+            status: "running",
+          },
+        ]
+      } else if (eventType === "tool_use_result") {
+        updatedLast.tool_calls = (last.tool_calls || []).map((t) =>
+          t.id === data.id
+            ? {
+                ...t,
+                status: "done",
+                input: data.input,
+                result_preview: data.result_preview,
+                result_chars: data.result_chars,
+              }
+            : t
+        )
+      } else if (eventType === "message_complete") {
+        updatedLast.tokens_in = data.input_tokens
+        updatedLast.tokens_out = data.output_tokens
+        updatedLast.cost_usd = data.cost_usd
+        updatedLast.latency_ms = data.latency_ms
+      } else if (eventType === "error") {
+        updatedLast.text = `[Error: ${data.message}]`
+      } else {
+        return prev  // unknown event type, no change
+      }
+
+      // Return brand new array with the updated last turn
+      return [...prev.slice(0, lastIdx), updatedLast]
+    })
+
+    // Auto-scroll only if user was already at the bottom (chat UX standard)
+    if (eventType === "text_delta" || eventType === "tool_use_result") {
+      scrollToBottomIfAtBottom(wasAtBottom)
+    }
+  }
+
+  const clearConversation = () => {
+    setExecuteConversation([])
+    setExecuteError("")
+    setExecuteChatInput("")
+  }
+
   const inputStyle: React.CSSProperties = {
     width: "100%",
     background: "var(--bg-input)",
@@ -265,20 +500,18 @@ export function PromptStudioPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Model:</span>
           <div style={{ display: "flex", borderRadius: "var(--radius)", overflow: "hidden", border: "1px solid var(--border)" }}>
-            {[
-              { id: "anthropic", label: "Claude" },
-              { id: "bedrock", label: "Bedrock" },
-            ].map((opt) => (
+            {PROVIDER_OPTIONS.map((opt, i) => (
               <button
                 key={opt.id}
                 type="button"
+                title={opt.title}
                 onClick={() => { setProvider(opt.id); localStorage.setItem("llm_provider", opt.id) }}
                 style={{
                   padding: "5px 12px", fontSize: 12, fontWeight: 500,
                   border: "none", cursor: "pointer", fontFamily: "var(--font)",
                   background: provider === opt.id ? "var(--accent)" : "var(--bg-input)",
                   color: provider === opt.id ? "#fff" : "var(--text-secondary)",
-                  borderRight: opt.id === "anthropic" ? "1px solid var(--border)" : "none",
+                  borderRight: i < PROVIDER_OPTIONS.length - 1 ? "1px solid var(--border)" : "none",
                 }}
               >
                 {opt.label}
@@ -292,6 +525,7 @@ export function PromptStudioPage() {
       <div style={{ display: "flex", gap: 4, marginBottom: 16, borderBottom: "1px solid var(--border)" }}>
         {[
           { key: "generator", label: "Generator", icon: Sparkles },
+          { key: "execute", label: "Execute", icon: Play },
           { key: "history", label: "History", icon: HistoryIcon },
         ].map(({ key, label, icon: Icon }) => (
           <button
@@ -541,11 +775,11 @@ export function PromptStudioPage() {
                         <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 8 }}>
                           {variant.prompt_text.length} chars
                         </div>
-                        <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                        <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
                           <button
                             onClick={() => handleCopy(variant)}
                             style={{
-                              flex: 1, padding: "6px 10px", fontSize: 11, fontWeight: 500,
+                              flex: 1, padding: "6px 8px", fontSize: 11, fontWeight: 500,
                               background: isCopied ? "var(--success-subtle)" : "var(--bg-hover)",
                               color: isCopied ? "var(--success)" : "var(--text-secondary)",
                               border: "1px solid var(--border)", borderRadius: "var(--radius)",
@@ -559,7 +793,7 @@ export function PromptStudioPage() {
                             onClick={() => handleSelect(variant)}
                             disabled={isSelected}
                             style={{
-                              flex: 1, padding: "6px 10px", fontSize: 11, fontWeight: 500,
+                              flex: 1, padding: "6px 8px", fontSize: 11, fontWeight: 500,
                               background: isSelected ? "var(--accent-subtle)" : "var(--accent)",
                               color: isSelected ? "var(--accent)" : "#fff",
                               border: "none", borderRadius: "var(--radius)",
@@ -570,6 +804,19 @@ export function PromptStudioPage() {
                             {isSelected ? "Selected" : "Select"}
                           </button>
                         </div>
+                        <button
+                          onClick={() => tryInExecute(variant.prompt_text)}
+                          title="Open in Execute tab to test this prompt against an LLM"
+                          style={{
+                            width: "100%", padding: "6px 8px", fontSize: 11, fontWeight: 500,
+                            background: "var(--bg-hover)", color: "var(--accent)",
+                            border: "1px solid var(--accent)", borderRadius: "var(--radius)",
+                            cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+                            fontFamily: "var(--font)", marginBottom: 8,
+                          }}
+                        >
+                          <Play size={12} /> Try in Execute
+                        </button>
                         <button
                           onClick={() => toggleTechniques(variant.variant_id)}
                           style={{
@@ -636,6 +883,171 @@ export function PromptStudioPage() {
         </>
       )}
 
+      {/* ── Execute Tab — playground with streaming + tools ── */}
+      {activeTab === "execute" && (
+        <>
+          {/* System Prompt section */}
+          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 20, marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <label style={labelStyle}>System Prompt</label>
+              {executeConversation.length > 0 && (
+                <button
+                  onClick={clearConversation}
+                  style={{
+                    fontSize: 11, color: "var(--text-muted)", background: "transparent",
+                    border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 4,
+                    fontFamily: "var(--font)",
+                  }}
+                >
+                  <Trash2 size={12} /> Clear conversation
+                </button>
+              )}
+            </div>
+            <textarea
+              value={executeSystemPrompt}
+              onChange={(e) => setExecuteSystemPrompt(e.target.value)}
+              placeholder="Paste a prompt here, or click 'Try in Execute' on a variant in the Generator tab..."
+              rows={6}
+              style={{ ...inputStyle, resize: "vertical", fontFamily: "ui-monospace, monospace", fontSize: 12 }}
+              disabled={executeConversation.length > 0}
+            />
+            {executeConversation.length > 0 && (
+              <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
+                System prompt locked while a conversation is active. Click "Clear conversation" to edit.
+              </div>
+            )}
+
+            {/* Advanced options */}
+            <div style={{ marginTop: 12 }}>
+              <button
+                type="button"
+                onClick={() => setExecuteAdvancedOpen(!executeAdvancedOpen)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 6,
+                  fontSize: 12, fontWeight: 600, color: "var(--text-secondary)",
+                  background: "transparent", border: "none", cursor: "pointer",
+                  padding: "4px 0", fontFamily: "var(--font)",
+                }}
+              >
+                {executeAdvancedOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                Advanced options
+              </button>
+              {executeAdvancedOpen && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 10, padding: 12, background: "var(--bg-input)", borderRadius: "var(--radius)" }}>
+                  <div>
+                    <label style={{ ...labelStyle, fontSize: 11 }}>Temperature: {executeTemperature.toFixed(2)}</label>
+                    <input
+                      type="range" min="0" max="1" step="0.05"
+                      value={executeTemperature}
+                      onChange={(e) => setExecuteTemperature(parseFloat(e.target.value))}
+                      style={{ width: "100%" }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ ...labelStyle, fontSize: 11 }}>Max tokens: {executeMaxTokens}</label>
+                    <input
+                      type="range" min="256" max="8192" step="256"
+                      value={executeMaxTokens}
+                      onChange={(e) => setExecuteMaxTokens(parseInt(e.target.value))}
+                      style={{ width: "100%" }}
+                    />
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 18 }}>
+                    <input
+                      type="checkbox" id="enable-tools"
+                      checked={executeEnableTools}
+                      onChange={(e) => setExecuteEnableTools(e.target.checked)}
+                    />
+                    <label htmlFor="enable-tools" style={{ fontSize: 12, color: "var(--text-secondary)", cursor: "pointer" }}>
+                      Enable web tools (Firecrawl)
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Conversation panel */}
+          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 20, marginBottom: 16, minHeight: 300 }}>
+            {executeConversation.length === 0 && !executeStreaming && (
+              <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
+                No conversation yet. Type a message below and hit Send to start.
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {executeConversation.map((turn, i) => (
+                <ChatBubble key={i} turn={turn} />
+              ))}
+            </div>
+            <div ref={executeChatEndRef} />
+          </div>
+
+          {/* Error */}
+          {executeError && (
+            <div style={{
+              padding: "8px 12px", marginBottom: 12,
+              background: "var(--danger-subtle)", color: "var(--danger)",
+              fontSize: 12, borderRadius: "var(--radius)",
+            }}>
+              {executeError}
+            </div>
+          )}
+
+          {/* Chat input */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+            <textarea
+              value={executeChatInput}
+              onChange={(e) => setExecuteChatInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault()
+                  sendChatMessage()
+                }
+              }}
+              placeholder={executeSystemPrompt ? "Type your message... (Enter to send, Shift+Enter for newline)" : "Add a system prompt above first..."}
+              rows={2}
+              disabled={executeStreaming || !executeSystemPrompt.trim()}
+              style={{ ...inputStyle, flex: 1, resize: "vertical", fontFamily: "var(--font)" }}
+            />
+            <button
+              onClick={sendChatMessage}
+              disabled={executeStreaming || !executeChatInput.trim() || !executeSystemPrompt.trim()}
+              style={{
+                padding: "10px 20px", fontSize: 13, fontWeight: 600,
+                background: executeStreaming || !executeChatInput.trim() || !executeSystemPrompt.trim()
+                  ? "var(--bg-hover)" : "var(--accent)",
+                color: executeStreaming || !executeChatInput.trim() || !executeSystemPrompt.trim()
+                  ? "var(--text-muted)" : "#fff",
+                border: "none", borderRadius: "var(--radius)",
+                cursor: executeStreaming || !executeChatInput.trim() || !executeSystemPrompt.trim()
+                  ? "not-allowed" : "pointer",
+                display: "flex", alignItems: "center", gap: 6, fontFamily: "var(--font)",
+              }}
+            >
+              {executeStreaming ? (
+                <><RefreshCw size={14} style={{ animation: "ps-spin 1s linear infinite" }} /> Streaming</>
+              ) : (
+                <><Send size={14} /> Send</>
+              )}
+            </button>
+          </div>
+
+          {/* Cumulative stats */}
+          {executeConversation.length > 0 && (
+            <div style={{ display: "flex", gap: 16, fontSize: 11, color: "var(--text-muted)", padding: "8px 12px", background: "var(--bg-input)", borderRadius: "var(--radius)" }}>
+              <span>Turns: {Math.floor(executeConversation.length / 2)}</span>
+              <span>Total in: {executeConversation.reduce((a, t) => a + (t.tokens_in || 0), 0)} tok</span>
+              <span>Total out: {executeConversation.reduce((a, t) => a + (t.tokens_out || 0), 0)} tok</span>
+              <span>Total cost: ${executeConversation.reduce((a, t) => a + (t.cost_usd || 0), 0).toFixed(4)}</span>
+              <span>Provider: {provider}</span>
+              {executeEnableTools && <span style={{ color: "var(--accent)" }}>🔍 Tools enabled</span>}
+            </div>
+          )}
+
+          <style>{`@keyframes ps-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+        </>
+      )}
+
       {/* ── History Tab ───────────────────────────────── */}
       {activeTab === "history" && (
         <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 20 }}>
@@ -690,6 +1102,108 @@ export function PromptStudioPage() {
       <style>{`
         @keyframes ps-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
       `}</style>
+    </div>
+  )
+}
+
+// ── Chat bubble for the Execute tab ─────────────────
+function ChatBubble({ turn }: { turn: ChatTurn }) {
+  const isUser = turn.role === "user"
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start" }}>
+      <div style={{
+        maxWidth: "85%",
+        padding: "10px 14px",
+        borderRadius: "var(--radius)",
+        background: isUser ? "var(--accent-subtle)" : "var(--bg-input)",
+        border: `1px solid ${isUser ? "var(--accent)" : "var(--border)"}`,
+        fontSize: 13, lineHeight: 1.55, color: "var(--text-primary)",
+        wordBreak: "break-word",
+      }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: "var(--text-muted)", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
+          {isUser ? "You" : "Assistant"}
+        </div>
+
+        {/* Tool calls (assistant only) */}
+        {!isUser && turn.tool_calls && turn.tool_calls.length > 0 && (
+          <div style={{ marginBottom: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+            {turn.tool_calls.map((tc) => (
+              <ToolCallCard key={tc.id} tool={tc} />
+            ))}
+          </div>
+        )}
+
+        {/* Text content */}
+        {turn.text ? (
+          isUser ? (
+            <div style={{ whiteSpace: "pre-wrap" }}>{turn.text}</div>
+          ) : (
+            <MarkdownRenderer content={turn.text} />
+          )
+        ) : (
+          !isUser && <div style={{ color: "var(--text-muted)", fontSize: 11, fontStyle: "italic" }}>Streaming…</div>
+        )}
+
+        {/* Per-turn stats (assistant only) */}
+        {!isUser && turn.tokens_out !== undefined && (
+          <div style={{ marginTop: 8, display: "flex", gap: 12, fontSize: 10, color: "var(--text-muted)" }}>
+            <span>{turn.tokens_in || 0}→{turn.tokens_out || 0} tok</span>
+            <span>${(turn.cost_usd || 0).toFixed(4)}</span>
+            <span>{turn.latency_ms || 0}ms</span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ToolCallCard({ tool }: { tool: ToolCall }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{
+      border: "1px solid var(--border)",
+      borderRadius: "var(--radius)",
+      background: "var(--bg-card)",
+      fontSize: 11,
+    }}>
+      <button
+        onClick={() => setOpen(!open)}
+        style={{
+          width: "100%", padding: "6px 10px", display: "flex", alignItems: "center", gap: 6,
+          background: "transparent", border: "none", cursor: "pointer",
+          color: "var(--text-secondary)", fontFamily: "var(--font)", fontSize: 11,
+        }}
+      >
+        {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+        <Search size={11} />
+        <span style={{ fontWeight: 600 }}>{tool.name}</span>
+        {tool.input && (
+          <span style={{
+            fontFamily: "ui-monospace, monospace", color: "var(--text-muted)",
+            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 320,
+          }}>
+            ({tool.input.query || tool.input.url || JSON.stringify(tool.input).slice(0, 40)})
+          </span>
+        )}
+        <span style={{ marginLeft: "auto", color: tool.status === "running" ? "var(--accent)" : "var(--success)" }}>
+          {tool.status === "running" ? "running…" : `✓ ${tool.result_chars || 0} chars`}
+        </span>
+      </button>
+      {open && tool.result_preview && (
+        <div style={{
+          padding: "8px 12px", borderTop: "1px solid var(--border)",
+          fontSize: 11, fontFamily: "ui-monospace, monospace",
+          color: "var(--text-secondary)", whiteSpace: "pre-wrap",
+          maxHeight: 200, overflowY: "auto",
+        }}>
+          {tool.result_preview}
+          {tool.result_chars && tool.result_chars > (tool.result_preview?.length || 0) && (
+            <div style={{ marginTop: 6, fontStyle: "italic", color: "var(--text-muted)" }}>
+              … truncated ({tool.result_chars} total chars)
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

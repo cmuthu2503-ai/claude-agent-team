@@ -1,8 +1,17 @@
 """Agent executor — bridges the agent system with the orchestrator.
 
-Supports two LLM providers:
-  - "anthropic": direct Anthropic API (per-agent model from YAML)
-  - "bedrock":   Amazon Bedrock (all agents use Claude Sonnet 4)
+Supports five LLM providers (plus back-compat aliases):
+  - "anthropic_opus":   direct Anthropic API, all agents forced to Claude Opus 4.6
+  - "anthropic_sonnet": direct Anthropic API, all agents forced to Claude Sonnet 4.6
+  - "bedrock":          Amazon Bedrock, all agents forced to Claude Sonnet 4
+  - "openai_gpt5":      OpenAI Chat Completions API, all agents on GPT-5
+  - "openai_o3":        OpenAI Chat Completions API, all agents on o3 (reasoning)
+
+Legacy alias:
+  - "anthropic":        maps to "anthropic_sonnet" (per-agent YAML model behavior is
+                        no longer exposed in the UI but we still accept this value
+                        on persisted rows — it resolves to the direct Anthropic
+                        client with each agent's YAML-configured model).
 """
 
 import os
@@ -18,15 +27,37 @@ from src.tools.registry import ToolRegistry
 
 logger = structlog.get_logger()
 
-# Bedrock model ID for Claude Sonnet 4 — used for ALL agents in bedrock mode
+# ── Model IDs (all overridable via env) ─────────────
+# Bedrock: Claude Sonnet 4 for ALL agents in bedrock mode
 BEDROCK_SONNET_4_MODEL_ID = os.getenv(
     "BEDROCK_MODEL_ID",
     "anthropic.claude-sonnet-4-20250514-v1:0",
 )
+# Anthropic direct: forced model IDs when opus/sonnet buttons are used
+ANTHROPIC_OPUS_MODEL_ID = os.getenv("ANTHROPIC_OPUS_MODEL_ID", "claude-opus-4-6")
+ANTHROPIC_SONNET_MODEL_ID = os.getenv("ANTHROPIC_SONNET_MODEL_ID", "claude-sonnet-4-6")
+# OpenAI: forced model IDs when the GPT / reasoning buttons are used.
+# Defaults point at the latest models visible on OpenAI's API (as of 2026-04-08):
+#   gpt-5.4   — latest GPT-5 flagship (released 2026-03-05)
+#   o4-mini   — latest o-series reasoning model (released 2025-04-16)
+# Both are env-overridable so you can pin a specific date-stamped variant, switch
+# to gpt-5.4-pro, or roll back to plain 'gpt-5' / 'o3' without touching code.
+OPENAI_GPT5_MODEL_ID = os.getenv("OPENAI_GPT5_MODEL_ID", "gpt-5.4")
+OPENAI_O3_MODEL_ID = os.getenv("OPENAI_O3_MODEL_ID", "o4-mini")
+
+# Known-valid provider strings (accepted by the API layer)
+VALID_PROVIDERS: frozenset[str] = frozenset({
+    "anthropic",          # legacy alias — resolves to anthropic_sonnet
+    "anthropic_opus",
+    "anthropic_sonnet",
+    "bedrock",
+    "openai_gpt5",
+    "openai_o3",
+})
 
 
 class AgentSystemExecutor:
-    """Executes agent tasks using real LLM calls via Anthropic SDK or Amazon Bedrock."""
+    """Executes agent tasks via Anthropic direct, Amazon Bedrock, or OpenAI."""
 
     def __init__(self, config: ConfigLoader) -> None:
         self.config = config
@@ -57,6 +88,24 @@ class AgentSystemExecutor:
         else:
             self.bedrock_client = None
             logger.info("bedrock_disabled", reason="AWS credentials not set")
+
+        # ── OpenAI client ────────────────────────────
+        openai_key = os.getenv("OPENAI_API_KEY", "")
+        if not openai_key or openai_key.startswith("sk-xxxxx"):
+            self.openai_client: Any = None
+            logger.info("openai_disabled", reason="OPENAI_API_KEY not set")
+        else:
+            try:
+                from openai import AsyncOpenAI  # local import so openai stays optional
+                self.openai_client = AsyncOpenAI(api_key=openai_key)
+                logger.info(
+                    "openai_client_initialized",
+                    gpt5_model=OPENAI_GPT5_MODEL_ID,
+                    o3_model=OPENAI_O3_MODEL_ID,
+                )
+            except Exception as e:
+                self.openai_client = None
+                logger.warning("openai_client_init_failed", error=str(e))
 
         # Backward compat: some legacy code may read self.client
         self.client = self.anthropic_client
@@ -95,6 +144,7 @@ class AgentSystemExecutor:
             agents=len(agents),
             anthropic_available=self.anthropic_client is not None,
             bedrock_available=self.bedrock_client is not None,
+            openai_available=self.openai_client is not None,
             tools=len(self.tool_registry.list_tools()),
         )
 
@@ -102,9 +152,23 @@ class AgentSystemExecutor:
         """Pick the (client, model_override) tuple for the requested provider.
 
         Returns (None, None) if no client is available — caller falls back to mock.
-        For 'bedrock', model_override forces all agents to Sonnet 4 on Bedrock.
-        For 'anthropic', model_override is None (agents use their YAML model).
+        All non-legacy providers force a single model for EVERY agent. The legacy
+        'anthropic' alias falls back to each agent's YAML-configured model.
         """
+        if provider == "anthropic_opus":
+            if not self.anthropic_client:
+                raise RuntimeError(
+                    "Claude Opus provider requested but ANTHROPIC_API_KEY is not configured."
+                )
+            return self.anthropic_client, ANTHROPIC_OPUS_MODEL_ID
+
+        if provider == "anthropic_sonnet":
+            if not self.anthropic_client:
+                raise RuntimeError(
+                    "Claude Sonnet provider requested but ANTHROPIC_API_KEY is not configured."
+                )
+            return self.anthropic_client, ANTHROPIC_SONNET_MODEL_ID
+
         if provider == "bedrock":
             if not self.bedrock_client:
                 raise RuntimeError(
@@ -112,12 +176,27 @@ class AgentSystemExecutor:
                     "Set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION."
                 )
             return self.bedrock_client, BEDROCK_SONNET_4_MODEL_ID
-        # default: anthropic
+
+        if provider == "openai_gpt5":
+            if not self.openai_client:
+                raise RuntimeError(
+                    "OpenAI provider requested but OPENAI_API_KEY is not configured."
+                )
+            return self.openai_client, OPENAI_GPT5_MODEL_ID
+
+        if provider == "openai_o3":
+            if not self.openai_client:
+                raise RuntimeError(
+                    "OpenAI provider requested but OPENAI_API_KEY is not configured."
+                )
+            return self.openai_client, OPENAI_O3_MODEL_ID
+
+        # Legacy 'anthropic' alias — use per-agent YAML model with the direct client
         return self.anthropic_client, None
 
     async def execute(
         self, agent_id: str, request_id: str, inputs: dict[str, Any],
-        provider: str = "anthropic",
+        provider: str = "anthropic_sonnet",
     ) -> dict[str, Any]:
         """Execute an agent task with real LLM calls.
 

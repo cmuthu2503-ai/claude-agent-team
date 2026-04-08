@@ -64,6 +64,16 @@ class ApiClient {
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`)
     return res.json()
   }
+
+  async delete<T = any>(path: string): Promise<T> {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: "DELETE",
+      headers: this.headers(),
+    })
+    if (res.status === 401) { this.handle401(); throw new Error("Session expired") }
+    if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`)
+    return res.json()
+  }
 }
 
 export const api = new ApiClient()
