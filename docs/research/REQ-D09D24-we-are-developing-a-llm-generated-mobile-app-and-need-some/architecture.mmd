@@ -1,0 +1,66 @@
+graph TD
+    subgraph "LLM Code Generator"
+        A[LLM Generates<br/>Mobile Screen Code]
+    end
+
+    subgraph "L1: Static Code Analysis"
+        B[LLM Code Reviewer<br/>+ Android Lint<br/>+ SwiftLint]
+        B1{Anti-patterns<br/>detected?}
+    end
+
+    subgraph "L2: Runtime Rule-Based Scan"
+        C[Appium Test Runner]
+        C1[Set Font Scale<br/>1.0x / 1.3x / 1.5x / 2.0x]
+        C2[Axe DevTools Mobile<br/>axeScan]
+        C3[Violation Report<br/>WCAG Rules]
+    end
+
+    subgraph "L3: Visual-Semantic AI Analysis"
+        D[Screenshot Capture<br/>per scale level]
+        D1[Percy / Applitools<br/>Visual Diff]
+        D2[Multimodal LLM<br/>GPT-4o / Claude]
+        D3[Structured Violation<br/>Output]
+    end
+
+    subgraph "Correction Loop"
+        E[LLM Generates<br/>Code Fixes]
+        E1[Re-build App]
+        E2{Violation Score<br/>Decreased?}
+    end
+
+    subgraph "CI/CD Pipeline"
+        F[PR Comment<br/>with Results]
+        F1[Merge Gate<br/>Pass / Warn / Block]
+    end
+
+    A --> B
+    B --> B1
+    B1 -->|Yes: Fix suggestions| F
+    B1 -->|No: Pass| C
+
+    C --> C1
+    C1 --> C2
+    C2 --> C3
+    C3 --> D
+
+    C1 --> D
+    D --> D1
+    D --> D2
+    D1 --> D3
+    D2 --> D3
+
+    D3 --> E
+    C3 --> E
+    E --> E1
+    E1 --> E2
+    E2 -->|Yes: Accept fix| F
+    E2 -->|No: Reject fix| F
+
+    F --> F1
+
+    style A fill:#4A90D9,color:#fff
+    style B fill:#F5A623,color:#fff
+    style C2 fill:#7B68EE,color:#fff
+    style D2 fill:#E74C3C,color:#fff
+    style E fill:#2ECC71,color:#fff
+    style F1 fill:#34495E,color:#fff
