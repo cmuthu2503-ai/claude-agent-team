@@ -1,22 +1,40 @@
-import { Bell, LayoutDashboard, History, Rocket, Users, DollarSign, Shield, Sun, Moon, Wand2 } from "lucide-react"
+import { Bell, LayoutDashboard, History, Rocket, Users, DollarSign, Shield, Sun, Moon, Wand2, Workflow } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 import { useAuthStore } from "../../stores/auth"
 import { useThemeStore } from "../../stores/theme"
 import { ThemeSelector } from "../ui/ThemeSelector"
 
-const navItems = [
-  { path: "/", label: "Command Center", icon: LayoutDashboard },
-  { path: "/prompts", label: "Prompt Studio", icon: Wand2 },
-  { path: "/history", label: "History", icon: History },
-  { path: "/releases", label: "Releases", icon: Rocket },
-  { path: "/team", label: "Team", icon: Users },
-  { path: "/cost", label: "Cost", icon: DollarSign },
+interface NavItem {
+  path: string
+  label: string
+  icon: any
+  adminOnly?: boolean
+}
+
+// Order: daily drivers first, then review, then manage, then admin.
+const navItems: NavItem[] = [
+  { path: "/",         label: "Command Center", icon: LayoutDashboard },
+  { path: "/prompts",  label: "Prompt Studio",  icon: Wand2 },
+  { path: "/diagrams", label: "Diagrams",       icon: Workflow },
+  { path: "/history",  label: "History",        icon: History },
+  { path: "/releases", label: "Releases",       icon: Rocket },
+  { path: "/team",     label: "Team",           icon: Users },
+  { path: "/cost",     label: "Cost",           icon: DollarSign },
+  { path: "/users",    label: "Users",          icon: Shield, adminOnly: true },
 ]
+
+// Every label wrapped in this <span> has a guaranteed no-wrap constraint,
+// independent of any Tailwind preflight or parent flex behavior.
+const noWrapSpan = (text: string) => (
+  <span style={{ whiteSpace: "nowrap", display: "inline-block" }}>{text}</span>
+)
 
 export function Navbar() {
   const location = useLocation()
   const { user, logout } = useAuthStore()
   const { mode, toggleMode } = useThemeStore()
+
+  const visibleItems = navItems.filter((item) => !item.adminOnly || user?.role === "admin")
 
   return (
     <header
@@ -24,106 +42,145 @@ export function Navbar() {
         background: "var(--bg-secondary)",
         borderBottom: "1px solid var(--border)",
         fontFamily: "var(--font)",
+        // NOTE: no overflow rule here on purpose. `overflow-x: auto` creates a
+        // clipping context that would cut off the ThemeSelector dropdown which
+        // sits absolutely-positioned below the theme button. The flex items
+        // already have flex:"0 0 auto" + whiteSpace:"nowrap" so they can't wrap.
+        whiteSpace: "nowrap",
+        position: "relative",
+        zIndex: 10,
       }}
     >
-      <div style={{ maxWidth: "1280px", margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "28px" }}>
-          <Link to="/" style={{ fontSize: "18px", fontWeight: 700, color: "var(--accent)", textDecoration: "none" }}>
-            Agent Team
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "nowrap",
+          alignItems: "center",
+          justifyContent: "space-between",
+          maxWidth: 1400,
+          margin: "0 auto",
+          padding: "10px 20px",
+          gap: 16,
+          minHeight: 52,
+        }}
+      >
+        {/* ── Left: logo + nav items (all siblings, no nested wrappers) ── */}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "nowrap",
+            alignItems: "center",
+            flex: "0 0 auto",
+          }}
+        >
+          <Link
+            to="/"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 17,
+              fontWeight: 700,
+              color: "var(--accent)",
+              textDecoration: "none",
+              whiteSpace: "nowrap",
+              flex: "0 0 auto",
+              marginRight: 20,
+            }}
+          >
+            <span style={{ color: "var(--accent)", display: "inline-block" }}>◆</span>
+            {noWrapSpan("Agent Team")}
           </Link>
-          <nav style={{ display: "flex", gap: "4px" }}>
-            {navItems.map(({ path, label, icon: Icon }) => {
-              const active = location.pathname === path
-              return (
-                <Link
-                  key={path}
-                  to={path}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    padding: "6px 12px",
-                    borderRadius: "var(--radius)",
-                    fontSize: "13px",
-                    fontWeight: 500,
-                    textDecoration: "none",
-                    color: active ? "var(--accent)" : "var(--text-secondary)",
-                    background: active ? "var(--accent-subtle)" : "transparent",
-                  }}
-                >
-                  <Icon size={15} />
-                  {label}
-                </Link>
-              )
-            })}
-            {user?.role === "admin" && (
+
+          {visibleItems.map(({ path, label, icon: Icon }) => {
+            const active = location.pathname === path
+            return (
               <Link
-                to="/users"
+                key={path}
+                to={path}
                 style={{
-                  display: "flex",
+                  display: "inline-flex",
                   alignItems: "center",
-                  gap: "6px",
-                  padding: "6px 12px",
+                  gap: 6,
+                  padding: "6px 10px",
                   borderRadius: "var(--radius)",
-                  fontSize: "13px",
+                  fontSize: 13,
                   fontWeight: 500,
                   textDecoration: "none",
-                  color: location.pathname === "/users" ? "var(--accent)" : "var(--text-secondary)",
-                  background: location.pathname === "/users" ? "var(--accent-subtle)" : "transparent",
+                  whiteSpace: "nowrap",
+                  flex: "0 0 auto",
+                  color: active ? "var(--accent)" : "var(--text-secondary)",
+                  background: active ? "var(--accent-subtle)" : "transparent",
+                  transition: "all 0.15s",
+                  marginRight: 2,
                 }}
               >
-                <Shield size={15} />
-                Users
+                <Icon size={14} style={{ flexShrink: 0 }} />
+                {noWrapSpan(label)}
               </Link>
-            )}
-          </nav>
+            )
+          })}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          {/* Light/Dark Mode Toggle */}
+
+        {/* ── Right: controls ── */}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "nowrap",
+            alignItems: "center",
+            gap: 10,
+            flex: "0 0 auto",
+          }}
+        >
           <button
             onClick={toggleMode}
             title={mode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             style={{
-              display: "flex",
+              display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",
-              width: 36,
-              height: 36,
+              width: 30,
+              height: 30,
               borderRadius: "var(--radius)",
               background: "var(--bg-hover)",
               border: "1px solid var(--border)",
               color: mode === "dark" ? "var(--warning)" : "var(--accent)",
               cursor: "pointer",
-              transition: "all 0.2s",
+              flex: "0 0 auto",
             }}
           >
-            {mode === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            {mode === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </button>
-          <ThemeSelector />
+
+          <div style={{ flex: "0 0 auto" }}>
+            <ThemeSelector />
+          </div>
+
           <button
             style={{
               position: "relative",
-              padding: "6px",
+              padding: 6,
               background: "transparent",
               border: "none",
               color: "var(--text-secondary)",
               cursor: "pointer",
+              flex: "0 0 auto",
             }}
           >
             <Bell size={17} />
             <span
               style={{
                 position: "absolute",
-                top: "-2px",
-                right: "-2px",
-                width: "16px",
-                height: "16px",
-                borderRadius: "999px",
+                top: -2,
+                right: -2,
+                width: 16,
+                height: 16,
+                borderRadius: 999,
                 background: "var(--danger)",
                 color: "#fff",
-                fontSize: "9px",
+                fontSize: 9,
                 fontWeight: 700,
-                display: "flex",
+                display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
               }}
@@ -131,27 +188,45 @@ export function Navbar() {
               0
             </span>
           </button>
-          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>{user?.username}</span>
+
+          <span
+            style={{
+              fontSize: 13,
+              color: "var(--text-secondary)",
+              whiteSpace: "nowrap",
+              flex: "0 0 auto",
+              display: "inline-block",
+            }}
+          >
+            {user?.username}
+          </span>
+
           <span
             style={{
               padding: "2px 8px",
               borderRadius: "var(--radius)",
               background: "var(--accent-subtle)",
               color: "var(--accent)",
-              fontSize: "11px",
+              fontSize: 11,
               fontWeight: 500,
+              whiteSpace: "nowrap",
+              flex: "0 0 auto",
+              display: "inline-block",
             }}
           >
             {user?.role}
           </span>
+
           <button
             onClick={logout}
             style={{
-              fontSize: "12px",
+              fontSize: 12,
               color: "var(--text-muted)",
               background: "transparent",
               border: "none",
               cursor: "pointer",
+              flex: "0 0 auto",
+              whiteSpace: "nowrap",
             }}
           >
             Logout

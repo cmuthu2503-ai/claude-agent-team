@@ -12,6 +12,7 @@ import { ReleasesPage } from "./pages/Releases"
 import { TeamStatusPage } from "./pages/TeamStatus"
 import { CostDashboardPage } from "./pages/CostDashboard"
 import { UserManagementPage } from "./pages/UserManagement"
+import { MermaidViewerPage } from "./pages/MermaidViewer"
 import "./themes.css"
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -59,6 +60,7 @@ function App() {
                     <Route path="/releases" element={<ReleasesPage />} />
                     <Route path="/team" element={<TeamStatusPage />} />
                     <Route path="/cost" element={<CostDashboardPage />} />
+                    <Route path="/diagrams" element={<MermaidViewerPage />} />
                     <Route path="/users" element={<UserManagementPage />} />
                   </Routes>
                 </Layout>
