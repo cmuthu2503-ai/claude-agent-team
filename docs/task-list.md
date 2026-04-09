@@ -7,9 +7,9 @@
 
 | Field | Value |
 |-------|-------|
-| Document Version | 1.0 |
+| Document Version | 1.1 |
 | Created Date | 2026-04-05 |
-| Last Updated | 2026-04-05 |
+| Last Updated | 2026-04-08 |
 | Status | Draft |
 | Product Owner | Chandramouli |
 
@@ -613,3 +613,95 @@ P0: Project Setup
 | **M6: Docker Deploys** | After P6 | `make staging` deploys → smoke tests pass → `make prod` promotes → health checks pass → `make demo` starts with seed data. Auto-rollback verified. |
 | **M7: Notifications Work** | After P7 | All 25 events fire (including budget alerts), bell/toast work, error UX shows in UI, weekly report generates with cost section, health endpoint returns detailed status, rate limiting enforced. |
 | **M8: Release Ready** | After P8 | All tests pass ≥80% coverage (auth, cost, security tests included). Cassette-based integration tests deterministic. Evaluation framework scores agent outputs. All 4 Docker environments verified. Deployment pipeline works. UI E2E tests pass. Docs up to date. |
+
+---
+
+## Per-Agent Dynamic Model Assignment — Detailed Task Breakdown
+
+Introduces a first-class Model Catalog, per-agent model overrides persisted to SQLite, Ollama support for local LLMs, a universal ReAct-style tool adapter that makes any model tool-capable through prompt engineering, and a Team page UI for admin-only dynamic model assignment. Also fixes a latent singleton-mutation concurrency race in `src/agents/executor.py`.
+
+Reference design: `docs/prd-per-agent-model-assignment.md`
+Implementation plan: `C:\Users\chand\.claude\plans\cryptic-knitting-platypus.md`
+
+### Phase 1: Foundations (PR-1) — catalog, resolver, client pool, ReAct adapter, concurrency fix
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PAM-01 | Create `config/models.yaml` | Initial catalog with Claude Opus/Sonnet, Bedrock Sonnet 4, OpenAI GPT-5.4, o4-mini. Each entry: provider_type, model_id, api_key_env, base_url, tool_calling_mode, tier, pricing_per_million. Includes `default_model` + `legacy_provider_aliases` map. Ollama entry added in PAM-23 (PR-4). | S | — | `[ ]` |
+| PAM-02 | Create `src/models/catalog.py` | `ModelDef` + `ModelCatalog` Pydantic models. `load(path)`, `get(id)`, `list_all()`, `resolve_legacy_provider(str)`, `find_by_vendor_id(str)`. Schema validation on load. | M | PAM-01 | `[ ]` |
+| PAM-03 | Create `src/agents/client_pool.py` | `LLMClientPool` with lazy/cached clients keyed by `(provider_type, base_url)`. Eager Anthropic direct; lazy Bedrock; per-base_url cache for openai_compat (cloud and Ollama are separate instances). | M | PAM-02 | `[ ]` |
+| PAM-04 | Create `src/agents/tool_adapter.py` | `PromptedToolAdapter` — ReAct-style tool use for models without native function calling. Methods: `inject_instructions(system_prompt, tools)`, `parse_tool_calls(text_response)` (tolerant regex/XML parser, handles malformed input gracefully, recognizes markdown code block fallbacks), `format_tool_result(call, result)`. | M | PAM-02 | `[ ]` |
+| PAM-05 | Create `src/agents/model_resolver.py` | `ModelResolver.resolve(agent_id, request_provider) -> ResolvedModel`. Three-layer chain: agent_model_overrides (PAM-09) → YAML default → catalog default. Returns `(client, vendor_model_id, model_def, resolution_source)`. | M | PAM-02, PAM-03 | `[ ]` |
+| PAM-06 | Refactor `src/agents/base.py` — kwarg threading (concurrency fix) | `BaseAgent.process_task()`, `_call_llm()`, `_call_anthropic()`, `_call_openai()` accept `llm_client`, `model`, `tool_calling_mode` as keyword arguments. No more `self.model` / `self._llm_client` reads during calls. Eliminates the singleton mutation race under concurrent load. ~30 LoC. | M | PAM-04 | `[ ]` |
+| PAM-07 | Refactor `src/agents/executor.py` | Replace `_resolve_provider()` with `_resolve_model_for_agent()` using catalog + resolver + client pool. Remove forced-model constants (moved to models.yaml). Remove the snapshot-and-restore mutation in `execute()`. Pass resolved values down via kwargs. Keep `VALID_PROVIDERS` derived from catalog for back-compat with old persisted Request.provider rows. | M | PAM-05, PAM-06 | `[ ]` |
+| PAM-08 | Unit tests (PR-1) | `test_model_catalog.py` (parse, alias resolution, lookup), `test_model_resolver.py` (precedence chain), `test_client_pool.py` (lazy + cached), `test_tool_adapter.py` (adversarial parsing: malformed XML, whitespace tolerance, markdown code block fallbacks, multiple calls per turn), `test_concurrency.py` (stress test: two concurrent execute() calls on same agent with different models, assert no cross-pollination). | M | PAM-07 | `[ ]` |
+
+### Phase 2: Persistence + API (PR-2)
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PAM-09 | Add `agent_model_overrides` table | Append DDL to `SCHEMA_SQL` in `src/state/sqlite_store.py` with `IF NOT EXISTS` (no migration). Schema: `agent_id TEXT PK, model_id TEXT NOT NULL, updated_at TIMESTAMP, updated_by TEXT`. | S | PAM-08 | `[ ]` |
+| PAM-10 | State layer CRUD | Add `get_agent_model_override`, `set_agent_model_override`, `delete_agent_model_override`, `list_agent_model_overrides`, `clear_all_agent_model_overrides` to `SQLiteStateStore` and abstract signatures in `src/state/base.py`. | S | PAM-09 | `[ ]` |
+| PAM-11 | Wire resolver to DB layer | Update `ModelResolver.resolve()` to query `state.get_agent_model_override()` as layer 1. Pass `state_store` into `AgentSystemExecutor` constructor from `src/main.py` lifespan. | S | PAM-10 | `[ ]` |
+| PAM-12 | Create `src/api/routes/models.py` | `GET /api/v1/models` (list catalog, all authenticated users), `POST /api/v1/models/reload` (admin-only, re-reads models.yaml). | S | PAM-11 | `[ ]` |
+| PAM-13 | Enrich `src/api/routes/agents.py` | `GET /api/v1/agents` returns `default_model`, `assigned_model`, `override_active`, `tool_count`. New endpoints: `PATCH /{agent_id}/model` (admin, body `{model_id}`, validates catalog membership, upserts), `DELETE /{agent_id}/model` (admin, clears override), `DELETE /model-overrides` (admin, bulk clear). Emits `agent.model_changed` event on PATCH. | M | PAM-10 | `[ ]` |
+| PAM-14 | Update `src/main.py` | Mount new models router. Pass `state_store` into `AgentSystemExecutor(...)` constructor (ordering: state store must initialize before executor in lifespan). | S | PAM-12, PAM-13 | `[ ]` |
+| PAM-15 | Migrate pricing in `src/core/token_tracker.py` | Read pricing from `config/models.yaml` first, fall back to `config/thresholds.yaml` for back-compat. Fix silent-$0 bug: log warning once per unknown model (dedup via `_warned_models: set`). | S | PAM-01 | `[ ]` |
+| PAM-16 | API integration tests | `test_agents_route_v2.py` (enriched GET, PATCH admin gate, validates model exists, DELETE, bulk DELETE), `test_models_route.py` (list endpoint, admin-only reload), `test_state_overrides.py` (CRUD on agent_model_overrides, bulk clear), `test_token_tracker_pricing.py` (load from models.yaml, dedup warnings). | M | PAM-14, PAM-15 | `[ ]` |
+
+### Phase 3: Frontend Team page (PR-3)
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PAM-17 | Create `frontend/src/stores/models.ts` | Zustand store: `models[]`, `agents[]`, `loading`, `error`. Actions: `fetchModels()`, `fetchAgents()`, `assignModel(agent_id, model_id)` (optimistic + PATCH + revert on error), `clearOverride(agent_id)`, `resetAll()`. Uses `api.patch` / `api.delete` from `src/lib/api.ts`. | S | PAM-16 | `[ ]` |
+| PAM-18 | Create `frontend/src/components/ui/ModelSelector.tsx` | Portal-based dropdown modeled after `ThemeSelector.tsx` (createPortal, rect-based positioning, click-outside handler, re-applies `data-theme` + `data-mode` attributes to portal wrapper for CSS var cascade). Props: `agentId, currentModelId, defaultModelId, overrideActive, isAdmin, onChange, onReset`. Groups models by tier + provider_type. Footer "Reset to default" link when override active. Read-only (no arrow) for non-admin users. | M | PAM-17 | `[ ]` |
+| PAM-19 | Update `frontend/src/pages/TeamStatus.tsx` | Replace static model badge (current lines ~117-129) with `<ModelSelector>`. Use `useModelsStore` for data. Add "Reset all model assignments" admin-only button at top with confirmation dialog. Optimistic updates with toast on success/failure. | M | PAM-18 | `[ ]` |
+| PAM-20 | Regenerate frontend API schema | Run `docker compose exec frontend npm run generate-types` to regenerate `frontend/src/api/schema.d.ts` from backend OpenAPI, picking up the new endpoints and enriched agent payload. | S | PAM-16 | `[ ]` |
+
+### Phase 4: CommandCenter cleanup + Ollama support (PR-4)
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PAM-21 | Remove provider row from `CommandCenter.tsx` | Delete the 5-button provider row (current lines ~341-369), the `PROVIDER_OPTIONS` constant, the `selectedProvider` state + `localStorage.setItem("llm_provider", ...)` persistence, and the `provider` field from the submit POST body. | S | PAM-20 | `[ ]` |
+| PAM-22 | Remove provider row from `PromptStudio.tsx` | Same cleanup — delete `PROVIDER_OPTIONS` and the corresponding UI. PromptStudio's chat uses whatever the Team page has configured. | S | PAM-20 | `[ ]` |
+| PAM-23 | Add `ollama-gemma` entry to `config/models.yaml` | `provider_type: openai_compat`, `model_id: gemma3:12b` (admin editable), `base_url: http://host.docker.internal:11434/v1`, `api_key_env: null`, `tool_calling_mode: prompted`, `tier: local`, `pricing_per_million: {input: 0.00, output: 0.00}`. | S | PAM-01 | `[ ]` |
+| PAM-24 | Add `extra_hosts` to all compose files | Add `extra_hosts: ["host.docker.internal:host-gateway"]` to backend service in `docker-compose.yml`, `docker-compose.staging.yml`, `docker-compose.prod.yml`, `docker-compose.demo.yml`. Required on Linux, harmless on Win/Mac. | S | — | `[ ]` |
+| PAM-25 | Friendly Ollama connection error | Catch `httpx.ConnectError` in the OpenAI call path (or the `AsyncOpenAI` wrapper) and surface a readable message: "Ollama not reachable at {base_url} — is `ollama serve` running on the host, and is `OLLAMA_HOST=0.0.0.0:11434` set?" | S | PAM-03 | `[ ]` |
+| PAM-26 | Create `docs/local-llms.md` | Ollama install guide, `OLLAMA_HOST=0.0.0.0:11434 ollama serve` requirement, `ollama pull gemma3:12b` (or other model) instructions, how the ReAct adapter makes any model tool-capable, troubleshooting (Linux networking, `extra_hosts`, cold-load delays). Link from CLAUDE.md. | M | PAM-23 | `[ ]` |
+
+### Phase 5: Cost migration + docs + verification (PR-5)
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PAM-27 | Update Cost Dashboard — "Free (local)" tier | `frontend/src/pages/CostDashboard.tsx` distinguishes `tier: local` rows as "Free (local)" in the model breakdown table. Requires the enriched agent/models payload. | S | PAM-19 | `[ ]` |
+| PAM-28 | Deprecation note in `config/thresholds.yaml` | Add comment at the top of the `cost.pricing` section indicating it is deprecated; `TokenTracker` now reads from `config/models.yaml` first but falls back here for back-compat. | S | PAM-15 | `[ ]` |
+| PAM-29 | Update `CLAUDE.md` | Add new "Model assignments" subsection under Architecture explaining: the model catalog, three-layer resolution chain, how to assign models via the Team page, how to add a new model (edit `config/models.yaml`, optional backend restart or `POST /models/reload`). Link to `docs/prd-per-agent-model-assignment.md` and `docs/local-llms.md`. | S | PAM-26 | `[ ]` |
+| PAM-30 | PRD created | `docs/prd-per-agent-model-assignment.md` — formal PRD with Document Information, Executive Summary, Goals, Functional Requirements (FR-001..FR-031), Non-Functional Requirements, Architecture, Success Metrics, Out of Scope, Open Questions, Phasing, Verification, Appendix. | S | — | `[x]` |
+| PAM-31 | Task list updated (this section) | Added "Per-Agent Dynamic Model Assignment — Detailed Task Breakdown" with 32 tasks (PAM-01..PAM-32) across 5 phases following the existing post-release subsection format. Document Information bumped to v1.1, Last Updated 2026-04-08. | S | — | `[x]` |
+| PAM-32 | End-to-end manual smoke test | Per `cryptic-knitting-platypus.md` Verification Plan: `make dev` → log in as admin → visit `/team` → assign `research_specialist → Gemma` → submit research request → verify `agent_executing model=gemma3:12b tool_mode=prompted` in logs, artifacts land in `docs/research/REQ-XXX-*`; assign `backend_specialist → Gemma` → submit feature request → verify ReAct adapter emits tool calls → files written, pytest runs; click reset on a pill → override cleared; log in as non-admin → confirm pills read-only; bulk reset all. | M | PAM-27 | `[ ]` |
+
+### Progress Summary
+
+| Phase | Tasks | Done | In Progress | Not Started |
+|-------|-------|------|-------------|-------------|
+| Phase 1: Foundations (PR-1) | 8 | 0 | 0 | 8 |
+| Phase 2: Persistence + API (PR-2) | 8 | 0 | 0 | 8 |
+| Phase 3: Frontend Team page (PR-3) | 4 | 0 | 0 | 4 |
+| Phase 4: CommandCenter + Ollama (PR-4) | 6 | 0 | 0 | 6 |
+| Phase 5: Cost + docs + verification (PR-5) | 6 | 2 | 0 | 4 |
+| **Total** | **32** | **2** | **0** | **30** |
+
+### Future Enhancements
+
+Tracked here so they don't get lost. **Not in current scope** (see PRD §7 "Out of Scope").
+
+| ID | Enhancement | Priority | Notes |
+|----|-------------|----------|-------|
+| FE-28 | Per-user model loadouts | Medium | Each user picks their own model assignment set. Much more complex DB (user_id × agent_id) and unclear semantics in multi-user workflows. |
+| FE-29 | Runtime Ollama auto-discovery | Medium | Poll `GET http://host.docker.internal:11434/api/tags` at backend startup to auto-populate the catalog from installed models. Zero YAML editing for new models. |
+| FE-30 | Per-call capability routing | Medium | Route tool calls and reasoning calls to different models within the same agent turn. Enables "reasoning on Gemma, tools on Sonnet" hybrid loops. |
+| FE-31 | PromptStudio first-class model picker | Medium | A proper model picker in PromptStudio that lists catalog entries (replacing the removed provider button row with a richer selector). |
+| FE-32 | Silent fallback retry on tool call failure | Low | If the prompted adapter fails to extract a tool call after N retries, automatically substitute the agent's YAML default model for that single subtask. |
+| FE-33 | Model health check endpoint | Low | `GET /api/v1/models/{id}/health` that probes each endpoint's reachability with a tiny request, cached for 60s. Surfaces red/green indicators in the Team page. |
+| FE-34 | Cost attribution breakdown by model loadout | Low | Show which model-assignment loadout was used for each historical request in the Cost Dashboard, enabling cost comparison across different mixes. |
+| FE-35 | Model assignment templates ("profiles") | Low | Save named loadout sets ("All Claude", "Cost-optimized hybrid", "Offline-only") as admin-manageable profiles, one-click apply to all agents. |
