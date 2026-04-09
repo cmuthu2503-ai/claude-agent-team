@@ -21,7 +21,7 @@ function markdownToHtml(md: string): string {
   html = html.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 
   // Code blocks (``` ... ```) — must be before other transformations
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => {
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, _lang, code) => {
     return `<pre style="background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;margin:8px 0;overflow-x:auto;font-size:12px;line-height:1.5"><code style="font-family:var(--font-mono);color:var(--text-primary)">${code.trim()}</code></pre>`
   })
 
@@ -96,7 +96,7 @@ function markdownToHtml(md: string): string {
   })
 
   // Ordered lists
-  html = html.replace(/^(\s*)(\d+)\. (.+)$/gm, (_match, indent, num, text) => {
+  html = html.replace(/^(\s*)(\d+)\. (.+)$/gm, (_match, _indent, num, text) => {
     const ml = 16
     return `<div style="margin:3px 0;padding-left:${ml}px"><span style="color:var(--text-muted);margin-right:6px;font-weight:500">${num}.</span>${text}</div>`
   })

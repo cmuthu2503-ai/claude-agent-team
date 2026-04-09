@@ -682,7 +682,6 @@ export function CommandCenterPage() {
 }
 
 function _eventMessage(type: string, data: any): string {
-  const name = data.display_name || data.agent_id || ""
   switch (type) {
     case "request.created":
       return `Request ${data.request_id} submitted`

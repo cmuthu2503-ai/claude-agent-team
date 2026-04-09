@@ -1,0 +1,87 @@
+# ──────────────────────────────────────────────────────────────────
+# .dockerignore — keep secrets, build artifacts, and noise out of
+# every image we build. Applies to ALL Dockerfile builds in this repo
+# regardless of which target stage (dev / prod) is being assembled.
+#
+# Defense in depth: even though Dockerfile.backend's prod stage uses
+# explicit `COPY src/ src/` + `COPY config/ config/` (so it can't
+# accidentally include .env), the dev stage uses `COPY . .` which
+# WOULD pull in everything. This file protects both.
+# ──────────────────────────────────────────────────────────────────
+
+# ── Secrets — must NEVER end up in an image layer ──
+.env
+.env.*
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ── Local runtime state — bloats images, leaks data ──
+data/
+backups/
+reports/
+error/
+*.db
+*.sqlite
+*.sqlite3
+
+# ── VCS / IDE / OS noise ──
+.git/
+.gitignore
+.gitattributes
+.github/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# ── Python build / cache ──
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# ── Node / frontend build artifacts ──
+# (rebuilt fresh inside the image)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+node_modules/
+
+# ── Docs and research artifacts not needed at runtime ──
+# Backend prod doesn't COPY docs/ so this is safety; frontend prod
+# doesn't copy them either. Also avoids the heavy generated PDFs.
+# NOTE: README.md is intentionally NOT excluded because Dockerfile.backend
+# does `COPY pyproject.toml README.md ./` (hatchling needs it for the wheel build).
+docs/
+CLAUDE.md
+LICENSE
+
+# ── Compose / dockerfile (no need to ship into images) ──
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+Makefile
+
+# ── Tests — not needed in prod runtime images ──
+tests/
+src/tests/
+**/test_*.py
+
+# ── Misc ──
+*.log
+.env.example

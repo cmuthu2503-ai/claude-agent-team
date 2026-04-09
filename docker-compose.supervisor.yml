@@ -9,6 +9,11 @@ name: agent-team-supervisor
 
 services:
   supervisor:
+    # Explicit image name so the supervisor can be pushed to / pulled from Docker
+    # Hub under the same namespace as the main app images (cmuthu2503/agent-team-*).
+    # `image:` + `build:` together mean: `compose build` tags as this name, and
+    # `compose pull` fetches it from Docker Hub once published.
+    image: cmuthu2503/agent-team-supervisor:latest
     build:
       context: .
       dockerfile: Dockerfile.supervisor

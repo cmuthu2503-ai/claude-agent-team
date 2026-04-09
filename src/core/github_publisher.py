@@ -40,7 +40,9 @@ class GitHubPublisher:
         repo: str | None = None,
         branch: str | None = None,
     ) -> None:
-        self.token = token or os.getenv("GITHUB_TOKEN", "")
+        # Token is a secret (read from /run/secrets first); repo + branch are config
+        from src.utils.secrets import read_secret
+        self.token = token or read_secret("github_token", "GITHUB_TOKEN")
         self.repo = repo or os.getenv("GITHUB_REPO", "")
         self.branch = branch or os.getenv("GITHUB_BRANCH", "main")
 

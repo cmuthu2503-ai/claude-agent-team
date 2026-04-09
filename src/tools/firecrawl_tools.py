@@ -35,7 +35,8 @@ FIRECRAWL_TIMEOUT_SECONDS = 60
 
 def _get_firecrawl_client() -> Any | None:
     """Lazy import + construct the Firecrawl client. Returns None if unavailable."""
-    api_key = os.getenv("FIRECRAWL_API_KEY", "")
+    from src.utils.secrets import read_secret
+    api_key = read_secret("firecrawl_api_key", "FIRECRAWL_API_KEY")
     if not api_key or api_key.startswith("fc-xxxxx"):
         return None
     try:

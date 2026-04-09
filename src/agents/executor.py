@@ -24,6 +24,7 @@ from src.agents.factory import AgentFactory
 from src.agents.registry import AgentRegistry
 from src.config.loader import ConfigLoader
 from src.tools.registry import ToolRegistry
+from src.utils.secrets import read_secret
 
 logger = structlog.get_logger()
 
@@ -65,7 +66,7 @@ class AgentSystemExecutor:
         self.tool_registry = ToolRegistry(config)
 
         # ── Anthropic direct client ──────────────────
-        api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        api_key = read_secret("anthropic_api_key", "ANTHROPIC_API_KEY")
         if not api_key or api_key.startswith("sk-ant-xxxxx"):
             self.anthropic_client: Any = None
             logger.warning("no_anthropic_api_key", message="ANTHROPIC_API_KEY not set")
@@ -74,10 +75,17 @@ class AgentSystemExecutor:
             logger.info("anthropic_client_initialized")
 
         # ── Bedrock client ───────────────────────────
-        # AsyncAnthropicBedrock reads AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_REGION
-        # from the environment via boto3's standard credential chain.
+        # AsyncAnthropicBedrock reads AWS creds from boto3's standard credential chain
+        # (env vars), so when secrets-as-files are used we need to populate the env
+        # vars from the secret file before instantiating the client.
         aws_region = os.getenv("AWS_REGION", "us-east-1")
-        has_aws_creds = bool(os.getenv("AWS_ACCESS_KEY_ID")) and bool(os.getenv("AWS_SECRET_ACCESS_KEY"))
+        aws_access_key = read_secret("aws_access_key_id", "AWS_ACCESS_KEY_ID")
+        aws_secret_key = read_secret("aws_secret_access_key", "AWS_SECRET_ACCESS_KEY")
+        if aws_access_key and not os.environ.get("AWS_ACCESS_KEY_ID"):
+            os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key
+        if aws_secret_key and not os.environ.get("AWS_SECRET_ACCESS_KEY"):
+            os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_key
+        has_aws_creds = bool(aws_access_key) and bool(aws_secret_key)
         if has_aws_creds:
             try:
                 self.bedrock_client: Any = anthropic.AsyncAnthropicBedrock(aws_region=aws_region)
@@ -90,7 +98,7 @@ class AgentSystemExecutor:
             logger.info("bedrock_disabled", reason="AWS credentials not set")
 
         # ── OpenAI client ────────────────────────────
-        openai_key = os.getenv("OPENAI_API_KEY", "")
+        openai_key = read_secret("openai_api_key", "OPENAI_API_KEY")
         if not openai_key or openai_key.startswith("sk-xxxxx"):
             self.openai_client: Any = None
             logger.info("openai_disabled", reason="OPENAI_API_KEY not set")

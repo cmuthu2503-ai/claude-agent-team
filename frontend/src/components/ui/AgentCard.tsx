@@ -10,7 +10,7 @@ interface AgentCardProps {
   currentTask?: string | null
 }
 
-export function AgentCard({ agentId, displayName, role, team, model, status, currentTask }: AgentCardProps) {
+export function AgentCard({ displayName, role, team, model, status, currentTask }: AgentCardProps) {
   return (
     <div
       style={{

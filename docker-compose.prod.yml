@@ -1,9 +1,27 @@
 # Production Environment
 # Ports: backend=8020, frontend=3020
 # Network: prod-net
+#
+# Image naming: this file produces images under cmuthu2503/* so they can be
+# pushed to Docker Hub without colliding with the dev compose file (which auto-
+# generates claude-agent-team-{backend,frontend}:latest). Both `image:` and
+# `build:` are present so:
+#   - `docker compose -f docker-compose.prod.yml build` builds locally and tags as cmuthu2503/...
+#   - `docker compose -f docker-compose.prod.yml pull`  pulls from Docker Hub
+#   - `docker compose -f docker-compose.prod.yml up`    uses the named image (build on miss)
+#
+# Required files BEFORE building (all 7 secrets — see ./secrets/README.md):
+#   ./secrets/anthropic_api_key.txt
+#   ./secrets/openai_api_key.txt
+#   ./secrets/aws_access_key_id.txt
+#   ./secrets/aws_secret_access_key.txt
+#   ./secrets/github_token.txt
+#   ./secrets/firecrawl_api_key.txt
+#   ./secrets/jwt_secret.txt
 
 services:
   backend:
+    image: cmuthu2503/agent-team-backend:latest
     build:
       context: .
       dockerfile: Dockerfile.backend
@@ -18,9 +36,26 @@ services:
     environment:
       - ENVIRONMENT=production
       - LOG_LEVEL=WARNING
+      # ── Required for remote deploy: tell the backend which origins to accept ──
+      # Override per-deployment with the actual frontend hostname(s).
+      # Comma-separated, no spaces.
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3020}
+      # ── Non-secret config (safe to bake in) ─────────────────────────────────
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - BEDROCK_MODEL_ID=${BEDROCK_MODEL_ID:-anthropic.claude-sonnet-4-20250514-v1:0}
+      - GITHUB_REPO=${GITHUB_REPO:-cmuthu2503-ai/claude-agent-team}
+      - GITHUB_BRANCH=${GITHUB_BRANCH:-main}
+      - OPENAI_GPT5_MODEL_ID=${OPENAI_GPT5_MODEL_ID:-gpt-5.4}
+      - OPENAI_O3_MODEL_ID=${OPENAI_O3_MODEL_ID:-o4-mini}
+      - ANTHROPIC_OPUS_MODEL_ID=${ANTHROPIC_OPUS_MODEL_ID:-claude-opus-4-6}
+      - ANTHROPIC_SONNET_MODEL_ID=${ANTHROPIC_SONNET_MODEL_ID:-claude-sonnet-4-6}
     secrets:
       - anthropic_api_key
+      - openai_api_key
+      - aws_access_key_id
+      - aws_secret_access_key
       - github_token
+      - firecrawl_api_key
       - jwt_secret
     networks:
       - prod-net
@@ -43,6 +78,7 @@ services:
         max-file: "5"
 
   frontend:
+    image: cmuthu2503/agent-team-frontend:latest
     build:
       context: .
       dockerfile: Dockerfile.frontend
@@ -85,7 +121,15 @@ networks:
 secrets:
   anthropic_api_key:
     file: ./secrets/anthropic_api_key.txt
+  openai_api_key:
+    file: ./secrets/openai_api_key.txt
+  aws_access_key_id:
+    file: ./secrets/aws_access_key_id.txt
+  aws_secret_access_key:
+    file: ./secrets/aws_secret_access_key.txt
   github_token:
     file: ./secrets/github_token.txt
+  firecrawl_api_key:
+    file: ./secrets/firecrawl_api_key.txt
   jwt_secret:
     file: ./secrets/jwt_secret.txt
