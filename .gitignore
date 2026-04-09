@@ -60,3 +60,6 @@ reports/*.json
 # SQLite databases
 *.db
 *.sqlite3
+
+# Local debugging artifacts (error screenshots, dumps)
+error/

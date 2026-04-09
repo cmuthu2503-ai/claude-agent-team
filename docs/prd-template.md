@@ -7,7 +7,7 @@
 
 | Field | Value |
 |-------|-------|
-| Document Version | 3.3 |
+| Document Version | 3.4 |
 | Created Date | 2026-04-04 |
 | Last Updated | 2026-04-06 |
 | Status | Draft |
@@ -632,6 +632,62 @@ prompt_variants: variant_id, session_id, iteration, variant_index, approach,
 | FE-19 | "Try this prompt" button that sends it to a test chat interface | Medium |
 | FE-20 | Public prompt library — browse high-quality community prompts | Low |
 | FE-21 | Export as JSON/YAML for programmatic use in other tools | Low |
+
+#### 6.6.1 Execute Tab — Prompt Playground
+
+**Problem:** After generating a prompt in the Generator tab, users want to actually run it against an LLM to see what it produces — without leaving the app, copy-pasting into a separate playground, or building their own chat client.
+
+**Solution:** A new "Execute" tab inside Prompt Studio that turns the page into a multi-turn chat playground. The user pastes (or auto-fills from a Generator variant) a system prompt, then chats with the LLM in a conversation thread. Responses stream in token-by-token. Optional Firecrawl web tools can be enabled per session.
+
+**Workflow:**
+
+1. User clicks the "Execute" tab (between Generator and History)
+2. Top section: a single textarea for the **System Prompt**, auto-filled from a Generator variant if the user clicked "Try in Execute" there
+3. Below: a chat conversation pane (initially empty), then a chat input + Send button
+4. User types a message → click Send (or Enter)
+5. Backend opens a Server-Sent Events stream, calls Anthropic/Bedrock with `messages.stream(...)`, and yields tokens as they arrive
+6. Frontend appends the assistant's response token-by-token into a new chat bubble
+7. If web tools are enabled and the model decides to call `web_search` or `web_scrape`, the backend executes the tool, sends a tool-call event to the frontend (rendered as a collapsible card in the chat), and continues the model's response from where it left off
+8. After the assistant turn completes, the chat input re-enables. User can send a follow-up — full conversation history is sent on each turn for multi-turn context
+9. "Clear conversation" button resets without page reload
+
+**Key technical details:**
+
+- **Streaming:** uses Anthropic Python SDK's `client.messages.stream()` (works on both direct Anthropic and Bedrock). Backend forwards events as SSE; frontend reads via `fetch` + `ReadableStream`.
+- **Tool-use loop:** when tools are enabled and the model emits `tool_use` blocks, the backend pauses the stream, executes each tool, appends the result as a `tool_result` content block in the user role, and starts a new stream. Loops up to `MAX_ITERATIONS = 5` per user turn before giving up.
+- **Multi-turn:** the frontend keeps the full conversation in component state and sends the entire history on every turn. State is lost on tab change — no persistence (stateless playground).
+- **Tools available:** `web_search` and `web_scrape` (Firecrawl) only — opt-in via checkbox in Advanced Options. Other agent tools (file_read, code_exec, github_api, etc.) are deliberately NOT exposed because they belong in the agent pipeline, not a playground.
+- **Auto-prepended tool hint:** when the tool checkbox is enabled, the backend prepends a one-line instruction to the system prompt: *"You have web_search and web_scrape tools available — use them when you need current information you don't have in your training."* This nudges the model to actually use the tools when appropriate.
+- **Cost + token tracking:** displayed per-turn and as a running total for the conversation.
+- **Provider toggle:** Claude / Bedrock, defaults from localStorage (shared with Generator and Command Center).
+
+**Key requirements:**
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| PSE-001 | New "Execute" tab in Prompt Studio between Generator and History | High |
+| PSE-002 | System Prompt textarea (large, primary) — auto-fillable from Generator variants | High |
+| PSE-003 | Multi-turn chat conversation panel — user/assistant bubbles in chronological order | High |
+| PSE-004 | Server-Sent Events streaming — tokens appear live, not after the full response | High |
+| PSE-005 | Optional `web_search` + `web_scrape` tools via "Enable web tools" checkbox | High |
+| PSE-006 | Tool-use loop wraps streaming — model can call tools mid-conversation | High |
+| PSE-007 | "Try in Execute" button on each Generator variant card → switches tab + pre-fills system prompt | High |
+| PSE-008 | Token counts (input/output), latency, cost shown per turn + cumulative | High |
+| PSE-009 | "Clear conversation" button to reset state without page reload | Medium |
+| PSE-010 | Tool calls displayed inline as collapsible cards (tool name, input args, result preview) | Medium |
+| PSE-011 | Markdown rendering for assistant responses (reuse existing MarkdownRenderer) | Medium |
+| PSE-012 | Conversation state lost on tab change (stateless v1) | Low |
+
+**Future enhancements (deferred):**
+
+| ID | Enhancement | Priority |
+|----|-------------|----------|
+| FE-22 | Persist execution sessions in DB (linked to source prompt session) | Medium |
+| FE-23 | "Save as preset" — bookmark a (system prompt + first message) combo for reuse | Medium |
+| FE-24 | Download conversation as `.md` or `.json` | Low |
+| FE-25 | Side-by-side execute mode — run the same conversation on Claude AND Bedrock to compare | Low |
+| FE-26 | Additional tool toggles (file_read for project context, code_exec sandbox) | Low |
+| FE-27 | Model parameter A/B test — run the same prompt 2-3 times with different temperatures and compare side by side | Low |
 
 ---
 

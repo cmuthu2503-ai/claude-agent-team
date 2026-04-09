@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mermaid Viewer — Agent Team</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --card: #ffffff;
+    --border: #e5e7eb;
+    --text: #111827;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-dark: #1d4ed8;
+    --drop-bg: #eff6ff;
+    --drop-border: #93c5fd;
+    --drop-hover: #dbeafe;
+    --danger: #dc2626;
+    --danger-bg: #fee2e2;
+    --danger-border: #fca5a5;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1280px; margin: 0 auto; }
+  h1 { margin: 0 0 4px; font-size: 22px; font-weight: 700; }
+  .sub { margin: 0 0 20px; font-size: 14px; color: var(--muted); }
+  code {
+    background: #f3f4f6;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 90%;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .drop {
+    border: 2px dashed var(--drop-border);
+    background: var(--drop-bg);
+    border-radius: 8px;
+    padding: 28px 20px;
+    text-align: center;
+    transition: background 0.15s;
+  }
+  .drop.hover { background: var(--drop-hover); }
+  .drop-title { font-size: 15px; font-weight: 500; margin-bottom: 4px; }
+  .drop-sub { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+  .btn-row {
+    display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;
+  }
+  button {
+    padding: 7px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: white;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  button:hover { border-color: var(--accent); background: #f9fafb; }
+  button.primary {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+  }
+  button.primary:hover { background: var(--accent-dark); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  input[type=file] { display: none; }
+
+  .files-list {
+    margin-top: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .files-list:empty { display: none; }
+  .file-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    background: #f9fafb;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .file-item:hover { border-color: var(--accent); background: white; }
+  .file-item.active { background: var(--drop-bg); border-color: var(--accent); }
+  .file-name { font-family: monospace; color: var(--text); }
+  .file-path { color: var(--muted); font-size: 11px; font-family: monospace; }
+  .file-meta { color: var(--muted); font-size: 11px; white-space: nowrap; flex-shrink: 0; }
+
+  .output-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+    gap: 12px;
+  }
+  .output-name { font-family: monospace; font-size: 13px; color: var(--text); word-break: break-all; }
+  .output-controls { display: flex; gap: 6px; flex-shrink: 0; }
+  .output {
+    overflow-x: auto;
+    text-align: center;
+    min-height: 200px;
+  }
+  .output svg { max-width: 100%; height: auto; }
+  .empty {
+    color: var(--muted);
+    padding: 60px 20px;
+    text-align: center;
+    font-size: 14px;
+  }
+  .error {
+    color: var(--danger);
+    background: var(--danger-bg);
+    border: 1px solid var(--danger-border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    font-family: monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    text-align: left;
+  }
+
+  details.source-toggle {
+    margin-top: 16px;
+    padding: 10px 12px;
+    background: #f9fafb;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  details.source-toggle summary { cursor: pointer; color: var(--muted); }
+  details.source-toggle pre {
+    margin: 10px 0 0;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px;
+    overflow-x: auto;
+    font-size: 12px;
+    font-family: "SFMono-Regular", Consolas, monospace;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Mermaid Diagram Viewer</h1>
+<p class="sub">
+  Drop a <code>.mmd</code> file (or scan a folder) to render it.
+  Loads Mermaid from a CDN — no install, no local server. Works offline after
+  the first page load because your browser caches the CDN script.
+  <br><br>
+  <strong>Tip:</strong> click <em>Choose folder</em> and pick this
+  <code>docs/research/</code> directory to see every research diagram in the tree at once.
+</p>
+
+<div class="card">
+  <div id="drop" class="drop">
+    <div class="drop-title">📐 Drop <code>.mmd</code> files here</div>
+    <div class="drop-sub">or pick them with a button below</div>
+    <div class="btn-row">
+      <button onclick="document.getElementById('file-input').click()">Choose file(s)</button>
+      <button onclick="document.getElementById('dir-input').click()">Choose folder (scans recursively)</button>
+      <button id="clear-btn" onclick="clearAll()">Clear</button>
+    </div>
+  </div>
+  <input type="file" id="file-input" accept=".mmd,.mermaid,text/plain" multiple>
+  <input type="file" id="dir-input" webkitdirectory directory multiple>
+  <div id="files" class="files-list"></div>
+</div>
+
+<div class="card">
+  <div class="output-head">
+    <div class="output-name" id="current-name">No diagram loaded</div>
+    <div class="output-controls">
+      <button id="download-svg-btn" disabled>Download SVG</button>
+    </div>
+  </div>
+  <div id="output" class="output">
+    <div class="empty">Drop a .mmd file above to get started.</div>
+  </div>
+  <details class="source-toggle" id="source-details" style="display: none;">
+    <summary>Show source</summary>
+    <pre id="source-pre"></pre>
+  </details>
+</div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'default',
+    // Allow <br/>, style attrs in labels — the Content Creator agent emits these
+    securityLevel: 'loose',
+    flowchart: { useMaxWidth: true, htmlLabels: true },
+  });
+
+  const dropEl = document.getElementById('drop');
+  const fileInput = document.getElementById('file-input');
+  const dirInput = document.getElementById('dir-input');
+  const filesEl = document.getElementById('files');
+  const outputEl = document.getElementById('output');
+  const currentNameEl = document.getElementById('current-name');
+  const downloadBtn = document.getElementById('download-svg-btn');
+  const sourceDetails = document.getElementById('source-details');
+  const sourcePre = document.getElementById('source-pre');
+
+  /** @type {Array<{name: string, path: string, content: string}>} */
+  let loadedFiles = [];
+  let activeIdx = -1;
+  let lastSvg = '';
+
+  // ── File intake ─────────────────────────────────────
+  async function handleFileList(fileList) {
+    const mmd = Array.from(fileList).filter(f =>
+      f.name.toLowerCase().endsWith('.mmd') ||
+      f.name.toLowerCase().endsWith('.mermaid')
+    );
+    if (mmd.length === 0) {
+      showError('No .mmd or .mermaid files found in the selection.');
+      return;
+    }
+    for (const f of mmd) {
+      try {
+        const text = await f.text();
+        const path = f.webkitRelativePath || f.name;
+        // Deduplicate on path so scanning a folder twice doesn't double-add
+        if (!loadedFiles.some(x => x.path === path)) {
+          loadedFiles.push({ name: f.name, path, content: text });
+        }
+      } catch (err) {
+        console.error('Failed to read', f.name, err);
+      }
+    }
+    // Sort by path for stable ordering
+    loadedFiles.sort((a, b) => a.path.localeCompare(b.path));
+    renderFileList();
+    if (activeIdx === -1 && loadedFiles.length > 0) {
+      selectFile(0);
+    }
+  }
+
+  function clearAll() {
+    loadedFiles = [];
+    activeIdx = -1;
+    lastSvg = '';
+    renderFileList();
+    currentNameEl.textContent = 'No diagram loaded';
+    outputEl.innerHTML = '<div class="empty">Drop a .mmd file above to get started.</div>';
+    downloadBtn.disabled = true;
+    sourceDetails.style.display = 'none';
+  }
+  window.clearAll = clearAll;
+
+  // ── File list rendering ─────────────────────────────
+  function renderFileList() {
+    filesEl.innerHTML = '';
+    loadedFiles.forEach((f, i) => {
+      const div = document.createElement('div');
+      div.className = 'file-item' + (i === activeIdx ? ' active' : '');
+      const left = document.createElement('div');
+      left.innerHTML =
+        '<div class="file-name">' + escapeHtml(f.name) + '</div>' +
+        '<div class="file-path">' + escapeHtml(f.path) + '</div>';
+      const right = document.createElement('div');
+      right.className = 'file-meta';
+      right.textContent = f.content.length.toLocaleString() + ' chars';
+      div.appendChild(left);
+      div.appendChild(right);
+      div.addEventListener('click', () => selectFile(i));
+      filesEl.appendChild(div);
+    });
+  }
+
+  async function selectFile(idx) {
+    activeIdx = idx;
+    renderFileList();
+    const f = loadedFiles[idx];
+    currentNameEl.textContent = f.path;
+    sourcePre.textContent = f.content;
+    sourceDetails.style.display = 'block';
+    await renderDiagram(f.content);
+  }
+
+  // ── Mermaid rendering ────────────────────────────────
+  async function renderDiagram(source) {
+    outputEl.innerHTML = '<div class="empty">Rendering…</div>';
+    downloadBtn.disabled = true;
+    try {
+      // Mermaid needs a unique ID each render or it re-uses stale state
+      const id = 'mmd-' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
+      const result = await mermaid.render(id, source);
+      const svg = result && result.svg ? result.svg : result;
+      if (!svg || typeof svg !== 'string') {
+        throw new Error('Mermaid returned no SVG');
+      }
+      lastSvg = svg;
+      outputEl.innerHTML = svg;
+      downloadBtn.disabled = false;
+    } catch (err) {
+      const msg = (err && err.message) ? err.message : String(err);
+      outputEl.innerHTML = '';
+      const errDiv = document.createElement('div');
+      errDiv.className = 'error';
+      errDiv.textContent = 'Render failed:\n\n' + msg;
+      outputEl.appendChild(errDiv);
+      console.error('Mermaid render error', err);
+    }
+  }
+
+  function showError(msg) {
+    outputEl.innerHTML = '';
+    const errDiv = document.createElement('div');
+    errDiv.className = 'error';
+    errDiv.textContent = msg;
+    outputEl.appendChild(errDiv);
+  }
+
+  // ── SVG download ─────────────────────────────────────
+  downloadBtn.addEventListener('click', () => {
+    if (!lastSvg) return;
+    const blob = new Blob([lastSvg], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const base = (loadedFiles[activeIdx]?.name || 'diagram').replace(/\.(mmd|mermaid)$/i, '');
+    a.download = base + '.svg';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
+
+  // ── Drag & drop wiring ──────────────────────────────
+  ['dragenter', 'dragover'].forEach(ev => {
+    dropEl.addEventListener(ev, e => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropEl.classList.add('hover');
+    });
+  });
+  ['dragleave', 'drop'].forEach(ev => {
+    dropEl.addEventListener(ev, e => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropEl.classList.remove('hover');
+    });
+  });
+  dropEl.addEventListener('drop', e => {
+    if (e.dataTransfer && e.dataTransfer.files) {
+      handleFileList(e.dataTransfer.files);
+    }
+  });
+
+  // ── Input pickers ────────────────────────────────────
+  fileInput.addEventListener('change', e => {
+    handleFileList(e.target.files);
+    e.target.value = ''; // allow re-picking the same file
+  });
+  dirInput.addEventListener('change', e => {
+    handleFileList(e.target.files);
+    e.target.value = '';
+  });
+
+  // ── Utility ──────────────────────────────────────────
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, m => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[m]));
+  }
+})();
+</script>
+</body>
+</html>

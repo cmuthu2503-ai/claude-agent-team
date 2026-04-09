@@ -566,6 +566,56 @@ Reference design: PRD §6.6 "Prompt Studio"
 
 ---
 
+## Prompt Studio Execute Tab — Detailed Task Breakdown
+
+A new "Execute" tab inside Prompt Studio that turns the page into a multi-turn chat playground with streaming and optional Firecrawl web tools. The user runs prompts (typed or auto-filled from a Generator variant) and chats with the model live.
+
+Reference design: PRD §6.6.1 "Execute Tab — Prompt Playground"
+
+### Phase 1: Backend
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PSE-01 | Update PRD §6.6 with Execute tab spec | Feature description, workflow, technical details, requirements PSE-001..PSE-012, future enhancements FE-22..FE-27 | S | — | `[x]` |
+| PSE-02 | Update task list with PSE section | This section | S | PSE-01 | `[x]` |
+| PSE-03 | Build streaming execute endpoint | New `POST /api/v1/prompts/execute/stream` SSE endpoint in `src/api/routes/prompts.py`. Wraps `client.messages.stream()` in a tool-use loop. Imports `WebSearchTool` and `WebScrapeTool` from `src/tools/firecrawl_tools.py` and exposes them when `enable_tools=true`. Yields SSE events: `text_delta`, `tool_use_start`, `tool_use_result`, `message_complete`, `done`. Auto-prepends a tool-hint line to the system prompt when tools are enabled. | L | PSE-02 | `[ ]` |
+
+### Phase 2: Frontend
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PSE-04 | Build Execute tab UI in PromptStudio.tsx | New tab between Generator and History. System prompt textarea (auto-fillable), chat conversation list, chat input + Send button, provider toggle, advanced options (temperature, max_tokens, enable web tools checkbox). SSE stream reader using fetch + ReadableStream. Tool call cards rendered inline. Token + cost + latency display per turn and cumulative. Clear conversation button. | XL | PSE-03 | `[ ]` |
+| PSE-05 | Add "Try in Execute" button on Generator variant cards | Each variant card in the Generator tab gets a third button alongside Copy and Select. Clicking it pre-fills the Execute tab system prompt and switches active tab to "execute". Conversation state is reset. | S | PSE-04 | `[ ]` |
+
+### Phase 3: Verification
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PSE-06 | Restart containers and verify with timestamps | Capture before/after `docker inspect ... StartedAt` to PROVE the restart actually happened — not just trust uvicorn `--reload` or "Up X seconds" output | S | PSE-05 | `[ ]` |
+| PSE-07 | End-to-end test Execute tab | Test 1: simple prompt, no tools, no multi-turn — verify streaming. Test 2: multi-turn — send 2-3 messages, verify conversation state. Test 3: tools enabled — ask for current data, verify Firecrawl is called and tool cards appear inline. | M | PSE-06 | `[ ]` |
+
+### Future Enhancements
+
+| ID | Enhancement | Priority |
+|----|-------------|----------|
+| FE-22 | Persist execution sessions in DB (linked to source prompt session) | Medium |
+| FE-23 | "Save as preset" — bookmark a (system prompt + first message) combo | Medium |
+| FE-24 | Download conversation as .md or .json | Low |
+| FE-25 | Side-by-side execute mode — same conversation on Claude AND Bedrock to compare | Low |
+| FE-26 | Additional tool toggles (file_read, code_exec sandbox) | Low |
+| FE-27 | Model parameter A/B test — same prompt, different temperatures, side by side | Low |
+
+### Progress Summary
+
+| Phase | Tasks | Done | In Progress | Not Started |
+|-------|-------|------|-------------|-------------|
+| Phase 1: Backend | 3 | 2 | 0 | 1 |
+| Phase 2: Frontend | 2 | 0 | 0 | 2 |
+| Phase 3: Verification | 2 | 0 | 0 | 2 |
+| **Total** | **7** | **2** | **0** | **5** |
+
+---
+
 ## Dependency Graph (Phase Level)
 
 ```
