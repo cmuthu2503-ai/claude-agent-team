@@ -93,6 +93,51 @@ def get_pending_deployments(db: sqlite3.Connection) -> list[dict]:
     return [dict(row) for row in cursor.fetchall()]
 
 
+# Non-terminal "in flight" states. If a row is sitting in one of these when
+# the supervisor restarts, it means the supervisor was actively processing
+# that row and got interrupted (container crash, OS reboot, manual restart).
+# The poller only picks up 'code_committed' rows, so without cleanup these
+# orphaned rows would sit forever — and the devops_specialist polling them
+# via wait_for_deployment would time out at the 10-minute mark with no useful
+# information. Mark them failed at startup with a clear reason instead.
+IN_FLIGHT_STATES = (
+    "judging", "syncing", "building",
+    "staging_deploying", "staging_healthy",
+    "prod_deploying",
+    "rolling_back",
+)
+
+
+def cleanup_stale_inflight_rows(db: sqlite3.Connection) -> int:
+    """Mark any rows the supervisor was mid-processing as failed.
+
+    Returns the number of rows touched. Called once at supervisor startup —
+    after this, the poller's `code_committed` filter is the only source of
+    pickups, so there's no race with active processing.
+    """
+    placeholders = ",".join("?" * len(IN_FLIGHT_STATES))
+    cursor = db.execute(
+        f"SELECT deployment_id, request_id, current_step "
+        f"FROM deployment_states WHERE current_step IN ({placeholders})",
+        IN_FLIGHT_STATES,
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        return 0
+    for row in rows:
+        update_step(
+            db, row["deployment_id"], "failed",
+            f"Supervisor was interrupted while in step '{row['current_step']}'. "
+            f"Mark failed on restart so the devops_specialist sees a definitive "
+            f"outcome instead of polling forever.",
+            error="Supervisor interrupted mid-deploy (restart cleanup)",
+        )
+        log(
+            f"  🧹 cleanup: marked {row['request_id']} (was {row['current_step']}) as failed"
+        )
+    return len(rows)
+
+
 def update_step(db: sqlite3.Connection, deployment_id: str, step: str, detail: str, error: str = "") -> None:
     """Update the deployment state with a new step."""
     # Read current history
@@ -131,31 +176,114 @@ def update_step(db: sqlite3.Connection, deployment_id: str, step: str, detail: s
     db.commit()
 
 
-def rollback(db: sqlite3.Connection, deployment_id: str, rollback_sha: str) -> None:
-    """Rollback: git revert + stop containers + rebuild + restart."""
+def rollback(
+    db: sqlite3.Connection, deployment_id: str, rollback_sha: str, commit_sha: str = "",
+) -> None:
+    """Rollback: git revert + stop containers + rebuild + restart.
+
+    Hardened against several real-world breakage modes seen in prior cycles:
+      1. Dirty working tree blocks `git revert`. We stash --include-untracked
+         before reverting and restore after.
+      2. Local main might be behind origin/main, so HEAD doesn't point at the
+         commit we just deployed. We `git fetch + checkout main` and verify
+         HEAD matches the commit_sha we were supposed to revert before
+         touching anything.
+      3. Any rollback substep failing was previously ignored — the supervisor
+         would barrel into `docker compose up` afterwards and pretend prod was
+         deploying. Now any failure marks the row error and returns early.
+    """
     log("🔄 ROLLING BACK...")
     update_step(db, deployment_id, "rolling_back", "Initiating rollback")
 
-    # Git revert
-    if rollback_sha:
-        code, _ = run_cmd("git revert HEAD --no-edit")
-        if code == 0:
-            run_cmd("git push origin main")
+    # 1. Stash any uncommitted working-tree changes so `git revert` can run.
+    #    Always restore at the end (success OR failure) so we don't strand
+    #    user WIP that happens to live in the supervisor's bound project dir.
+    stash_label = f"supervisor-rollback-{deployment_id[:8]}"
+    code, stash_out = run_cmd(
+        f'git stash push --include-untracked -m "{stash_label}"', timeout=30,
+    )
+    stashed = code == 0 and "No local changes" not in stash_out
 
-    # Stop staging and prod
-    run_cmd(f"docker compose -f {STAGING_COMPOSE} down", timeout=30)
-    run_cmd(f"docker compose -f {PROD_COMPOSE} down", timeout=30)
+    try:
+        if rollback_sha and commit_sha:
+            # 2. Make sure local HEAD actually points at the commit we shipped.
+            #    Without this, `git revert HEAD` reverts whatever happens to be
+            #    at the top of local main — which may be a totally unrelated
+            #    commit if local has drifted from origin.
+            run_cmd("git fetch origin main", timeout=30)
+            run_cmd("git checkout main", timeout=15)
+            code, head_sha = run_cmd("git rev-parse HEAD", timeout=10)
+            head_sha = head_sha.strip()
+            if not head_sha.startswith(commit_sha):
+                # Hard-reset local to origin/main so HEAD = the shipped commit,
+                # then revert it. We don't blindly revert HEAD without this.
+                code, _ = run_cmd(
+                    f"git reset --hard {commit_sha}", timeout=30,
+                )
+                if code != 0:
+                    update_step(
+                        db, deployment_id, "rolled_back",
+                        f"Could not sync local main to commit {commit_sha[:8]} for revert",
+                        error="Rollback aborted — local main drift",
+                    )
+                    return
 
-    # Rebuild with reverted code
-    code, _ = run_cmd("docker compose build", timeout=300)
-    if code == 0:
-        # Restart prod with old code
-        run_cmd(f"docker compose -f {PROD_COMPOSE} up -d", timeout=60)
-        if health_check(8020):
-            update_step(db, deployment_id, "rolled_back", "Rollback successful — production restored")
+            code, _ = run_cmd("git revert HEAD --no-edit", timeout=30)
+            if code != 0:
+                update_step(
+                    db, deployment_id, "rolled_back",
+                    "git revert failed — see supervisor logs for details",
+                    error="Rollback aborted — git revert returned non-zero",
+                )
+                return
+            code, _ = run_cmd("git push origin main", timeout=30)
+            if code != 0:
+                update_step(
+                    db, deployment_id, "rolled_back",
+                    "git push of revert failed",
+                    error="Rollback aborted — could not push revert to origin",
+                )
+                return
+
+        # 3. Stop staging and prod (best-effort — these usually succeed even
+        #    when the stack is already half-down).
+        run_cmd(f"docker compose -f {STAGING_COMPOSE} down", timeout=30)
+        run_cmd(f"docker compose -f {PROD_COMPOSE} down", timeout=30)
+
+        # 4. Rebuild with reverted code.
+        code, _ = run_cmd("docker compose build", timeout=300)
+        if code != 0:
+            update_step(
+                db, deployment_id, "rolled_back",
+                "Rebuild after revert failed",
+                error="Rollback aborted — could not rebuild reverted code",
+            )
             return
 
-    update_step(db, deployment_id, "rolled_back", "Rollback attempted — manual verification needed", error="Rollback health check uncertain")
+        # 5. Restart prod with reverted image.
+        code, _ = run_cmd(f"docker compose -f {PROD_COMPOSE} up -d", timeout=60)
+        if code != 0:
+            update_step(
+                db, deployment_id, "rolled_back",
+                "docker compose prod up after revert failed",
+                error="Rollback aborted — could not bring up reverted prod",
+            )
+            return
+
+        if health_check(8020):
+            update_step(
+                db, deployment_id, "rolled_back",
+                "Rollback successful — production restored to pre-deploy state",
+            )
+        else:
+            update_step(
+                db, deployment_id, "rolled_back",
+                "Rollback completed but health check uncertain",
+                error="Rollback uncertain — prod not responding on :8020 after revert",
+            )
+    finally:
+        if stashed:
+            run_cmd("git stash pop", timeout=30)
 
 
 def _persist_judge_result(
@@ -270,7 +398,7 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
     code, _ = run_cmd(f"docker compose -f {STAGING_COMPOSE} up -d --build", timeout=120)
     if code != 0:
         update_step(db, dep_id, "staging_deploying", "Staging deploy failed", error="docker compose staging failed")
-        rollback(db, dep_id, rollback_sha)
+        rollback(db, dep_id, rollback_sha, commit_sha)
         return
 
     # Step 3: Verify staging health
@@ -278,7 +406,7 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
     if not health_check(8010):
         update_step(db, dep_id, "staging_deploying", "Staging unhealthy", error="Staging health check failed")
         run_cmd(f"docker compose -f {STAGING_COMPOSE} down")
-        rollback(db, dep_id, rollback_sha)
+        rollback(db, dep_id, rollback_sha, commit_sha)
         return
 
     update_step(db, dep_id, "staging_healthy", "Staging deployed and healthy on :8010/:3010")
@@ -301,7 +429,7 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
     if code != 0:
         update_step(db, dep_id, "prod_deploying", "Production deploy failed", error="docker compose prod failed")
         run_cmd(f"docker compose -f {STAGING_COMPOSE} down")
-        rollback(db, dep_id, rollback_sha)
+        rollback(db, dep_id, rollback_sha, commit_sha)
         return
 
     # Step 5: Verify production health
@@ -310,7 +438,7 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
         update_step(db, dep_id, "prod_deploying", "Production unhealthy", error="Production health check failed")
         run_cmd(f"docker compose -f {PROD_COMPOSE} down")
         run_cmd(f"docker compose -f {STAGING_COMPOSE} down")
-        rollback(db, dep_id, rollback_sha)
+        rollback(db, dep_id, rollback_sha, commit_sha)
         return
 
     update_step(db, dep_id, "prod_healthy", "Production deployed and healthy on :8020/:3020")
@@ -340,6 +468,17 @@ def main() -> None:
 
     if not DB_PATH.exists():
         log(f"⚠️  Database not found at {DB_PATH} — waiting for app to create it...")
+    else:
+        # Sweep any orphaned in-flight rows from a previous supervisor instance.
+        # See cleanup_stale_inflight_rows() for why this matters.
+        try:
+            db = get_db()
+            n = cleanup_stale_inflight_rows(db)
+            db.close()
+            if n:
+                log(f"🧹 Startup cleanup: marked {n} stale in-flight row(s) as failed")
+        except Exception as e:
+            log(f"⚠️  Startup cleanup failed: {e}")
 
     while True:
         try:
