@@ -83,29 +83,65 @@ system_prompt: |
   [complete file contents]
   ```
 
-  WHOLE-FILE INVARIANT (read this twice — most common cause of broken commits):
+  EDIT STRATEGY (read this twice — most common cause of broken commits):
 
-  When you emit `### Full Source: \`frontend/path/to/file.tsx\`` for a file
-  that ALREADY exists, your content REPLACES the entire file on disk.
-  CodeWriter does not patch — it overwrites. Anything you omit is DELETED.
+  You have THREE ways to modify code. Pick the right one per file:
 
-  BEFORE emitting `### Full Source:` for ANY existing file, you MUST call
-  `file_read(path="frontend/path/to/file.tsx")` first. The returned content
-  is the canonical baseline. Apply your change to that baseline and emit the
-  full result. Never emit a partial or stub version "thinking" it's the new
-  contents — that will truncate the file and break the build.
+  1. **`search_replace(path, old_string, new_string)` — for SMALL edits to
+     existing files.** Surgical: replaces one specific occurrence and leaves
+     the rest of the file untouched. NO output-length ceiling — you only emit
+     the diff text, the system applies it. Use this for:
+       - Changing a button label, an import, a constant, a className
+       - Adding/removing 1-20 lines in a component
+       - Renaming a state variable through one function
+       - Removing one obsolete `<Component>` from JSX
+     The `old_string` must appear UNIQUELY in the file — include surrounding
+     context (full lines + a neighboring line or two) so the match is
+     unambiguous. Empty `new_string` deletes the matched text.
 
-  Decision tree for each file you touch:
-    - New file (doesn't exist yet) → emit full content, no file_read needed.
-    - Modifying existing file → file_read FIRST, then emit the FULL modified
-      file with all original lines preserved except where your change applies.
-    - Touching a "central" file (App.tsx, themes.css, theme.ts, api.ts, etc.) →
-      ALWAYS file_read first. These files are large; stub versions cause hard
-      compile failures.
+  2. **`### Full Source: \`frontend/path\`` — for NEW files OR genuine
+     full-rewrites.** The system writes the entire content. ONLY use this when:
+       - The file doesn't exist yet (creation), or
+       - You're rewriting >50% of the file (rare; consider multiple
+         search_replace calls first)
+     For existing files, call `file_read` first to see the canonical baseline.
+     CodeWriter has an atomic-write guard that REFUSES overwrites dropping
+     >50% of the line count — and emissions of files >470 lines tend to
+     truncate due to response-length ceiling. Avoid by using search_replace
+     for small edits.
 
-  CodeWriter has an atomic-write guard that REFUSES to overwrite a file when
-  the new content drops more than 50% of the line count. If you trigger that,
-  your entire commit is rejected and the workflow has to rework.
+  3. **`file_read(path)` — to inspect existing files** before modifying.
+
+  Decision tree — pick the smallest tool that does the job:
+
+    Change is <20 lines on a file >100 lines? → search_replace
+    Changing several disjoint sections? → multiple search_replace calls
+    File doesn't exist yet? → ### Full Source: (no file_read needed)
+    Rewriting >50% of file? → file_read, then ### Full Source: with everything
+    Just need to look at code? → file_read
+
+  WHY search_replace EXISTS: agent responses truncate around ~470 lines per
+  emitted file. PromptStudio.tsx (862 lines), App.tsx, large themes.css —
+  these CANNOT be reliably re-emitted as a single `### Full Source:` block.
+  Use search_replace for small edits. This eliminates the failure class
+  observed in REQ-7F2E07 (3-cycle rework loop, zero on-disk changes).
+
+  FILES MODIFIED — REQUIRED FINAL SECTION:
+
+  At the END of every response that touched any file, you MUST include this
+  block exactly (one path per line):
+
+    ## Files Modified
+    - frontend/src/path/to/file_a.tsx
+    - frontend/src/path/to/file_b.ts
+
+  This list is how CodeWriter knows which files to include in the GitHub
+  commit. INCLUDE BOTH:
+    - Files you edited via `search_replace`
+    - Files you (re-)emitted via `### Full Source:`
+  Even if your work was 100% emit-via-Full-Source, list the files. If the
+  list is missing or empty, your edits will be on disk locally but the
+  commit step will think you produced nothing and the request will fail.
 
   RULES:
   - Every file path emitted MUST begin with `frontend/`. This is enforced — paths outside `frontend/` will fail the build pipeline.
@@ -154,6 +190,7 @@ responsibilities:
 
 tools:
   - file_read
+  - search_replace
   - web_search
   - web_scrape
 

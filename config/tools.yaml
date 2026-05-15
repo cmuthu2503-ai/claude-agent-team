@@ -15,6 +15,14 @@ tools:
       - devops_specialist
       - tester_specialist
 
+  search_replace:
+    description: "Surgical single-occurrence edit on an existing file — use for small changes to large files instead of re-emitting whole content (avoids ~470-line output ceiling)"
+    category: core
+    available_to:
+      - backend_specialist
+      - frontend_specialist
+      - tester_specialist
+
   git_operations:
     description: "Git status, diff, commit, branch, push operations"
     category: core

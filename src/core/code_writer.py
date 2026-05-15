@@ -93,7 +93,8 @@ class CodeWriter:
         )
 
         try:
-            # Step 1: Parse code blocks from agent outputs, write to disk, collect content
+            # Step 1a: Parse `### Full Source:` blocks from agent outputs,
+            # write them to disk, collect content for the commit.
             all_file_content: dict[str, str] = {}  # rel_path → content
             for agent_id, output_text in agent_outputs.items():
                 if not output_text:
@@ -103,6 +104,44 @@ class CodeWriter:
                 logger.info(
                     "files_written", agent=agent_id, count=len(files), files=list(files.keys())
                 )
+
+            # Step 1b: Pick up files that the agent edited via `search_replace`
+            # tool calls (which write directly to disk, not via the text output).
+            # Agents are instructed to list those paths in a `## Files Modified`
+            # section at the end of their response. We parse that list, read
+            # the current on-disk content for each path, and include them in
+            # the commit alongside the Full Source emissions.
+            #
+            # This is the bridge between the surgical-edit tool and the GitHub
+            # commit: without it, search_replace would update files locally
+            # but the commit step wouldn't know to push them.
+            for agent_id, output_text in agent_outputs.items():
+                if not output_text:
+                    continue
+                tool_edited = self._parse_files_modified_section(output_text)
+                for rel_path in tool_edited:
+                    if rel_path in all_file_content:
+                        continue  # Already captured via Full Source
+                    full_path = self.root / rel_path
+                    if not full_path.exists():
+                        logger.warning(
+                            "files_modified_listed_but_missing",
+                            agent=agent_id, path=rel_path,
+                        )
+                        continue
+                    try:
+                        content = full_path.read_text(encoding="utf-8")
+                    except Exception as e:
+                        logger.warning(
+                            "files_modified_read_failed",
+                            agent=agent_id, path=rel_path, error=str(e),
+                        )
+                        continue
+                    all_file_content[rel_path] = content
+                    logger.info(
+                        "search_replace_file_picked_up",
+                        agent=agent_id, path=rel_path,
+                    )
 
             if not all_file_content:
                 raise CodeWriteError("No code files were produced by any agent")
@@ -137,10 +176,14 @@ class CodeWriter:
             # up at staging deploy.
             has_frontend = any(f.startswith("frontend/") for f in all_files)
             if has_frontend:
+                # Returns silently if npm isn't installed in this container —
+                # supervisor's docker build catches TS errors as a backstop.
+                # Raises CodeWriteError only when npm IS available AND the build
+                # actually fails (real type errors, not env gaps).
                 await self._compile_typescript()
                 self._record_step(
                     dep_state, "typescript_compiled", "done",
-                    "npm run build passed (strict tsconfig)",
+                    "frontend prod build verified (or skipped if npm unavailable)",
                 )
 
             # Step 4: Run tests — only when Python files were written. Frontend-only
@@ -202,6 +245,61 @@ class CodeWriter:
             except Exception:
                 pass
             raise CodeWriteError(f"Code commit failed: {e}") from e
+
+    def _parse_files_modified_section(self, output_text: str) -> list[str]:
+        """Pull paths out of the agent's `## Files Modified` final-output block.
+
+        Agents are required to emit a section at the end of their response:
+
+            ## Files Modified
+            - frontend/src/pages/PromptStudio.tsx
+            - src/api/routes/prompts.py
+
+        Pulls the bullet paths out. Robust to small format variations:
+        - Tolerates `### Files Modified` and `# Files Modified` headers too.
+        - Tolerates `- `, `* `, `1. ` bullet markers.
+        - Strips backticks around paths.
+        - Stops at the next heading.
+
+        Returns an empty list if no section is present (agent emitted only
+        Full Source blocks).
+        """
+        # Find the start of the section (case-insensitive header match).
+        section_pattern = re.compile(
+            r"^#{1,4}\s+Files\s+Modified\s*$",
+            re.MULTILINE | re.IGNORECASE,
+        )
+        m = section_pattern.search(output_text)
+        if not m:
+            return []
+        after = output_text[m.end():]
+        # Stop at next markdown heading.
+        end_match = re.search(r"^#{1,4}\s+\S", after, re.MULTILINE)
+        section_body = after[: end_match.start()] if end_match else after
+
+        paths: list[str] = []
+        for line in section_body.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Match common bullet styles.
+            bullet_match = re.match(r"^[-*]\s+(.+)$", stripped) or re.match(
+                r"^\d+\.\s+(.+)$", stripped,
+            )
+            if not bullet_match:
+                continue
+            raw_path = bullet_match.group(1).strip()
+            # Strip backticks the agent may have wrapped the path in.
+            cleaned = raw_path.strip("`").strip()
+            # Reject obviously-not-a-path lines.
+            if not cleaned or " " in cleaned or cleaned.startswith("("):
+                continue
+            # Security: same path-traversal check applied in _parse_and_write_files.
+            if ".." in cleaned or cleaned.startswith("/"):
+                logger.warning("files_modified_path_rejected", path=cleaned)
+                continue
+            paths.append(cleaned)
+        return paths
 
     def _parse_and_write_files(self, output_text: str, agent_id: str) -> dict[str, str]:
         """Parse code blocks with file paths from agent output, validate every
@@ -341,14 +439,29 @@ class CodeWriter:
             raise CodeWriteError(f"Python compilation failed (ruff):\n{error[:500]}")
 
     async def _compile_typescript(self) -> None:
-        """Run the REAL prod frontend build (npm run build).
+        """Run the REAL prod frontend build (npm run build) if npm is available.
 
         Uses the strict tsconfig.app.json that the supervisor's docker build
         will use, so any commit that wouldn't survive `docker compose build`
-        gets rejected here instead of failing at staging deploy. Costs ~10-20s
-        more than `tsc --noEmit` but prevents the entire deploy-then-rollback
-        cycle for compile errors.
+        gets rejected here instead of failing at staging deploy.
+
+        Backend containers don't always ship with node/npm (it's a Python
+        image). When npm isn't present, we skip the local check and rely on
+        the supervisor's `docker compose build` to catch compile errors. The
+        supervisor-side build is the same content; the only thing we lose
+        when npm is missing is the EARLIER catch + rework-with-instructions
+        path. Better than failing the commit on an environment gap.
         """
+        # Probe for npm. The path traversal-safe way: try `npm --version` and
+        # tolerate non-zero exit. If it succeeds, npm exists; otherwise skip.
+        probe_code, _, _ = await self._run_cmd("npm --version", timeout=10)
+        if probe_code != 0:
+            logger.info(
+                "ts_compile_skipped_no_npm",
+                reason="npm not available in this container — supervisor will catch TS errors at docker build time",
+            )
+            return
+
         code, stdout, stderr = await self._run_cmd(
             "cd frontend && npm run build 2>&1", timeout=180,
         )

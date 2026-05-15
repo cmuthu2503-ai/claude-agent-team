@@ -103,7 +103,7 @@ class AgentSystemExecutor:
         self.client = self.anthropic_client
 
         # ── Tool implementations ─────────────────────
-        from src.tools.file_tools import FileReadTool, FileWriteTool
+        from src.tools.file_tools import FileReadTool, FileWriteTool, SearchReplaceTool
         from src.tools.git_tools import GitTool
         from src.tools.code_tools import CodeExecTool, TestRunnerTool, CodeAnalysisTool
         from src.tools.github_tools import GitHubAPITool, GitHubPRReviewTool
@@ -112,6 +112,10 @@ class AgentSystemExecutor:
 
         self.tool_registry.register_implementation("file_read", FileReadTool())
         self.tool_registry.register_implementation("file_write", FileWriteTool())
+        # search_replace gives code-producing agents a surgical-edit primitive
+        # so they don't hit response-length truncation when modifying files
+        # >470 lines (the root cause of REQ-7F2E07's 3-cycle failure loop).
+        self.tool_registry.register_implementation("search_replace", SearchReplaceTool())
         self.tool_registry.register_implementation("git_operations", GitTool())
         self.tool_registry.register_implementation("code_exec", CodeExecTool())
         self.tool_registry.register_implementation("test_runner", TestRunnerTool())
