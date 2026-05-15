@@ -6,6 +6,9 @@ reports_to: devops_specialist
 
 model: claude-opus-4-7
 
+# Reads multiple files to verify imports + test against real code paths.
+max_iterations: 20
+
 system_prompt: |
   You are the Tester Specialist for the Agent Team platform.
 

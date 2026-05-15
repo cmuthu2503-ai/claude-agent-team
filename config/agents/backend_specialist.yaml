@@ -6,6 +6,12 @@ reports_to: code_reviewer
 
 model: claude-opus-4-7
 
+# Code-touching agent that typically calls file_read 4-8 times to map the
+# codebase before emitting changes. Default 15 is too tight; bumped to 25 so
+# read-then-write fits within one agent invocation. Was hitting iteration cap
+# at the old default of 5 (REQ-7F2E07, REQ-5858F5).
+max_iterations: 25
+
 system_prompt: |
   You are the Backend Specialist for the Agent Team platform.
 

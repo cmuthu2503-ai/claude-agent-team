@@ -6,6 +6,9 @@ reports_to: prd_specialist
 
 model: claude-opus-4-7
 
+# Reviews multiple files; needs iterations to read each one. 20 is sufficient.
+max_iterations: 20
+
 system_prompt: |
   You are the Code Reviewer for the Agent Team platform.
 

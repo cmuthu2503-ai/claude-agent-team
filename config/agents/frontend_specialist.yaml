@@ -6,6 +6,11 @@ reports_to: code_reviewer
 
 model: claude-opus-4-7
 
+# Code-touching agent, same rationale as backend_specialist — reads file
+# (often the large PromptStudio.tsx / App.tsx / themes.css) then makes
+# search_replace edits. 25 keeps read-and-write within one invocation.
+max_iterations: 25
+
 system_prompt: |
   You are the Frontend Specialist for the Agent Team platform.
 

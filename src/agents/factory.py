@@ -68,6 +68,10 @@ class AgentFactory:
             tools=config.get("tools", []),
             delegation_targets=delegation.get("can_delegate_to", []),
             max_concurrent_tasks=delegation.get("max_concurrent_tasks", 3),
+            # Per-agent override: agents that need to read multiple files
+            # before writing (backend_specialist, code_reviewer, tester_specialist)
+            # can set `max_iterations: 25` in their YAML. Default 15.
+            max_iterations=int(config.get("max_iterations", 15)),
         )
 
 

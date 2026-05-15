@@ -28,6 +28,7 @@ class BaseAgent(ABC):
         tools: list[str],
         delegation_targets: list[str],
         max_concurrent_tasks: int = 3,
+        max_iterations: int = 15,
     ) -> None:
         self.agent_id = agent_id
         self.display_name = display_name
@@ -38,6 +39,13 @@ class BaseAgent(ABC):
         self.tools = tools
         self.delegation_targets = delegation_targets
         self.max_concurrent_tasks = max_concurrent_tasks
+        # Per-agent tool-loop iteration budget. Was hardcoded at 5 — too low for
+        # agents that need to file_read several files before writing code (see
+        # REQ-7F2E07 / REQ-5858F5 backend_specialist running out of turns mid-
+        # exploration). Default bumped to 15; can be overridden in agent YAML
+        # via `max_iterations: N` for code-heavy agents that need more, or
+        # lowered for simple agents like prd_specialist.
+        self.max_iterations = max_iterations
         self._llm_client: Any = None
         self._tool_registry: Any = None
         self._inference_geo: str | None = None
@@ -71,7 +79,7 @@ class BaseAgent(ABC):
         total_output_tokens = 0
         llm_calls = 0
         tool_call_count = 0
-        max_iterations = 5
+        max_iterations = self.max_iterations
         all_text_outputs: list[str] = []
 
         for _iteration in range(max_iterations):
@@ -169,6 +177,15 @@ class BaseAgent(ABC):
         )
         return date_header + self.system_prompt
 
+    # Hard wall-clock timeout for a single LLM call. The Anthropic SDK does not
+    # impose its own end-to-end timeout — long-tail requests can hang indefinitely
+    # (REQ-5858F5's backend_specialist sat blocked >15 minutes on a single call
+    # with no log activity). 180s is generous enough for normal Opus 4.7 latency
+    # (typical 10-40s) while bounding pathological hangs. After timeout we treat
+    # it as a retryable failure: bubble out of the retry loop, the runner sees a
+    # failed subtask, request is marked failed cleanly.
+    _LLM_CALL_TIMEOUT_SECONDS = 180
+
     async def _call_anthropic(
         self, messages: list[dict], tool_schemas: list[dict]
     ) -> dict[str, Any]:
@@ -191,7 +208,13 @@ class BaseAgent(ABC):
                     # claude-opus-4-7 supports it; legacy YAML overrides do not.
                     kwargs["inference_geo"] = self._inference_geo
 
-                response = await self._llm_client.messages.create(**kwargs)
+                # Wrap the LLM call in asyncio.wait_for so a hung connection
+                # raises TimeoutError after _LLM_CALL_TIMEOUT_SECONDS instead of
+                # blocking the workflow indefinitely.
+                response = await _asyncio.wait_for(
+                    self._llm_client.messages.create(**kwargs),
+                    timeout=self._LLM_CALL_TIMEOUT_SECONDS,
+                )
 
                 text_parts = []
                 tool_calls = []
@@ -213,6 +236,25 @@ class BaseAgent(ABC):
                     "output_tokens": response.usage.output_tokens,
                 }
 
+            except _asyncio.TimeoutError:
+                # The LLM call hung past _LLM_CALL_TIMEOUT_SECONDS. Treat as
+                # retryable (like a rate limit) — the network/Anthropic side
+                # may recover, but if it doesn't, we want to fail cleanly after
+                # the retry budget instead of blocking forever.
+                logger.warning(
+                    "llm_call_timeout_retrying",
+                    agent=self.agent_id, attempt=attempt + 1,
+                    timeout_seconds=self._LLM_CALL_TIMEOUT_SECONDS,
+                )
+                if attempt < max_retries - 1:
+                    await _asyncio.sleep(5)
+                    continue
+                # Out of retries — propagate so the workflow can mark the
+                # subtask failed rather than waiting indefinitely.
+                raise RuntimeError(
+                    f"LLM call timed out after {max_retries} retries "
+                    f"(each capped at {self._LLM_CALL_TIMEOUT_SECONDS}s)",
+                )
             except Exception as e:
                 error_str = str(e)
                 if "429" in error_str or "rate_limit" in error_str:
