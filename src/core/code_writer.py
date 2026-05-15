@@ -127,11 +127,21 @@ class CodeWriter:
                     "no Python files in this commit",
                 )
 
-            # Step 3: Compile TypeScript (if frontend files exist)
+            # Step 3: Run the real prod frontend build (not just tsc --noEmit)
+            # if frontend files were written. tsc --noEmit uses a permissive
+            # config that ignores src/tests/ and missing modules; the supervisor's
+            # docker build runs `npm run build` against the strict
+            # tsconfig.app.json. Running the SAME command here means a commit
+            # only lands if the prod build actually compiles. Without this,
+            # agent-written test files (REQ-7C6527) pass commit-time but blow
+            # up at staging deploy.
             has_frontend = any(f.startswith("frontend/") for f in all_files)
             if has_frontend:
                 await self._compile_typescript()
-                self._record_step(dep_state, "typescript_compiled", "done", "tsc --noEmit passed")
+                self._record_step(
+                    dep_state, "typescript_compiled", "done",
+                    "npm run build passed (strict tsconfig)",
+                )
 
             # Step 4: Run tests — only when Python files were written. Frontend-only
             # commits (e.g. theme additions, styling tweaks) don't need pytest
@@ -331,14 +341,20 @@ class CodeWriter:
             raise CodeWriteError(f"Python compilation failed (ruff):\n{error[:500]}")
 
     async def _compile_typescript(self) -> None:
-        """Run TypeScript compiler check on frontend code."""
+        """Run the REAL prod frontend build (npm run build).
+
+        Uses the strict tsconfig.app.json that the supervisor's docker build
+        will use, so any commit that wouldn't survive `docker compose build`
+        gets rejected here instead of failing at staging deploy. Costs ~10-20s
+        more than `tsc --noEmit` but prevents the entire deploy-then-rollback
+        cycle for compile errors.
+        """
         code, stdout, stderr = await self._run_cmd(
-            "cd frontend && npx tsc --noEmit 2>&1 || true", timeout=60
+            "cd frontend && npm run build 2>&1", timeout=180,
         )
-        # tsc --noEmit returns non-zero on type errors
-        if code != 0 and "error TS" in (stdout + stderr):
+        if code != 0:
             error = stderr or stdout
-            raise CodeWriteError(f"TypeScript compilation failed:\n{error[:500]}")
+            raise CodeWriteError(f"Frontend prod build failed:\n{error[:1000]}")
 
     async def _run_tests(self) -> None:
         """Run pytest on backend tests."""
