@@ -1,85 +1,336 @@
-/* =========================================================================
-   PATCH SCOPE — Y2K THEME ONLY
-   -------------------------------------------------------------------------
-   This file fragment contains ONLY the two [data-theme="y2k"] selector
-   blocks. The patcher MUST splice these in-place over the existing y2k
-   blocks in frontend/src/themes.css and leave every other selector block
-   (`:root`, linear, vercel, discord, flat, brutalist — both modes) byte-
-   identical to its current on-disk content.
+/* ============================================================
+   Theme System
+   Selectors: [data-theme="<id>"][data-mode="dark|light"]
+   Every theme defines the same set of CSS variables so any
+   component can reference var(--bg-primary), var(--accent), etc.
+   ============================================================ */
 
-   Do NOT delete, reorder, or modify any non-y2k block. Per REQ-006 and
-   US-001 AC-3, all other themes must render unchanged after this patch.
-   ========================================================================= */
-
-/* ============================== Y2K (NEON GREEN) =========================
-   Per PRD "Neon Green Theme Variant".
-   Dark mode  = glowing neon green on near-black (retro CRT terminal feel).
-   Light mode = pale mint background with deep emerald accents.
-
-   Contrast (WCAG AA target = 4.5:1 for body text):
-     - Dark  body: #39FF14 on #0a0f0a ≈ 18.9:1 (AAA)
-     - Light body: #0d3b1f on #f0fff4 ≈ 12.4:1 (AAA)
-     - Light primary button text (#ffffff on --accent #00875A) ≈ 4.6:1 (AA)
-     - Dark  --success (#7CFFB2) on #0a0f0a ≈ 14.6:1 — distinct from
-       --text-primary so success toasts/badges are visually separable.
-   ========================================================================= */
-
-[data-theme="y2k"][data-mode="dark"] {
-  --bg-primary: #0a0f0a;
-  --bg-secondary: #0f1a10;
-  --bg-card: #11211a;
-  --bg-hover: #173524;
-  --text-primary: #39FF14;
-  --text-secondary: #7CFFB2;
-  --text-muted: #88cc99;
-  --text-on-accent: #0a0f0a;
-  --accent: #39FF14;
-  --accent-hover: #7CFFB2;
-  --border: #1a4d2e;
-  --ring: #39FF14;
-  /* --success is intentionally mint (#7CFFB2), NOT neon green, so that
-     success states stay distinguishable from --text-primary which is
-     #39FF14. Prior revision collided them — fixed per TC-019. */
-  --success: #7CFFB2;
-  --danger: #ff5577;
-  --warning: #f5d142;
-  --info: #7CFFB2;
+/* ---------- LINEAR (dark) ---------- */
+[data-theme="linear"][data-mode="dark"] {
+  --bg-primary: #08090a;
+  --bg-secondary: #0f1011;
+  --bg-card: #141516;
+  --bg-hover: #1c1d1f;
+  --border: #232427;
+  --text-primary: #f7f8f8;
+  --text-secondary: #8a8f98;
+  --text-muted: #62666d;
+  --accent: #5e6ad2;
+  --accent-hover: #7a85e0;
+  --success: #4cb782;
+  --danger: #eb5757;
+  --warning: #f2c94c;
+  --info: #5e6ad2;
   --radius: 6px;
-  --shadow: 0 2px 6px rgba(57, 255, 20, 0.15);
-  --shadow-glow: 0 0 12px rgba(57, 255, 20, 0.6);
-  --font: "VT323", "Press Start 2P", ui-monospace, monospace;
-  --font-mono: "VT323", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-glow: 0 0 0 1px rgba(94, 106, 210, 0.3);
+  --font: -apple-system, BlinkMacSystemFont, "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
 }
 
-[data-theme="y2k"][data-mode="light"] {
-  --bg-primary: #f0fff4;
-  --bg-secondary: #e6fbec;
+/* ---------- LINEAR (light) ---------- */
+[data-theme="linear"][data-mode="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f7f8f8;
   --bg-card: #ffffff;
-  --bg-hover: #d4f5dd;
-  --text-primary: #0d3b1f;
-  --text-secondary: #1f5a35;
-  --text-muted: #3d7a4f;
-  --text-on-accent: #ffffff;
-  /* DELIBERATE HOVER-INVERSION (documented per code-review warning):
-     --accent is the DARKER shade (#00875A) and --accent-hover is the
-     LIGHTER shade (#00B86B). This inverts the usual "hover gets darker"
-     convention on purpose: white button text (--text-on-accent: #ffffff)
-     needs ≥ 4.5:1 contrast against the resting button background. White
-     on #00875A ≈ 4.6:1 (AA pass); white on #00B86B ≈ 3.1:1 (AA fail).
-     So the darker green is the resting state to keep label legibility,
-     and hover brightens for affordance feedback. PRD's #00B86B is still
-     used for --border and --accent-hover. */
-  --accent: #00875A;
-  --accent-hover: #00B86B;
-  --border: #00B86B;
-  --ring: #00B86B;
-  --success: #00875A;
-  --danger: #c1394d;
-  --warning: #b07a00;
-  --info: #00875A;
+  --bg-hover: #f0f1f2;
+  --border: #e6e7e9;
+  --text-primary: #08090a;
+  --text-secondary: #62666d;
+  --text-muted: #8a8f98;
+  --accent: #5e6ad2;
+  --accent-hover: #4a55b8;
+  --success: #2f9367;
+  --danger: #d23f3f;
+  --warning: #c89623;
+  --info: #5e6ad2;
   --radius: 6px;
-  --shadow: 0 1px 2px rgba(0, 184, 107, 0.18);
-  --shadow-glow: 0 0 8px rgba(0, 184, 107, 0.4);
-  --font: "VT323", "Press Start 2P", ui-monospace, monospace;
-  --font-mono: "VT323", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-glow: 0 0 0 1px rgba(94, 106, 210, 0.2);
+  --font: -apple-system, BlinkMacSystemFont, "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+/* ---------- VERCEL (dark) ---------- */
+[data-theme="vercel"][data-mode="dark"] {
+  --bg-primary: #000000;
+  --bg-secondary: #0a0a0a;
+  --bg-card: #111111;
+  --bg-hover: #1a1a1a;
+  --border: #262626;
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1a1;
+  --text-muted: #737373;
+  --accent: #ffffff;
+  --accent-hover: #e5e5e5;
+  --success: #0070f3;
+  --danger: #ff0000;
+  --warning: #f5a623;
+  --info: #0070f3;
+  --radius: 8px;
+  --shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 0 1px rgba(255, 255, 255, 0.1);
+  --font: "Geist", -apple-system, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+}
+
+/* ---------- VERCEL (light) ---------- */
+[data-theme="vercel"][data-mode="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #fafafa;
+  --bg-card: #ffffff;
+  --bg-hover: #f5f5f5;
+  --border: #eaeaea;
+  --text-primary: #000000;
+  --text-secondary: #666666;
+  --text-muted: #999999;
+  --accent: #000000;
+  --accent-hover: #333333;
+  --success: #0070f3;
+  --danger: #ee0000;
+  --warning: #f5a623;
+  --info: #0070f3;
+  --radius: 8px;
+  --shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-glow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+  --font: "Geist", -apple-system, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+}
+
+/* ---------- DISCORD (dark) ---------- */
+[data-theme="discord"][data-mode="dark"] {
+  --bg-primary: #313338;
+  --bg-secondary: #2b2d31;
+  --bg-card: #383a40;
+  --bg-hover: #404249;
+  --border: #1e1f22;
+  --text-primary: #f2f3f5;
+  --text-secondary: #b5bac1;
+  --text-muted: #80848e;
+  --accent: #5865f2;
+  --accent-hover: #4752c4;
+  --success: #23a559;
+  --danger: #f23f43;
+  --warning: #f0b232;
+  --info: #5865f2;
+  --radius: 8px;
+  --shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  --shadow-glow: 0 0 0 2px rgba(88, 101, 242, 0.3);
+  --font: "gg sans", "Noto Sans", sans-serif;
+  --font-mono: "Consolas", ui-monospace, monospace;
+}
+
+/* ---------- DISCORD (light) ---------- */
+[data-theme="discord"][data-mode="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f2f3f5;
+  --bg-card: #ffffff;
+  --bg-hover: #ebedef;
+  --border: #e3e5e8;
+  --text-primary: #060607;
+  --text-secondary: #4e5058;
+  --text-muted: #80848e;
+  --accent: #5865f2;
+  --accent-hover: #4752c4;
+  --success: #23a559;
+  --danger: #f23f43;
+  --warning: #f0b232;
+  --info: #5865f2;
+  --radius: 8px;
+  --shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  --shadow-glow: 0 0 0 2px rgba(88, 101, 242, 0.2);
+  --font: "gg sans", "Noto Sans", sans-serif;
+  --font-mono: "Consolas", ui-monospace, monospace;
+}
+
+/* ---------- FLAT (dark) ---------- */
+[data-theme="flat"][data-mode="dark"] {
+  --bg-primary: #2c3e50;
+  --bg-secondary: #34495e;
+  --bg-card: #3d566e;
+  --bg-hover: #4a6680;
+  --border: #4a6680;
+  --text-primary: #ecf0f1;
+  --text-secondary: #bdc3c7;
+  --text-muted: #95a5a6;
+  --accent: #1abc9c;
+  --accent-hover: #16a085;
+  --success: #2ecc71;
+  --danger: #e74c3c;
+  --warning: #f39c12;
+  --info: #3498db;
+  --radius: 4px;
+  --shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  --shadow-glow: 0 0 0 2px rgba(26, 188, 156, 0.3);
+  --font: "Lato", -apple-system, sans-serif;
+  --font-mono: "Source Code Pro", ui-monospace, monospace;
+}
+
+/* ---------- FLAT (light) ---------- */
+[data-theme="flat"][data-mode="light"] {
+  --bg-primary: #ecf0f1;
+  --bg-secondary: #ffffff;
+  --bg-card: #ffffff;
+  --bg-hover: #f4f6f7;
+  --border: #d5dbdb;
+  --text-primary: #2c3e50;
+  --text-secondary: #5d6d7e;
+  --text-muted: #95a5a6;
+  --accent: #1abc9c;
+  --accent-hover: #16a085;
+  --success: #2ecc71;
+  --danger: #e74c3c;
+  --warning: #f39c12;
+  --info: #3498db;
+  --radius: 4px;
+  --shadow: 0 2px 4px rgba(0, 0, 0, 0.06);
+  --shadow-glow: 0 0 0 2px rgba(26, 188, 156, 0.2);
+  --font: "Lato", -apple-system, sans-serif;
+  --font-mono: "Source Code Pro", ui-monospace, monospace;
+}
+
+/* ---------- BRUTALIST (dark) ---------- */
+[data-theme="brutalist"][data-mode="dark"] {
+  --bg-primary: #000000;
+  --bg-secondary: #0a0a0a;
+  --bg-card: #1a1a1a;
+  --bg-hover: #2a2a2a;
+  --border: #ffffff;
+  --text-primary: #ffffff;
+  --text-secondary: #cccccc;
+  --text-muted: #888888;
+  --accent: #ffff00;
+  --accent-hover: #e6e600;
+  --success: #00ff00;
+  --danger: #ff0000;
+  --warning: #ff8800;
+  --info: #00ffff;
+  --radius: 0px;
+  --shadow: 4px 4px 0 #ffffff;
+  --shadow-glow: 0 0 0 3px #ffff00;
+  --font: "Courier New", monospace;
+  --font-mono: "Courier New", monospace;
+}
+
+/* ---------- BRUTALIST (light) ---------- */
+[data-theme="brutalist"][data-mode="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f5f5;
+  --bg-card: #ffffff;
+  --bg-hover: #ebebeb;
+  --border: #000000;
+  --text-primary: #000000;
+  --text-secondary: #333333;
+  --text-muted: #666666;
+  --accent: #ff00ff;
+  --accent-hover: #cc00cc;
+  --success: #00aa00;
+  --danger: #cc0000;
+  --warning: #ff6600;
+  --info: #0066cc;
+  --radius: 0px;
+  --shadow: 4px 4px 0 #000000;
+  --shadow-glow: 0 0 0 3px #ff00ff;
+  --font: "Courier New", monospace;
+  --font-mono: "Courier New", monospace;
+}
+
+/* ---------- Y2K (dark) ---------- */
+[data-theme="y2k"][data-mode="dark"] {
+  --bg-primary: #1a0a2e;
+  --bg-secondary: #2a1248;
+  --bg-card: #371d5e;
+  --bg-hover: #45267a;
+  --border: #ff00ff;
+  --text-primary: #ffe0ff;
+  --text-secondary: #c8a8ff;
+  --text-muted: #8870b8;
+  --accent: #ff10f0;
+  --accent-hover: #d010c8;
+  --success: #00ffaa;
+  --danger: #ff3366;
+  --warning: #ffcc00;
+  --info: #00ccff;
+  --radius: 12px;
+  --shadow: 0 0 20px rgba(255, 16, 240, 0.4);
+  --shadow-glow: 0 0 16px rgba(255, 16, 240, 0.6);
+  --font: "Comic Sans MS", "Trebuchet MS", sans-serif;
+  --font-mono: "Courier New", ui-monospace, monospace;
+}
+
+/* ---------- Y2K (light) ---------- */
+[data-theme="y2k"][data-mode="light"] {
+  --bg-primary: #ffe4f3;
+  --bg-secondary: #ffd0ec;
+  --bg-card: #ffffff;
+  --bg-hover: #ffc0e4;
+  --border: #ff66cc;
+  --text-primary: #4a0a4a;
+  --text-secondary: #7a2a7a;
+  --text-muted: #b070b0;
+  --accent: #ff10a0;
+  --accent-hover: #d00890;
+  --success: #00aa66;
+  --danger: #dd2255;
+  --warning: #e69900;
+  --info: #0099cc;
+  --radius: 12px;
+  --shadow: 0 4px 12px rgba(255, 16, 160, 0.2);
+  --shadow-glow: 0 0 12px rgba(255, 16, 160, 0.3);
+  --font: "Comic Sans MS", "Trebuchet MS", sans-serif;
+  --font-mono: "Courier New", ui-monospace, monospace;
+}
+
+/* ============================================================
+   NEON THEME — Green Palette
+   Dark: classic neon-green-on-near-black cyber aesthetic.
+   Light: soft mint-cream + jade-green for daytime use.
+   All variable keys preserved from previous Neon definition;
+   only values changed (per US-004).
+   ============================================================ */
+
+/* ---------- NEON (dark) ---------- */
+[data-theme="neon"][data-mode="dark"] {
+  --bg-primary: #0a0f0a;
+  --bg-secondary: #0f1a0f;
+  --bg-card: #142414;
+  --bg-hover: #1c321c;
+  --border: #1f3a1f;
+  --text-primary: #d4ffd4;
+  --text-secondary: #8fd9a0;
+  --text-muted: #4a6b4a;
+  --accent: #39ff14;
+  --accent-hover: #5cff3d;
+  --success: #39ff14;
+  --danger: #ff3b3b;
+  --warning: #ffd60a;
+  --info: #00ff85;
+  --radius: 4px;
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 12px rgba(57, 255, 20, 0.6);
+  --font: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+}
+
+/* ---------- NEON (light) ---------- */
+[data-theme="neon"][data-mode="light"] {
+  --bg-primary: #f0fff4;
+  --bg-secondary: #e2f9ea;
+  --bg-card: #ffffff;
+  --bg-hover: #d4f3e0;
+  --border: #a7f3d0;
+  --text-primary: #0a2818;
+  --text-secondary: #2d5a3d;
+  --text-muted: #86c8a8;
+  --accent: #00a86b;
+  --accent-hover: #008a58;
+  --success: #10b981;
+  --danger: #c0392b;
+  --warning: #b8860b;
+  --info: #0891b2;
+  --radius: 4px;
+  --shadow: 0 2px 8px rgba(0, 168, 107, 0.12);
+  --shadow-glow: 0 0 8px rgba(0, 168, 107, 0.4);
+  --font: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
 }
