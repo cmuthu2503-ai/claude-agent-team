@@ -314,11 +314,38 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
 
     log(f"🚀 Starting deployment {dep_id} for {req_id} (sha={commit_sha[:8] or '?'})")
 
+    # ── Step 0: Sync local working tree with origin/main (UNCONDITIONAL) ─────
+    # This used to run AFTER the judge step, which meant it was skipped when
+    # the judge said "skip" or "hold" — leaving the host filesystem out of
+    # sync with GitHub even when the user only wanted docs they could read
+    # locally. Now sync runs FIRST so the local folder reflects origin/main
+    # regardless of whether docker work follows. The judge's decision then
+    # only governs docker (build/staging/prod), not file-system mirroring.
+    #
+    # We do a SURGICAL `git fetch` + `git checkout origin/main -- <files>`
+    # rather than `git pull` / `git reset --hard` so we don't clobber any
+    # uncommitted work on other paths.
+    if files_committed:
+        update_step(db, dep_id, "syncing", f"Fetching {len(files_committed)} file(s) from origin/main")
+        run_cmd("git fetch origin main", timeout=30)
+        # Quote each path so spaces/special chars are safe.
+        quoted = " ".join(f"'{f}'" for f in files_committed)
+        code, output = run_cmd(f"git checkout origin/main -- {quoted}", timeout=30)
+        if code != 0:
+            update_step(
+                db, dep_id, "syncing", output[:200],
+                error="git checkout from origin/main failed — files may not exist on remote yet",
+            )
+            return
+        update_step(
+            db, dep_id, "syncing",
+            f"Synced {len(files_committed)} file(s) from origin/main",
+        )
+
     # ── Judge step (hybrid agent — Milestone 1) ─────────────────────────────
-    # Ask the deployment-judge LLM whether to deploy and how. The LLM never
-    # runs docker / git commands itself — it just returns a decision the
-    # deterministic Python code below executes. On any LLM failure, the
-    # judge returns a safe default (deploy_full + reasoning).
+    # Ask the deployment-judge LLM whether to do docker work. By the time the
+    # judge runs, the local working tree already has the new files (synced
+    # above), so even SKIP/HOLD outcomes leave the host filesystem current.
     try:
         from judge import JudgeResult, evaluate_deployment  # local import; runs in supervisor only
     except Exception as e:
@@ -340,49 +367,24 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
         )
         log(f"      reasoning: {result.reasoning[:200]}")
 
-        # Branch on the judge's strategy. SKIP and HOLD bypass docker entirely.
+        # Branch on the judge's strategy. SKIP and HOLD bypass docker entirely
+        # — but the file sync above ALREADY ran, so the local folder is current
+        # regardless of which branch we take here.
         if result.strategy == "skip":
             update_step(
                 db, dep_id, "completed",
                 f"Skipped per judge: {result.reasoning[:200]}",
             )
-            log("  ⏭  judge said skip — no docker work needed")
+            log("  ⏭  judge said skip — no docker work needed (files already synced)")
             return
         if result.strategy == "hold":
             update_step(
                 db, dep_id, "on_hold",
                 f"On hold per judge: {result.reasoning[:200]}",
             )
-            log("  ⏸  judge said hold — deployment paused for manual review")
+            log("  ⏸  judge said hold — deployment paused for manual review (files already synced)")
             return
         # For deploy_full and deploy_staging_only, fall through and execute.
-
-    # Step 0: Pull the agent's committed files from origin/main into the host
-    # working tree. CodeWriter already published the commit via the Trees API,
-    # but the host FS might not have them yet (depending on whether the
-    # backend container had a bind-mount onto frontend/src). Without this
-    # step, `docker compose build` would build from STALE source and the
-    # change would never reach any environment.
-    #
-    # We do a SURGICAL `git fetch` + `git checkout origin/main -- <files>`
-    # rather than `git pull` / `git reset --hard` so we don't clobber any
-    # uncommitted work on other paths.
-    if files_committed:
-        update_step(db, dep_id, "syncing", f"Fetching {len(files_committed)} file(s) from origin/main")
-        run_cmd("git fetch origin main", timeout=30)
-        # Quote each path so spaces/special chars are safe.
-        quoted = " ".join(f"'{f}'" for f in files_committed)
-        code, output = run_cmd(f"git checkout origin/main -- {quoted}", timeout=30)
-        if code != 0:
-            update_step(
-                db, dep_id, "syncing", output[:200],
-                error="git checkout from origin/main failed — files may not exist on remote yet",
-            )
-            return
-        update_step(
-            db, dep_id, "syncing",
-            f"Synced {len(files_committed)} file(s) from origin/main",
-        )
 
     # Step 1: Build Docker images
     update_step(db, dep_id, "building", "Building Docker images...")
@@ -457,6 +459,54 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
     log(f"✅ Deployment {dep_id} COMPLETED")
 
 
+# How often the supervisor checks origin/main for new commits to mirror down.
+# The poll loop runs every POLL_INTERVAL (5s) — mirroring on every tick is
+# essentially free (a single `git fetch` over HTTPS) and gives users a hard
+# upper-bound on staleness: any commit on origin/main appears in the local
+# working tree within ~5s as long as the supervisor is running.
+def mirror_origin_main() -> None:
+    """Keep the supervisor's project root (= main repo on host) in sync with
+    origin/main, independent of the deploy state machine.
+
+    Why this exists: without it, the local folder only updates when a deploy
+    runs the per-file sync step (and only for files in that specific commit).
+    Commits made manually, commits judged 'skip' before this change, or any
+    commit produced while the supervisor was down all leave local main behind.
+    This loop closes that gap by continuously mirroring origin/main.
+
+    Safety properties:
+      - Uses `git fetch` then `git merge --ff-only` — NEVER creates merge
+        commits or overwrites local work. If origin and local have diverged
+        (someone committed locally), ff-merge fails cleanly and we leave the
+        working tree alone.
+      - Skips silently when fetch fails (network blip — retry next cycle).
+      - Skips silently when ff-merge fails (local has uncommitted changes that
+        conflict with incoming commits — user must resolve manually).
+      - Only logs when mirror actually moves the HEAD forward, so the log
+        stream isn't flooded with "0 commits" messages every 5s.
+    """
+    code, _ = run_cmd("git fetch origin main", timeout=15)
+    if code != 0:
+        return  # transient — try again next poll
+    code, behind_out = run_cmd("git rev-list --count HEAD..origin/main", timeout=10)
+    if code != 0:
+        return
+    try:
+        behind = int(behind_out.strip())
+    except ValueError:
+        return
+    if behind == 0:
+        return  # already in sync
+    code, output = run_cmd("git merge --ff-only origin/main", timeout=15)
+    if code != 0:
+        # User has local commits or working-tree changes blocking ff-merge.
+        # Don't try harder — they may have intentional WIP. Log a one-time
+        # diagnostic each cycle while behind so they can see why.
+        log(f"  ⚠  origin/main is {behind} commit(s) ahead but ff-merge blocked: {output[:120]}")
+        return
+    log(f"  📥 mirrored {behind} commit(s) from origin/main into local main")
+
+
 def main() -> None:
     """Main supervisor loop — poll for pending deployments."""
     log("=" * 60)
@@ -480,8 +530,20 @@ def main() -> None:
         except Exception as e:
             log(f"⚠️  Startup cleanup failed: {e}")
 
+    # Catch up local main → origin/main on first boot, before entering the
+    # poll loop. Picks up any commits made while the supervisor was down.
+    try:
+        mirror_origin_main()
+    except Exception as e:
+        log(f"⚠️  Startup mirror failed: {e}")
+
     while True:
         try:
+            # Keep local main in sync with origin/main every tick. Cheap
+            # (single `git fetch` over HTTPS) and gives users a hard 5s upper
+            # bound on local-vs-GitHub staleness, regardless of whether
+            # there's an active deployment to process.
+            mirror_origin_main()
             if DB_PATH.exists():
                 db = get_db()
                 pending = get_pending_deployments(db)
