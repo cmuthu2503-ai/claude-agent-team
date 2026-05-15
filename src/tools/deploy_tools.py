@@ -126,6 +126,12 @@ class WaitForDeploymentTool:
 
     DEFAULT_TIMEOUT_SECONDS = 600   # 10 minutes — enough for build + staging + prod
     POLL_INTERVAL_SECONDS = 5
+    # If no deployment_states row appears within this many seconds, return
+    # INDETERMINATE immediately — don't burn the full timeout. code_commit
+    # runs synchronously before devops_specialist, so a missing row after
+    # 30s means the workflow has no code_commit stage (e.g. demo_preparation)
+    # and the row will NEVER appear. Without this, demo flows wait 10 minutes.
+    NO_ROW_GRACE_SECONDS = 30
 
     def __init__(self, state: Any = None) -> None:
         # `state` is the StateStore singleton from app.state. Required for
@@ -179,8 +185,14 @@ class WaitForDeploymentTool:
         timeout = int(params.get("timeout") or self.DEFAULT_TIMEOUT_SECONDS)
 
         loop = asyncio.get_event_loop()
-        deadline = loop.time() + max(timeout, 30)
+        start = loop.time()
+        deadline = start + max(timeout, 30)
+        # Separate, shorter deadline that ONLY applies while no row exists.
+        # Once a row appears, we switch to waiting up to the full `timeout`
+        # for it to reach a terminal state.
+        no_row_deadline = start + self.NO_ROW_GRACE_SECONDS
         last_step: str | None = None
+        ever_saw_row = False
 
         while True:
             try:
@@ -195,9 +207,21 @@ class WaitForDeploymentTool:
                 ds = None
 
             if ds is None:
-                # No deployment_states row yet (CodeWriter hasn't fired or this
-                # request didn't pass through code_commit). Keep polling — the
-                # row should appear once the workflow's code_commit stage runs.
+                # No deployment_states row yet. If we've waited the grace period
+                # and STILL nothing, this workflow doesn't have a code_commit
+                # stage — no row will ever appear. Bail out fast so the agent
+                # can report NO_DEPLOY_TRIGGERED instead of timing out at 10min.
+                if not ever_saw_row and loop.time() >= no_row_deadline:
+                    return _json.dumps({
+                        "status": "INDETERMINATE",
+                        "reason": (
+                            f"No deployment_states row appeared within "
+                            f"{self.NO_ROW_GRACE_SECONDS}s. The workflow likely has "
+                            f"no code_commit stage (e.g. demo_preparation, or a "
+                            f"workflow that intentionally doesn't ship code)."
+                        ),
+                        "request_id": request_id,
+                    })
                 if loop.time() >= deadline:
                     return _json.dumps({
                         "status": "INDETERMINATE",
@@ -206,6 +230,7 @@ class WaitForDeploymentTool:
                         "request_id": request_id,
                     })
             else:
+                ever_saw_row = True
                 if ds.current_step != last_step:
                     logger.info(
                         "wait_for_deployment_progress",
