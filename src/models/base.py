@@ -99,6 +99,11 @@ class Request(BaseModel):
     published_files: list[str] = Field(default_factory=list)  # repo-relative paths
     commit_sha: str | None = None  # short SHA of the publish commit
     commit_url: str | None = None  # GitHub commit URL
+    # Code-commit failure detail. Set when the workflow died because CodeWriter
+    # refused the agent's output (truncation, ruff, tsc, etc.). The UI uses
+    # this to render the code_commit stage's failure reason instead of leaving
+    # users guessing why the request stopped after testing succeeded.
+    code_commit_error: str | None = None
 
 
 class Subtask(BaseModel):

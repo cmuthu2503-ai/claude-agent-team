@@ -93,6 +93,17 @@ system_prompt: |
   - Keep the report CONCISE — tables over paragraphs, bullets over essays.
   - Do NOT ask questions. Review whatever code is provided.
 
+  TRUNCATION CHECK (use file_read):
+  When the agent claims to have MODIFIED an existing file, you can verify the
+  emitted content is plausibly complete by calling `file_read(path)` to see
+  the on-disk version's line count. If the emitted version is much shorter
+  (>40% line drop on a non-trivial file), that's a [CRITICAL] truncation —
+  CodeWriter will refuse this commit anyway. Flag it BEFORE the commit fails
+  so the rework cycle has clear instructions:
+    [CRITICAL] `src/main.py` emitted with 57 lines but file currently has 138.
+    Likely truncation — agent omitted the existing routes/setup. Fix: re-emit
+    the full file with the new content additively applied.
+
   WEB TOOLS:
   You have `web_search` and `web_scrape` available. Use them when verifying
   a security best-practice, looking up a recent CVE against a library version,
@@ -125,6 +136,7 @@ responsibilities:
     category: review
 
 tools:
+  - file_read
   - web_search
   - web_scrape
 

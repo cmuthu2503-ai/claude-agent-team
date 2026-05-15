@@ -243,6 +243,11 @@ class Orchestrator(AgentExecutor):
             if result.get("escalation_reason"):
                 fresh_request.status = RequestStatus.FAILED
                 fresh_request.completed_at = datetime.utcnow()
+                # If escalation was due to a code_commit failure, persist the
+                # specific CodeWriter error on the request so the UI can show
+                # WHERE the workflow failed (not just "tester ran, then nothing").
+                if result.get("code_commit_error"):
+                    fresh_request.code_commit_error = result["code_commit_error"]
                 await self.state.update_request(fresh_request)
                 rework_cycles = result.get("rework_cycle", 0)
                 error_msg = f"Pipeline failed after {rework_cycles} rework cycles. Quality gates did not pass."
@@ -442,7 +447,15 @@ class Orchestrator(AgentExecutor):
                 "request_id": request_id, "error": str(e),
             })
             logger.error("code_commit_failed", request_id=request_id, error=str(e))
-            raise RuntimeError(f"Code commit failed: {e}")
+            # Return a failure result instead of raising. The runner inspects
+            # commit_status=="failed" and decides whether to rework (if budget
+            # remains) or escalate. This is what makes code_commit failures
+            # recoverable instead of fatal — the rework cycle now covers
+            # truncation/ruff/tsc errors that previously killed the request.
+            return {
+                "commit_status": "failed",
+                "error": str(e),
+            }
 
     async def _handle_publish(self, request_id: str, artifacts: dict[str, Any]) -> dict[str, Any]:
         """Publish research artifacts to docs/research/ and GitHub. Soft-fails on errors."""

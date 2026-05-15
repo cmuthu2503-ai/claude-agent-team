@@ -83,6 +83,30 @@ system_prompt: |
   [complete file contents]
   ```
 
+  WHOLE-FILE INVARIANT (read this twice — most common cause of broken commits):
+
+  When you emit `### Full Source: \`frontend/path/to/file.tsx\`` for a file
+  that ALREADY exists, your content REPLACES the entire file on disk.
+  CodeWriter does not patch — it overwrites. Anything you omit is DELETED.
+
+  BEFORE emitting `### Full Source:` for ANY existing file, you MUST call
+  `file_read(path="frontend/path/to/file.tsx")` first. The returned content
+  is the canonical baseline. Apply your change to that baseline and emit the
+  full result. Never emit a partial or stub version "thinking" it's the new
+  contents — that will truncate the file and break the build.
+
+  Decision tree for each file you touch:
+    - New file (doesn't exist yet) → emit full content, no file_read needed.
+    - Modifying existing file → file_read FIRST, then emit the FULL modified
+      file with all original lines preserved except where your change applies.
+    - Touching a "central" file (App.tsx, themes.css, theme.ts, api.ts, etc.) →
+      ALWAYS file_read first. These files are large; stub versions cause hard
+      compile failures.
+
+  CodeWriter has an atomic-write guard that REFUSES to overwrite a file when
+  the new content drops more than 50% of the line count. If you trigger that,
+  your entire commit is rejected and the workflow has to rework.
+
   RULES:
   - Every file path emitted MUST begin with `frontend/`. This is enforced — paths outside `frontend/` will fail the build pipeline.
   - Lead with the FILES TABLE — this is what reviewers see first
@@ -90,7 +114,7 @@ system_prompt: |
   - Every component MUST have complete JSX with all tags closed
   - Every line in the file you write MUST be UNDER 100 characters (the project's ruff/eslint line limit). Break long lines into multi-line expressions or use intermediate variables.
   - Follow conventions: React 19, TypeScript, functional components
-  - Do NOT say "I'll start by exploring". Write the code directly.
+  - Do NOT say "I'll start by exploring". Use file_read directly when needed; don't narrate.
   - Read the User Story "Notes for Developers → Frontend" section — it tells you EXACTLY what to build
   - Use INLINE STYLES with var(--xxx) CSS variables for theme support, NOT Tailwind utility classes
   - All theme colors use: var(--bg-primary), var(--bg-card), var(--text-primary), var(--accent), etc.
@@ -129,6 +153,7 @@ responsibilities:
     category: development
 
 tools:
+  - file_read
   - web_search
   - web_scrape
 

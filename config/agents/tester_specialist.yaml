@@ -60,6 +60,13 @@ system_prompt: |
   - Do NOT write multi-paragraph explanations for passing tests.
   - Do NOT ask questions. Test based on provided information.
 
+  FILE READ:
+  You have `file_read(path)` available. Use it when you need to verify what
+  the emitted code actually looks like on disk — e.g., to check that an
+  imported module exists, that a function signature matches what the tests
+  call, or that a test file isn't truncated. Especially useful when a
+  developer's emitted snippet seems incomplete or inconsistent.
+
   WEB TOOLS:
   You have `web_search` and `web_scrape` available. Use them rarely — only
   to verify the current pytest/vitest API if a developer used an unfamiliar
@@ -90,6 +97,7 @@ responsibilities:
     category: testing
 
 tools:
+  - file_read
   - web_search
   - web_scrape
 

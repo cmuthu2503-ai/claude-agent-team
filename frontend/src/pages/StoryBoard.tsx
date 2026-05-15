@@ -178,7 +178,7 @@ export function StoryBoardPage() {
     return "waiting"
   }
 
-  type PipeState = "done" | "active" | "waiting"
+  type PipeState = "done" | "active" | "waiting" | "failed"
 
   // Special handling for stages whose ID matches a story-status bucket — when
   // a workflow produces stories, the per-bucket count is more useful than just
@@ -215,11 +215,19 @@ export function StoryBoardPage() {
     if (stage.id === "deployment" || stage.id === "hotfix_deploy") {
       return deploymentDerivedState()
     }
-    // System stages (no agents, e.g. code_commit, publish) are "done" if the
-    // request artifacts indicate the system step ran (commit_sha set, files
-    // published). Otherwise treat as waiting.
+    // System stages (no agents, e.g. code_commit, publish) — derive state from
+    // the actual artifact/failure signals on the request, since they have no
+    // subtask row to inspect.
     if (stage.system) {
       const artifacts = data.artifacts || {}
+      // For code_commit specifically: if the backend persisted a
+      // code_commit_error on the request, the commit was rejected (truncation,
+      // ruff, tsc, etc.). Render the stage as "failed" so the user can see
+      // immediately WHERE the workflow died instead of staring at "tester
+      // completed" and wondering why nothing else happened.
+      if (stage.id === "code_commit" && (data as any).code_commit_error) {
+        return "failed"
+      }
       const hasOutput = artifacts.commit_sha || (artifacts.published_files || []).length > 0
       return hasOutput ? "done" : "waiting"
     }
@@ -314,19 +322,32 @@ export function StoryBoardPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           {stages.map((stage, i) => {
             const state = pipeStates[i]
-            const dotBg = state === "done" ? C.green : state === "active" ? C.accent : C.border
+            // "failed" gets a red dot with an X — distinct from waiting (gray)
+            // and done (green) so the user can see at a glance WHERE the
+            // pipeline died.
+            const dotBg = state === "failed" ? "#dc2626"
+                        : state === "done" ? C.green
+                        : state === "active" ? C.accent
+                        : C.border
             const dotColor = state === "waiting" ? C.text4 : "#fff"
-            const labelColor = state === "done" ? C.green : state === "active" ? C.accent : C.text3
-            const labelWeight = state === "active" ? 600 : 400
+            const labelColor = state === "failed" ? "#dc2626"
+                             : state === "done" ? C.green
+                             : state === "active" ? C.accent
+                             : C.text3
+            const labelWeight = (state === "active" || state === "failed") ? 600 : 400
+            const dotContent = state === "failed" ? "✗" : pipeCounts[i]
+            const tooltip = state === "failed" && stage.id === "code_commit" && (data as any).code_commit_error
+              ? `Code commit rejected:\n${(data as any).code_commit_error}`
+              : `Agents: ${stage.agents.join(", ") || "(system)"}`
             return (
               <div key={stage.id} style={{ display: "contents" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }} title={`Agents: ${stage.agents.join(", ") || "(system)"}`}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }} title={tooltip}>
                   <div style={{
                     width: 28, height: 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center",
                     fontSize: 12, fontWeight: 700, background: dotBg, color: dotColor,
                     animation: state === "active" ? "sb-pulse 2s ease-in-out infinite" : "none",
                   }}>
-                    {pipeCounts[i]}
+                    {dotContent}
                   </div>
                   <span style={{ fontSize: 11, color: labelColor, fontWeight: labelWeight }}>{stage.label}</span>
                 </div>
@@ -340,6 +361,27 @@ export function StoryBoardPage() {
             )
           })}
         </div>
+
+        {/* Code-commit failure banner — show the actual CodeWriter rejection
+            reason directly under the pipeline so users don't have to hover the
+            ✗ dot to discover what broke. This is the most common cause of a
+            request "stuck after testing" — Phase D surfaces it inline. */}
+        {(data as any).code_commit_error && (
+          <div style={{
+            marginTop: 12, padding: "10px 14px", borderRadius: 6,
+            background: "#fef2f2", border: "1px solid #fecaca",
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#991b1b", marginBottom: 4 }}>
+              ✗ Code commit rejected
+            </div>
+            <div style={{
+              fontSize: 11, color: "#7f1d1d", fontFamily: "ui-monospace, monospace",
+              whiteSpace: "pre-wrap", lineHeight: 1.5,
+            }}>
+              {(data as any).code_commit_error}
+            </div>
+          </div>
+        )}
 
         {/* Stats row — story-aware. For workflows that don't produce stories
             (bug_fix, research, content, etc.) we show subtask-based stats
