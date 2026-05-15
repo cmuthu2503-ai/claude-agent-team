@@ -102,11 +102,23 @@ workflows:
             agents: [tester_specialist]
             inputs: [fix_code, fix_tests]
             outputs: [test_report]
+        next: [code_commit]
+
+      # System stage (agents: []) — runner detects by name and calls
+      # orchestrator._handle_code_commit, which parses fix_code from the
+      # backend/frontend specialists' outputs, writes files, compiles,
+      # publishes to GitHub via Trees API, and writes a deployment_states row.
+      # That row is what the supervisor watches; without this stage,
+      # hotfix_deploy's wait_for_deployment polls a row that never appears.
+      code_commit:
+        agents: []
+        inputs: [fix_code, test_report, review_report]
+        outputs: [commit_sha, files_committed]
         next: [hotfix_deploy]
 
       hotfix_deploy:
         agents: [devops_specialist]
-        inputs: [review_report, test_report]
+        inputs: [review_report, test_report, commit_sha]
         outputs: [deployment_report]
 
   # ──────────────────────────────────────────────

@@ -121,7 +121,7 @@ export function ThemeSelector() {
         }}
       >
         <Palette size={14} />
-        {currentTheme?.name}
+        {currentTheme?.label}
       </button>
       {dropdown}
     </>
@@ -163,7 +163,7 @@ function ThemeOption({
       }}
     >
       <div>
-        <div style={{ fontWeight: 600 }}>{t.name}</div>
+        <div style={{ fontWeight: 600 }}>{t.label}</div>
         <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
           {t.description}
         </div>
