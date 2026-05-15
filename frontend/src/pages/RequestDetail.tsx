@@ -99,13 +99,24 @@ export function RequestDetailPage() {
           <span>Created: {new Date(data.created_at).toLocaleString()}</span>
           {data.total_cost?.cost_usd > 0 && <span>Cost: ${data.total_cost.cost_usd}</span>}
         </div>
-        {data.stories?.length > 0 && (
-          <div style={{ marginTop: 12 }}>
-            <Link to={`/stories/${requestId}`} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 13, color: "var(--accent)", textDecoration: "none" }}>
-              <ExternalLink size={13} /> View Story Board ({data.stories.length} stories)
-            </Link>
-          </div>
-        )}
+        {/* Workflow/Story Board link — visible for every request type. The
+            Story Board page now renders a workflow-driven pipeline view that
+            adapts to whichever workflow the request actually ran (feature,
+            bug fix, research, etc.). Label adapts per task_type so users
+            know what to expect on the other side. */}
+        <div style={{ marginTop: 12 }}>
+          <Link to={`/stories/${requestId}`} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 13, color: "var(--accent)", textDecoration: "none" }}>
+            <ExternalLink size={13} />
+            {" "}
+            {data.task_type === "feature_request" ? (
+              data.stories?.length > 0
+                ? `View Story Board (${data.stories.length} ${data.stories.length === 1 ? "story" : "stories"})`
+                : "View Story Board (no stories parsed)"
+            ) : (
+              `View Workflow Pipeline (${data.subtasks?.length || 0} ${(data.subtasks?.length || 0) === 1 ? "agent run" : "agent runs"})`
+            )}
+          </Link>
+        </div>
       </div>
 
       {/* Artifacts Panel */}

@@ -10,6 +10,17 @@ project:
 
   tech_stack: "python-react"         # templates: python-react, node-react, python-only
 
+  # ── LLM Provider ────────────────────────────────
+  # All agents call Claude Platform on AWS (Anthropic-operated, AWS-authenticated).
+  # Not Bedrock, not the direct Anthropic API. The actual API key + workspace ID
+  # are loaded from env vars / Docker secrets (see docs/setup-claude-platform-on-aws.md).
+  llm:
+    provider: "claude_platform_aws"  # locked — only one provider supported
+    region: "us-east-1"              # AWS region for billing/IAM (read from $AWS_REGION at runtime)
+    # inference_geo: "us" pins inference to US data centers (1.1× pricing premium).
+    # Set to "global" to allow routing to any Anthropic region (standard pricing).
+    inference_geo: "us"
+
   environments:
     local:
       backend_url: "http://localhost:8000"

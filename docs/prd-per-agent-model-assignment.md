@@ -1,6 +1,14 @@
 # Product Requirements Document (PRD)
 # Per-Agent Dynamic Model Assignment
 
+> **⚠️ SUPERSEDED — 2026-05-14**
+>
+> This PRD proposed giving admins per-agent model overrides across multiple providers (Anthropic direct, Bedrock, OpenAI, Ollama). The project has since consolidated onto a **single provider** for all agents: **Claude Platform on AWS** on `claude-opus-4-7`. The 5-button frontend picker is gone, the `provider` field is no longer accepted on requests, and the Bedrock / OpenAI / Anthropic-direct code paths have been removed.
+>
+> Setup guide: [docs/setup-claude-platform-on-aws.md](setup-claude-platform-on-aws.md).
+>
+> If you want to re-introduce per-agent model selection, write a new PRD that builds on the current single-provider state — don't pick this one back up.
+
 ---
 
 ## Document Information
@@ -10,7 +18,7 @@
 | Document Version | 1.0 |
 | Created Date | 2026-04-08 |
 | Last Updated | 2026-04-08 |
-| Status | Draft |
+| Status | **Superseded (2026-05-14)** |
 | Product Owner | Chandramouli |
 | Related Plan | `C:\Users\chand\.claude\plans\cryptic-knitting-platypus.md` |
 

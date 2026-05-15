@@ -17,26 +17,27 @@ async def cost_setup(tmp_path):
 
 # ── Token Tracker Tests ──────────────────────────
 
-def test_cost_calculation_opus():
+def test_cost_calculation_opus_4_7():
+    """Per-token pricing for the single Claude Platform on AWS model."""
     tracker = TokenTracker.__new__(TokenTracker)
     tracker._pricing = {
-        "claude-opus-4-6": {"input": 15.00, "output": 75.00},
-        "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
+        "claude-opus-4-7": {"input": 16.50, "output": 82.50},
     }
-    # 1000 input + 2000 output tokens with Opus pricing
-    cost = tracker.calculate_cost("claude-opus-4-6", 1000, 2000)
-    expected = (1000 * 15.00 + 2000 * 75.00) / 1_000_000
+    # 1000 input + 2000 output tokens with Opus 4.7 (US-geo) pricing
+    cost = tracker.calculate_cost("claude-opus-4-7", 1000, 2000)
+    expected = (1000 * 16.50 + 2000 * 82.50) / 1_000_000
     assert abs(cost - expected) < 0.0001
 
 
-def test_cost_calculation_sonnet():
+def test_cost_calculation_legacy_opus_4_6_kept_for_old_rows():
+    """Old token_usage rows logged before the Claude Platform on AWS migration still need pricing."""
     tracker = TokenTracker.__new__(TokenTracker)
     tracker._pricing = {
-        "claude-opus-4-6": {"input": 15.00, "output": 75.00},
-        "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
+        "claude-opus-4-7": {"input": 16.50, "output": 82.50},
+        "claude-opus-4-6": {"input": 16.50, "output": 82.50},
     }
-    cost = tracker.calculate_cost("claude-sonnet-4-6", 5000, 10000)
-    expected = (5000 * 3.00 + 10000 * 15.00) / 1_000_000
+    cost = tracker.calculate_cost("claude-opus-4-6", 5000, 10000)
+    expected = (5000 * 16.50 + 10000 * 82.50) / 1_000_000
     assert abs(cost - expected) < 0.0001
 
 
@@ -52,7 +53,7 @@ async def test_record_token_usage(cost_setup):
     tracker = TokenTracker(state)
     usage = await tracker.record(
         request_id="REQ-001", subtask_id="REQ-001-BE",
-        agent_id="backend_specialist", model="claude-sonnet-4-6",
+        agent_id="backend_specialist", model="claude-opus-4-7",
         input_tokens=2000, output_tokens=5000,
     )
     assert usage.cost_usd > 0
@@ -64,8 +65,8 @@ async def test_record_token_usage(cost_setup):
 async def test_daily_cost_aggregation(cost_setup):
     state = cost_setup
     tracker = TokenTracker(state)
-    await tracker.record("REQ-A", "REQ-A-1", "be", "claude-sonnet-4-6", 1000, 1000)
-    await tracker.record("REQ-B", "REQ-B-1", "fe", "claude-sonnet-4-6", 2000, 2000)
+    await tracker.record("REQ-A", "REQ-A-1", "be", "claude-opus-4-7", 1000, 1000)
+    await tracker.record("REQ-B", "REQ-B-1", "fe", "claude-opus-4-7", 2000, 2000)
     daily = await state.get_daily_cost()
     assert daily > 0
 

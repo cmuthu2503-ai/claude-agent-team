@@ -18,15 +18,50 @@ services:
       context: .
       dockerfile: Dockerfile.supervisor
     container_name: agent-team-supervisor
+    # The supervisor invokes the deployment-judge LLM, so it needs Anthropic
+    # credentials. We read them from .env (same file the backend reads) and
+    # pass through explicit env vars. For prod, swap to Docker secrets — see
+    # docker-compose.prod.yml for the pattern.
+    env_file:
+      - .env
+    environment:
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - ANTHROPIC_AWS_INFERENCE_GEO=${ANTHROPIC_AWS_INFERENCE_GEO:-us}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - agent-team-data:/app/data
-      - .:/app/project
+      # The supervisor performs git operations (fetch, checkout, revert) — those
+      # require a real `.git` directory. The MAIN REPO has one; git worktrees
+      # only have a `.git` *file* pointing to an absolute host path that doesn't
+      # resolve inside the container. So we explicitly bind to the main repo
+      # regardless of where you ran `docker compose -f docker-compose.supervisor.yml up`.
+      #
+      # The user-facing dev stack (whether it's in main repo or any worktree)
+      # writes to the same stable `agent-team-dev_agent-team-data` volume the
+      # supervisor reads — so the supervisor still sees deploy requests from any
+      # worktree. It just does the git/build work against the main repo.
+      #
+      # Override PROJECT_ROOT_HOST in the environment if your main-repo path
+      # differs from the default below.
+      - ${PROJECT_ROOT_HOST:-C:/ai-projects/claude-agent-team}:/app/project
     working_dir: /app/project
     restart: unless-stopped
 
-# Use the SAME named volume as the main app so supervisor can read the DB
+# Use the SAME named volume as the main app so supervisor can read the DB.
+#
+# This binds to `agent-team-dev_agent-team-data` — the STABLE volume name
+# produced by the pinned `name: agent-team-dev` in docker-compose.yml. This
+# name doesn't drift across worktrees or directory renames, so the supervisor
+# always sees the dev stack's data regardless of where you invoked `docker
+# compose up` from.
+#
+# If you want the supervisor to watch a different (isolated) dev environment,
+# either:
+#   1. Set COMPOSE_PROJECT_NAME=foo when running both the dev stack AND the
+#      supervisor (override the file-level name:), then update the
+#      `name:` below to match (foo_agent-team-data), OR
+#   2. Run a second supervisor stack with a different external volume name.
 volumes:
   agent-team-data:
     external: true
-    name: claude-agent-team_agent-team-data
+    name: agent-team-dev_agent-team-data

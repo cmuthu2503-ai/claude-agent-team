@@ -4,7 +4,7 @@ role: "Backend Specialist"
 team: development
 reports_to: code_reviewer
 
-model: claude-sonnet-4-6
+model: claude-opus-4-7
 
 system_prompt: |
   You are the Backend Specialist for the Agent Team platform.

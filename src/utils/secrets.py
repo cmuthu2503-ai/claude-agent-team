@@ -8,9 +8,9 @@ so call sites don't have to know which mode they're running in.
 Usage:
     from src.utils.secrets import read_secret
 
-    api_key = read_secret("openai_api_key", "OPENAI_API_KEY")
-    # 1. Tries /run/secrets/openai_api_key (Docker secret file)
-    # 2. Falls back to os.environ["OPENAI_API_KEY"]
+    api_key = read_secret("anthropic_aws_api_key", "ANTHROPIC_AWS_API_KEY")
+    # 1. Tries /run/secrets/anthropic_aws_api_key (Docker secret file)
+    # 2. Falls back to os.environ["ANTHROPIC_AWS_API_KEY"]
     # 3. Returns "" if neither is set
 """
 
@@ -34,7 +34,7 @@ def read_secret(secret_name: str, env_var: str, default: str = "") -> str:
     Args:
         secret_name: lowercase Docker secret name (matches the `secrets:` block
                      in docker-compose.prod.yml). Example: "openai_api_key".
-        env_var:     uppercase env var name to fall back to. Example: "OPENAI_API_KEY".
+        env_var:     uppercase env var name to fall back to. Example: "ANTHROPIC_AWS_API_KEY".
         default:     value to return if neither source has it. Defaults to "".
 
     Returns:

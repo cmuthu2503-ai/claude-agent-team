@@ -8,6 +8,7 @@ from src.models.base import (
     Request,
     RequestStatus,
     Subtask,
+    SubtaskStatus,
     TokenUsage,
     User,
     UserRole,
@@ -93,6 +94,38 @@ async def test_get_subtasks_for_request(store):
     assert len(subs) == 2
 
 
+async def test_get_active_subtasks_returns_only_in_progress(store):
+    req = Request(request_id="REQ-021", description="Active filter", created_by="u")
+    await store.create_request(req)
+    await store.create_subtask(
+        Subtask(
+            subtask_id="REQ-021-BE",
+            request_id="REQ-021",
+            agent_id="backend_specialist",
+            status=SubtaskStatus.IN_PROGRESS,
+        )
+    )
+    await store.create_subtask(
+        Subtask(
+            subtask_id="REQ-021-FE",
+            request_id="REQ-021",
+            agent_id="frontend_specialist",
+            status=SubtaskStatus.PENDING,
+        )
+    )
+    await store.create_subtask(
+        Subtask(
+            subtask_id="REQ-021-TS",
+            request_id="REQ-021",
+            agent_id="tester_specialist",
+            status=SubtaskStatus.COMPLETED,
+        )
+    )
+    active = await store.get_active_subtasks()
+    assert {s.agent_id for s in active} == {"backend_specialist"}
+    assert {s.request_id for s in active} == {"REQ-021"}
+
+
 # ── User CRUD ────────────────────────────────────
 
 
@@ -119,7 +152,7 @@ async def test_record_and_get_token_usage(store):
     await store.create_request(req)
     usage = TokenUsage(
         usage_id="tu-1", request_id="REQ-030", subtask_id="REQ-030-BE",
-        agent_id="backend_specialist", model="claude-sonnet-4-6",
+        agent_id="backend_specialist", model="claude-opus-4-7",
         input_tokens=1000, output_tokens=2000, cost_usd=0.045,
     )
     await store.record_token_usage(usage)

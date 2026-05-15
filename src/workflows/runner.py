@@ -1,6 +1,7 @@
 """Workflow runner — executes stages with combined quality gate and rework loops."""
 
 import asyncio
+import re
 from collections import defaultdict
 from typing import Any, Callable, Protocol
 
@@ -15,6 +16,47 @@ from src.workflows.loader import (
 logger = structlog.get_logger()
 
 MAX_REWORK_CYCLES = 2
+
+# Seconds between successive parallel agents in a stage. Was 30s as a rate-limit
+# defensive crutch; on Claude Platform on AWS / Opus 4.7 the agents take 60-120s
+# each anyway, so a 3s offset keeps any "burst" effect small without making the
+# UI look like only one agent is running.
+PARALLEL_STAGGER_SECONDS = 3.0
+
+# Affected-components routing — the PRD specialist emits a "**Affected Components:**
+# frontend, backend" line in its output. The runner parses it after each stage and
+# uses it to skip irrelevant parallel groups (e.g. skip backend_specialist on a
+# pure UI theme task). If the line is missing or unparseable, all groups run
+# (safe default — matches pre-Option-C behaviour).
+_AFFECTED_COMPONENTS_RE = re.compile(
+    r"\*?\*?Affected Components:\*?\*?\s*(.+?)(?:\n|$)",
+    re.IGNORECASE,
+)
+_VALID_COMPONENTS: frozenset[str] = frozenset({"frontend", "backend"})
+
+
+def _extract_affected_components(text: str) -> list[str] | None:
+    """Parse an `**Affected Components:** frontend, backend` line from agent output.
+
+    Returns the list of recognised components (subset of `_VALID_COMPONENTS`), or
+    `None` if the marker is missing, malformed, or produced no recognised values.
+    A `None` return tells the runner to fall back to running every parallel group.
+    """
+    if not text:
+        return None
+    match = _AFFECTED_COMPONENTS_RE.search(text)
+    if not match:
+        return None
+    raw = match.group(1).strip()
+    # Strip surrounding bracket characters that some agents emit despite the prompt format.
+    raw = raw.strip("[](){}").strip()
+    parts = re.split(r"[,;|]|\sand\s|\s+/\s+|\s+\+\s+", raw, flags=re.IGNORECASE)
+    seen: list[str] = []
+    for part in parts:
+        token = part.strip().lower().strip(".,;:")
+        if token in _VALID_COMPONENTS and token not in seen:
+            seen.append(token)
+    return seen or None
 
 
 class AgentExecutor(Protocol):
@@ -257,7 +299,9 @@ class WorkflowRunner:
                     break
                 if line.strip():
                     failures.append(line.strip())
-        return "\n".join(failures[:15]) if failures else "Test failures detected (details unavailable)"
+        if failures:
+            return "\n".join(failures[:15])
+        return "Test failures detected (details unavailable)"
 
     async def _run_stage(
         self, stage: StageDefinition, request_id: str, artifacts: dict[str, Any]
@@ -266,22 +310,67 @@ class WorkflowRunner:
         for agent_id in stage.agents:
             result = await self.executor.execute_agent(agent_id, request_id, artifacts)
             results.update(result)
+            # Capture an affected_components marker if this agent emitted one
+            # (typically the PRD specialist). Persisted in the workflow artifacts
+            # so downstream parallel stages can short-circuit irrelevant groups.
+            components = _extract_affected_components(result.get("text", ""))
+            if components is not None:
+                results["affected_components"] = components
+                logger.info(
+                    "affected_components_extracted",
+                    request_id=request_id,
+                    agent=agent_id,
+                    components=components,
+                )
         return results
 
     async def _run_parallel_stage(
         self, stage: ParallelStage, request_id: str, artifacts: dict[str, Any]
     ) -> dict[str, Any]:
+        affected = artifacts.get("affected_components")
+
         async def _staggered_execute(agent_id: str, inputs: dict, delay: float) -> dict[str, Any]:
             if delay > 0:
                 await asyncio.sleep(delay)
             return await self.executor.execute_agent(agent_id, request_id, inputs)
 
-        tasks = []
+        tasks: list[Any] = []
         delay = 0.0
+        skipped: list[str] = []
         for group in stage.groups:
+            # The affected-components filter only applies to groups whose `group_id`
+            # is actually a domain name (frontend / backend). Other parallel stages
+            # use group names like "review", "test" (bug_fix's review_and_test) or
+            # "env", "test_plan" (demo_preparation's prepare) — those are stage-role
+            # names, not domains, and must ALWAYS run regardless of what the PRD
+            # listed as affected components.
+            #
+            # Without this check, bug_fix's review_and_test stage gets entirely
+            # skipped because `review` and `test` don't appear in the components
+            # list — bugs ship to production unreviewed and untested.
+            is_domain_group = group.group_id in _VALID_COMPONENTS
+            if affected and is_domain_group and group.group_id not in affected:
+                skipped.append(group.group_id)
+                logger.info(
+                    "parallel_group_skipped",
+                    request_id=request_id,
+                    stage=stage.stage_id,
+                    group=group.group_id,
+                    affected=affected,
+                )
+                continue
             for agent_id in group.agents:
                 tasks.append(_staggered_execute(agent_id, artifacts, delay))
-                delay += 30.0
+                delay += PARALLEL_STAGGER_SECONDS
+
+        if not tasks:
+            # Every group got filtered out — log loudly and return empty so the
+            # downstream review/testing stages see no new code to chew on.
+            logger.warning(
+                "parallel_stage_all_groups_skipped",
+                request_id=request_id, stage=stage.stage_id, skipped=skipped,
+            )
+            return {}
 
         results_list = await asyncio.gather(*tasks, return_exceptions=True)
         combined: dict[str, Any] = {}

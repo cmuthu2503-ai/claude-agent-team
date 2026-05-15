@@ -103,3 +103,9 @@ tools:
     description: "Deep-read a single URL via Firecrawl. Returns clean markdown of the full page. Use for known URLs (e.g., a vendor's docs or pricing page)."
     category: research
     available_to: [all]
+
+  wait_for_deployment:
+    description: "Block until the standalone deployment supervisor reaches a terminal state for the current request (completed / failed / rolled_back / on_hold). Returns the full deployment_states row including the judge's strategy + reasoning. ONLY for devops_specialist — its sole tool for observing the supervisor's real-world deployment work."
+    category: infrastructure
+    available_to:
+      - devops_specialist

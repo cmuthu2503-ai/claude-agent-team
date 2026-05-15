@@ -2,43 +2,208 @@ import { useState, useEffect } from "react"
 import { api } from "../lib/api"
 import { StatusBadge } from "../components/ui/StatusBadge"
 
+// Canonical Release shape — mirrors src/api/routes/releases.py::_CANONICAL_DOC.
+// Keep these field names in sync; the page renders nothing useful if they drift.
+interface Release {
+  deploy_id: string
+  request_id: string
+  commit_sha: string
+  environment: string
+  status: string
+  started_at: string | null
+  completed_at: string | null
+  error_message: string | null
+}
+
+function formatTime(iso: string | null): string {
+  if (!iso) return "—"
+  try {
+    return new Date(iso).toLocaleString()
+  } catch {
+    return iso
+  }
+}
+
 export function ReleasesPage() {
-  const [releases, setReleases] = useState<any[]>([])
+  const [releases, setReleases] = useState<Release[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    api.get("/releases").then((res) => setReleases(res.data)).catch(() => {})
+    setLoading(true)
+    api
+      .get("/releases")
+      .then((res) => {
+        setReleases(res.data || [])
+        setError(null)
+      })
+      .catch((err: any) => {
+        setError(err?.message || "Failed to load releases")
+      })
+      .finally(() => setLoading(false))
   }, [])
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4 p-6">
-      <h1 className="text-xl font-bold text-gray-900">Releases</h1>
-      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-        <table className="w-full text-sm">
-          <thead className="border-b bg-gray-50 text-left text-xs font-medium text-gray-500">
-            <tr>
-              <th className="px-4 py-3">Deploy ID</th>
-              <th className="px-4 py-3">Request</th>
-              <th className="px-4 py-3">Environment</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Deployed</th>
+    <div
+      style={{
+        maxWidth: 1100,
+        margin: "0 auto",
+        padding: 24,
+        display: "flex",
+        flexDirection: "column",
+        gap: 16,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
+        <h1
+          style={{
+            fontSize: 22,
+            fontWeight: 700,
+            color: "var(--text-primary)",
+            margin: 0,
+          }}
+        >
+          Releases
+        </h1>
+        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+          Recent deployments across all environments
+        </span>
+      </div>
+
+      {error && (
+        <div
+          style={{
+            padding: "10px 14px",
+            background: "var(--danger-subtle)",
+            color: "var(--danger)",
+            border: "1px solid var(--danger)",
+            borderRadius: "var(--radius)",
+            fontSize: 13,
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      <div
+        style={{
+          background: "var(--bg-card)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          overflow: "hidden",
+        }}
+      >
+        <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+          <thead>
+            <tr
+              style={{
+                background: "var(--bg-input)",
+                borderBottom: "1px solid var(--border)",
+                textAlign: "left",
+              }}
+            >
+              <Th>Deploy ID</Th>
+              <Th>Request</Th>
+              <Th>Commit</Th>
+              <Th>Environment</Th>
+              <Th>Status</Th>
+              <Th>Started</Th>
+              <Th>Completed</Th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">
-            {releases.map((d) => (
-              <tr key={d.deploy_id} className="hover:bg-gray-50">
-                <td className="px-4 py-3 font-mono text-xs text-gray-400">{d.deploy_id}</td>
-                <td className="px-4 py-3 font-mono text-xs text-blue-600">{d.request_id}</td>
-                <td className="px-4 py-3 capitalize">{d.environment}</td>
-                <td className="px-4 py-3"><StatusBadge status={d.status} /></td>
-                <td className="px-4 py-3 text-gray-400">{d.deployed_at ? new Date(d.deployed_at).toLocaleString() : "—"}</td>
+          <tbody>
+            {releases.map((r) => (
+              <tr
+                key={r.deploy_id}
+                style={{ borderBottom: "1px solid var(--border)" }}
+              >
+                <Td mono muted>
+                  {r.deploy_id}
+                </Td>
+                <Td mono>
+                  <span style={{ color: "var(--accent)" }}>{r.request_id}</span>
+                </Td>
+                <Td mono muted>
+                  {r.commit_sha || "—"}
+                </Td>
+                <Td capitalize>{r.environment || "—"}</Td>
+                <Td>
+                  <StatusBadge status={r.status} />
+                </Td>
+                <Td muted>{formatTime(r.started_at)}</Td>
+                <Td muted>{formatTime(r.completed_at)}</Td>
               </tr>
             ))}
           </tbody>
         </table>
-        {releases.length === 0 && (
-          <div className="py-12 text-center text-gray-400">No deployments yet</div>
+        {!loading && releases.length === 0 && !error && (
+          <div
+            style={{
+              padding: 48,
+              textAlign: "center",
+              color: "var(--text-muted)",
+              fontSize: 13,
+            }}
+          >
+            No deployments yet
+          </div>
+        )}
+        {loading && (
+          <div
+            style={{
+              padding: 48,
+              textAlign: "center",
+              color: "var(--text-muted)",
+              fontSize: 13,
+            }}
+          >
+            Loading…
+          </div>
         )}
       </div>
     </div>
+  )
+}
+
+function Th({ children }: { children: React.ReactNode }) {
+  return (
+    <th
+      style={{
+        padding: "10px 14px",
+        fontSize: 11,
+        fontWeight: 600,
+        color: "var(--text-muted)",
+        textTransform: "uppercase",
+        letterSpacing: 0.5,
+      }}
+    >
+      {children}
+    </th>
+  )
+}
+
+function Td({
+  children,
+  mono = false,
+  muted = false,
+  capitalize = false,
+}: {
+  children: React.ReactNode
+  mono?: boolean
+  muted?: boolean
+  capitalize?: boolean
+}) {
+  return (
+    <td
+      style={{
+        padding: "10px 14px",
+        fontFamily: mono ? "var(--font-mono)" : "var(--font)",
+        color: muted ? "var(--text-muted)" : "var(--text-primary)",
+        textTransform: capitalize ? "capitalize" : "none",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {children}
+    </td>
   )
 }

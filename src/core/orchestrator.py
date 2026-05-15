@@ -78,8 +78,7 @@ class Orchestrator(AgentExecutor):
         self._agent_executor = executor
 
     async def submit(self, description: str, task_type: str = "feature_request",
-                     priority: str = "medium", created_by: str = "",
-                     provider: str = "anthropic_sonnet") -> Request:
+                     priority: str = "medium", created_by: str = "") -> Request:
         request_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
         request = Request(
             request_id=request_id,
@@ -87,7 +86,6 @@ class Orchestrator(AgentExecutor):
             task_type=task_type,
             priority=priority,
             created_by=created_by,
-            provider=provider,
         )
         await self.state.create_request(request)
         await self.events.emit("request.created", {
@@ -310,11 +308,8 @@ class Orchestrator(AgentExecutor):
 
             # Use real agent executor if available, otherwise simulate with delay
             if self._agent_executor:
-                # Look up the request to determine which provider to use
-                req = await self.state.get_request(request_id)
-                provider = req.provider if req else "anthropic_sonnet"
                 result = await self._agent_executor.execute(
-                    agent_id, request_id, inputs, provider=provider,
+                    agent_id, request_id, inputs,
                 )
             else:
                 result = await self._mock_execute(agent_id, request_id, inputs)
@@ -329,15 +324,13 @@ class Orchestrator(AgentExecutor):
                 subtask.output_text = "\n\n".join(str(v) for v in outputs.values() if v)
             await self.state.update_subtask(subtask)
 
-            # Record token usage for cost tracking.
-            # Prefer the model reported by the executor (reflects per-call provider
-            # overrides like bedrock / opus / openai). Fall back to the YAML model
-            # if the result didn't include one (e.g., mock execution).
+            # Record token usage for cost tracking. Prefer the model reported by
+            # the executor; fall back to the YAML model if absent (e.g., mock execution).
             input_tokens = result.get("input_tokens", 0)
             output_tokens = result.get("output_tokens", 0)
             if input_tokens > 0 or output_tokens > 0:
                 model = result.get("model") or self.config.agents.get(agent_id, {}).get(
-                    "model", "claude-sonnet-4-6"
+                    "model", "claude-opus-4-7"
                 )
                 await self._token_tracker.record(
                     request_id=request_id,
@@ -562,25 +555,74 @@ class Orchestrator(AgentExecutor):
         ))
         return keywords[:20]  # Cap at 20 tags
 
+    @staticmethod
+    def _namespace_story_id(request_id: str, raw_id: str) -> str:
+        """Convert an agent-emitted story ID into a globally unique one.
+
+        The agent emits per-document IDs like ``US-001`` (no request context),
+        but ``stories.story_id`` is a PRIMARY KEY in SQLite — two requests both
+        emitting ``US-001`` collide and the second one silently fails the whole
+        parse with a UNIQUE constraint violation.
+
+        We prefix the request portion in the same shape the demo seed already
+        uses (``US-038-001``), so the stored ID reads naturally:
+            request REQ-98E4C2 + agent's US-001 → US-98E4C2-001
+
+        Idempotent: if the agent already emitted a namespaced ID (anything with
+        an inner dash like US-038-001), we keep it as-is.
+        """
+        suffix = raw_id.removeprefix("US-")
+        if "-" in suffix:
+            return raw_id  # already namespaced
+        req_part = request_id.removeprefix("REQ-")
+        return f"US-{req_part}-{suffix}"
+
     async def _parse_and_save_stories(self, request_id: str, output_text: str) -> None:
-        """Parse user stories from the User Story Author's output and save to DB."""
+        """Parse user stories from the User Story Author's output and save to DB.
+
+        Resilient to per-story failures: if one story can't be inserted (e.g.,
+        primary-key collision because of a buggy ID, or any other DB error),
+        the rest of the batch is still attempted. Without this, a single bad
+        story would drop the entire request's story list.
+        """
         try:
             stories = self._extract_stories(request_id, output_text)
-            # Split output into per-story blocks for AC extraction
+            # Split output into per-story blocks for AC extraction. Key the map
+            # by the SAME namespaced ID we assigned to the Story object above,
+            # so block lookup matches story.story_id exactly.
             story_blocks = re.split(r'(?=###\s+(?:Story:?\s*)?(?:US-|\[US-))', output_text)
             block_map: dict[str, str] = {}
             for block in story_blocks:
                 id_match = re.search(r'(US-\d+(?:-\d+)?)', block)
                 if id_match:
-                    block_map[id_match.group(1)] = block
+                    namespaced = self._namespace_story_id(request_id, id_match.group(1))
+                    block_map[namespaced] = block
 
+            saved = 0
+            insert_failures = 0
             for story in stories:
-                await self.state.create_story(story)
-                # Parse and save acceptance criteria for this story
+                try:
+                    await self.state.create_story(story)
+                except Exception as e:
+                    insert_failures += 1
+                    logger.warning(
+                        "story_insert_failed",
+                        request_id=request_id, story_id=story.story_id, error=str(e),
+                    )
+                    continue
+
+                # Save acceptance criteria for this story. Per-AC try/except so
+                # one bad AC doesn't stop the others.
                 block_text = block_map.get(story.story_id, story.description)
                 acs = self._extract_acceptance_criteria(story.story_id, block_text)
                 for ac in acs:
-                    await self.state.create_acceptance_criterion(ac)
+                    try:
+                        await self.state.create_acceptance_criterion(ac)
+                    except Exception as e:
+                        logger.warning(
+                            "ac_insert_failed",
+                            request_id=request_id, ac_id=ac.ac_id, error=str(e),
+                        )
                 await self.events.emit("story.created", {
                     "request_id": request_id,
                     "story_id": story.story_id,
@@ -588,12 +630,24 @@ class Orchestrator(AgentExecutor):
                     "status": story.status,
                     "acceptance_criteria_count": len(acs),
                 })
-            logger.info("stories_parsed", request_id=request_id, count=len(stories))
+                saved += 1
+
+            logger.info(
+                "stories_parsed",
+                request_id=request_id,
+                count=saved,
+                insert_failures=insert_failures,
+            )
         except Exception as e:
             logger.warning("story_parsing_failed", request_id=request_id, error=str(e))
 
     def _extract_stories(self, request_id: str, text: str) -> list[Story]:
-        """Extract individual stories from User Story Author output."""
+        """Extract individual stories from User Story Author output.
+
+        All returned `story_id` values are namespaced by request_id (see
+        `_namespace_story_id`) to guarantee uniqueness across multiple requests
+        that might both emit ``US-001``.
+        """
         stories: list[Story] = []
         # Pattern 1: ### US-XXX or ### Story: US-XXX
         story_blocks = re.split(r'(?=###\s+(?:Story:?\s*)?(?:US-|\[US-))', text)
@@ -604,9 +658,12 @@ class Orchestrator(AgentExecutor):
             if not block:
                 continue
 
-            # Extract story ID from the block
+            # Extract story ID from the block, then namespace it.
             id_match = re.search(r'(US-\d+(?:-\d+)?)', block)
-            story_id = id_match.group(1) if id_match else f"US-{request_id[-6:]}-{counter:03d}"
+            if id_match:
+                story_id = self._namespace_story_id(request_id, id_match.group(1))
+            else:
+                story_id = f"US-{request_id[-6:]}-{counter:03d}"
 
             # Extract title — first line after ###
             title_match = re.search(r'###\s+(?:Story:?\s*)?(?:\[?US-\d+(?:-\d+)?\]?\s*)?(.+)', block)
@@ -643,7 +700,10 @@ class Orchestrator(AgentExecutor):
                 # Match: - US-001: Title or 1. Title or - **Title**
                 match = re.match(r'(?:[-*]\s+|(?:\d+\.)\s+)(?:(US-\d+(?:-\d+)?)[:\s]+)?(.+)', line)
                 if match and len(match.group(2).strip()) > 5:
-                    sid = match.group(1) or f"US-{request_id[-6:]}-{counter:03d}"
+                    if match.group(1):
+                        sid = self._namespace_story_id(request_id, match.group(1))
+                    else:
+                        sid = f"US-{request_id[-6:]}-{counter:03d}"
                     title = match.group(2).strip().strip("*").strip()
                     stories.append(Story(
                         story_id=sid,

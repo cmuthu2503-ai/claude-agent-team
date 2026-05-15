@@ -1,13 +1,13 @@
 """Prompt Engineer — transforms structured user requirements into production-grade AI prompts.
 
-This module is used by the Prompt Studio feature. It wraps the existing Anthropic,
-Bedrock, and OpenAI clients (from AgentSystemExecutor) and sends a carefully-crafted
-meta-prompt to generate 3 DISTINCT variant prompts in a single LLM call.
+Used by the Prompt Studio feature. Wraps the AnthropicAWS client from
+AgentSystemExecutor and sends a meta-prompt to generate 3 DISTINCT variants
+in a single LLM call.
 
 Each variant uses a different approach:
-  - Variant 1: Structured XML (heavy <context>, <task>, <output_format> tags)
-  - Variant 2: Conversational Markdown (natural prose with headers)
-  - Variant 3: Concise Imperative (terse, action-oriented)
+  - Variant 1: Detailed Markdown (rich structure)
+  - Variant 2: Concise Imperative (terse, action-oriented)
+  - Variant 3: Example-Driven Few-Shot (input/output examples)
 
 Supports two operations:
   - generate_variants(): initial generation from structured inputs
@@ -24,8 +24,7 @@ import structlog
 
 logger = structlog.get_logger()
 
-# Bedrock model ID — same default as executor.py
-BEDROCK_MODEL_DEFAULT = "anthropic.claude-sonnet-4-20250514-v1:0"
+DEFAULT_MODEL = os.getenv("PROMPT_STUDIO_MODEL", "claude-opus-4-7")
 
 
 class PromptEngineerError(Exception):
@@ -109,95 +108,40 @@ CRITICAL RULES:
 
 
 class PromptEngineer:
-    """Generates and refines professional prompts using the existing LLM clients."""
+    """Generates and refines professional prompts using the AnthropicAWS client."""
 
     def __init__(
         self,
         anthropic_client: Any,
-        bedrock_client: Any,
-        openai_client: Any = None,
+        model: str | None = None,
+        inference_geo: str | None = None,
     ) -> None:
         self.anthropic_client = anthropic_client
-        self.bedrock_client = bedrock_client
-        self.openai_client = openai_client
+        self.model = model or DEFAULT_MODEL
+        self.inference_geo = inference_geo
 
-    def _pick_client(self, provider: str) -> tuple[Any, str, str]:
-        """Return (client, model_id, kind) for the requested provider.
+    async def _call_meta_prompt(self, user_message: str) -> str:
+        """Send the meta-prompt to the LLM and return raw text output."""
+        if not self.anthropic_client:
+            raise PromptEngineerError(
+                "Claude Platform on AWS client not configured. "
+                "Set ANTHROPIC_AWS_API_KEY and ANTHROPIC_AWS_WORKSPACE_ID."
+            )
 
-        `kind` is one of: "anthropic", "openai" — used by the caller to pick
-        the right SDK method and response-parsing path.
-        """
-        if provider == "bedrock":
-            if not self.bedrock_client:
-                raise PromptEngineerError(
-                    "Bedrock provider requested but AWS credentials are not configured."
-                )
-            model = os.getenv("BEDROCK_MODEL_ID", BEDROCK_MODEL_DEFAULT)
-            return self.bedrock_client, model, "anthropic"
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            # 3 elaborate variants + techniques arrays on Opus 4.7 routinely exceed
+            # 4096 tokens — JSON gets truncated mid-string, which the parser can't
+            # recover from. 16k is well under the model's 32k output cap and
+            # leaves plenty of headroom.
+            "max_tokens": 16384,
+            "system": META_SYSTEM_PROMPT,
+            "messages": [{"role": "user", "content": user_message}],
+        }
+        if self.inference_geo:
+            kwargs["inference_geo"] = self.inference_geo
 
-        if provider == "anthropic_opus":
-            if not self.anthropic_client:
-                raise PromptEngineerError(
-                    "Claude Opus provider requested but ANTHROPIC_API_KEY is not configured."
-                )
-            return self.anthropic_client, os.getenv("ANTHROPIC_OPUS_MODEL_ID", "claude-opus-4-6"), "anthropic"
-
-        if provider in ("anthropic", "anthropic_sonnet"):
-            if not self.anthropic_client:
-                raise PromptEngineerError(
-                    "Claude Sonnet provider requested but ANTHROPIC_API_KEY is not configured."
-                )
-            return self.anthropic_client, os.getenv("ANTHROPIC_SONNET_MODEL_ID", "claude-sonnet-4-6"), "anthropic"
-
-        if provider == "openai_gpt5":
-            if not self.openai_client:
-                raise PromptEngineerError(
-                    "OpenAI provider requested but OPENAI_API_KEY is not configured."
-                )
-            return self.openai_client, os.getenv("OPENAI_GPT5_MODEL_ID", "gpt-5.4"), "openai"
-
-        if provider == "openai_o3":
-            if not self.openai_client:
-                raise PromptEngineerError(
-                    "OpenAI provider requested but OPENAI_API_KEY is not configured."
-                )
-            return self.openai_client, os.getenv("OPENAI_O3_MODEL_ID", "o4-mini"), "openai"
-
-        raise PromptEngineerError(f"Unknown provider '{provider}'")
-
-    async def _call_meta_prompt(
-        self, provider: str, user_message: str
-    ) -> str:
-        """Send the meta-prompt to the chosen provider and return raw text output.
-
-        Handles both Anthropic (Messages API with `system=`) and OpenAI (Chat
-        Completions with system as the first message).
-        """
-        client, model, kind = self._pick_client(provider)
-
-        if kind == "openai":
-            # OpenAI Chat Completions
-            messages = [
-                {"role": "system", "content": META_SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-            ]
-            kwargs: dict[str, Any] = {"model": model, "messages": messages}
-            is_reasoning = model.startswith("o") and not model.startswith("openai")
-            if is_reasoning:
-                kwargs["max_completion_tokens"] = 4096
-            else:
-                kwargs["max_tokens"] = 4096
-            response = await client.chat.completions.create(**kwargs)
-            text = response.choices[0].message.content or ""
-            return text.strip()
-
-        # Anthropic / Bedrock — Messages API
-        response = await client.messages.create(
-            model=model,
-            max_tokens=4096,
-            system=META_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-        )
+        response = await self.anthropic_client.messages.create(**kwargs)
         return self._extract_text(response)
 
     async def generate_variants(
@@ -208,13 +152,8 @@ class PromptEngineer:
         tone: str = "",
         constraints: str = "",
         options: dict[str, Any] | None = None,
-        provider: str = "anthropic_sonnet",
     ) -> list[dict[str, Any]]:
-        """Generate 3 initial variant prompts from structured inputs.
-
-        Returns a list of dicts, each with keys: approach, prompt, techniques.
-        Raises PromptEngineerError if the LLM call fails or returns unparseable output.
-        """
+        """Generate 3 initial variant prompts from structured inputs."""
         today_str = datetime.utcnow().strftime("%Y-%m-%d")
         user_message = self._build_user_message(
             use_case=use_case,
@@ -226,10 +165,10 @@ class PromptEngineer:
             today=today_str,
         )
 
-        logger.info("prompt_engineer_generate_start", provider=provider)
+        logger.info("prompt_engineer_generate_start", model=self.model)
 
         try:
-            text = await self._call_meta_prompt(provider, user_message)
+            text = await self._call_meta_prompt(user_message)
         except PromptEngineerError:
             raise
         except Exception as e:
@@ -239,7 +178,7 @@ class PromptEngineer:
         variants = self._parse_variants_json(text)
         logger.info(
             "prompt_engineer_generate_done",
-            provider=provider,
+            model=self.model,
             variant_count=len(variants),
         )
         return variants
@@ -249,16 +188,8 @@ class PromptEngineer:
         session_inputs: dict[str, Any],
         selected_prompt: str,
         feedback: str,
-        provider: str = "anthropic_sonnet",
     ) -> list[dict[str, Any]]:
-        """Refine a selected variant using user feedback. Produces 3 new variants.
-
-        Args:
-            session_inputs: the original structured inputs (for context)
-            selected_prompt: the text of the variant the user selected
-            feedback: user's refinement request (e.g. "make it more concise")
-            provider: which LLM provider to use
-        """
+        """Refine a selected variant using user feedback. Produces 3 new variants."""
         today_str = datetime.utcnow().strftime("%Y-%m-%d")
         user_message = self._build_refine_message(
             session_inputs=session_inputs,
@@ -269,11 +200,11 @@ class PromptEngineer:
 
         logger.info(
             "prompt_engineer_refine_start",
-            provider=provider, feedback_len=len(feedback),
+            model=self.model, feedback_len=len(feedback),
         )
 
         try:
-            text = await self._call_meta_prompt(provider, user_message)
+            text = await self._call_meta_prompt(user_message)
         except PromptEngineerError:
             raise
         except Exception as e:
@@ -294,7 +225,6 @@ class PromptEngineer:
         options: dict[str, Any],
         today: str,
     ) -> str:
-        """Build the user message for initial generation."""
         opt_target = options.get("target_model", "generic")
         opt_format = options.get("output_format", "freeform")
         opt_few_shot = options.get("few_shot", False)
@@ -344,7 +274,6 @@ Produce the 3 variants as JSON matching the schema in your system prompt."""
         feedback: str,
         today: str,
     ) -> str:
-        """Build the user message for refinement iteration."""
         return f"""CURRENT DATE: {today}
 
 REFINEMENT REQUEST — the user previously generated a prompt and now wants 3 new variants based on feedback.
@@ -366,10 +295,10 @@ The user's refinement feedback:
 {feedback}
 </feedback>
 
-Produce 3 NEW variants that apply the feedback to the selected prompt. Keep the same 3-variant strategy (Structured XML, Conversational Markdown, Concise Imperative) but INCORPORATE the feedback into every variant. Return as JSON matching the schema in your system prompt."""
+Produce 3 NEW variants that apply the feedback to the selected prompt. Keep the same 3-variant strategy (Detailed Markdown, Concise Imperative, Example-Driven) but INCORPORATE the feedback into every variant. Return as JSON matching the schema in your system prompt."""
 
     def _extract_text(self, response: Any) -> str:
-        """Pull the text out of an Anthropic/Bedrock Messages API response."""
+        """Pull the text out of an Anthropic Messages API response."""
         try:
             blocks = response.content
             text_parts: list[str] = []
@@ -381,23 +310,15 @@ Produce 3 NEW variants that apply the feedback to the selected prompt. Keep the 
             raise PromptEngineerError(f"Failed to extract text from LLM response: {e}") from e
 
     def _parse_variants_json(self, text: str) -> list[dict[str, Any]]:
-        """Parse the JSON response into a list of variant dicts.
-
-        The system prompt instructs the model to return pure JSON, but models sometimes
-        wrap it in ```json ... ``` fences or add a preamble. Handle both cases.
-        """
+        """Parse the JSON response into a list of variant dicts."""
         if not text:
             raise PromptEngineerError("LLM returned empty response")
 
-        # Strip markdown code fences if present
         cleaned = text.strip()
         if cleaned.startswith("```"):
-            # Remove opening fence (```json or just ```)
             cleaned = re.sub(r"^```[\w]*\n?", "", cleaned)
-            # Remove closing fence
             cleaned = re.sub(r"\n?```\s*$", "", cleaned)
 
-        # Try to find JSON object if there's preamble text
         if not cleaned.startswith("{"):
             match = re.search(r"\{[\s\S]*\}", cleaned)
             if match:
@@ -416,7 +337,6 @@ Produce 3 NEW variants that apply the feedback to the selected prompt. Keep the 
                 f"LLM JSON missing 'variants' array or empty. Got keys: {list(data.keys())}"
             )
 
-        # Validate each variant has the required fields
         validated: list[dict[str, Any]] = []
         for i, v in enumerate(variants):
             if not isinstance(v, dict):

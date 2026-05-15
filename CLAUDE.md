@@ -8,7 +8,7 @@ Agent Team is a configuration-driven, hierarchical AI agent orchestration platfo
 
 - **Backend:** Python 3.12, FastAPI, async/await, Pydantic v2, SQLite via aiosqlite
 - **Frontend:** React 19 + TypeScript + Vite, Tailwind v4, Zustand, TanStack Query/Table, React Router v7
-- **LLM providers:** Anthropic direct API or Amazon Bedrock (via `anthropic[bedrock]`)
+- **LLM provider:** **Claude Platform on AWS** (Anthropic-operated, AWS-authenticated) via `anthropic[aws]`. Single provider, single model (`claude-opus-4-7`) for all 9 agents. Not Bedrock, not the direct Anthropic API. Setup: [docs/setup-claude-platform-on-aws.md](docs/setup-claude-platform-on-aws.md).
 - **Runs entirely in Docker Compose** — there is no "run locally without Docker" path. Backend port 8000, frontend port 3000.
 
 ## Common Commands
@@ -45,6 +45,43 @@ make supervisor          # Start the supervisor stack
 make supervisor-logs     # Tail
 make supervisor-stop     # Stop
 ```
+
+The supervisor's `deploy()` flow on a `code_committed` row:
+1. `git fetch origin main && git checkout origin/main -- <files_committed>` — pulls the agent's published files from the remote into the host working tree (so the build sees them even if CodeWriter's local write didn't reach the host).
+2. `docker compose build` — rebuilds the dev image.
+3. `docker compose -f docker-compose.staging.yml up -d --build` + healthcheck on :8010.
+4. `docker compose -f docker-compose.prod.yml up -d --build` + healthcheck on :8020.
+5. `docker compose up -d --build` — rebuild dev + healthcheck on :8000.
+6. On any healthcheck failure: `git revert HEAD --no-edit && git push origin main`, then rebuild + restart prod with the reverted code.
+
+### Stable Compose project names
+
+Every compose file has an explicit `name:` at the top so the project name (and the volume/network names derived from it) doesn't drift with the working directory. Concretely:
+
+| File | Project name |
+|---|---|
+| `docker-compose.yml` | `agent-team-dev` |
+| `docker-compose.staging.yml` | `agent-team-staging` |
+| `docker-compose.prod.yml` | `agent-team-prod` |
+| `docker-compose.demo.yml` | `agent-team-demo` |
+| `docker-compose.supervisor.yml` | `agent-team-supervisor` |
+
+Without `name:`, Compose auto-derives the project name from the directory (e.g., `jolly-aryabhata-f0e6ad` for a worktree under `.claude/worktrees/`). That makes volume names ephemeral, which breaks the supervisor's `external: true` volume binding (it has to know the volume name up front). Pinning the project name keeps everything stable across worktree spawns, branch switches, and fresh clones.
+
+Override the file-level name with `COMPOSE_PROJECT_NAME=foo` env var if you intentionally want an isolated environment. The dev volume `agent-team-dev_agent-team-data` is shared between any directory running the dev stack — so request history persists across worktree switches by design.
+
+### Supervisor scope: shared volume + main-repo git tree
+
+The supervisor (`docker-compose.supervisor.yml`) is wired to work with **whichever stack is currently using the stable `agent-team-dev_agent-team-data` volume** — that includes the main repo and any worktree, since they all share the same volume thanks to the pinned project name.
+
+Two volume mounts on the supervisor matter:
+- **`/app/data`** → `agent-team-dev_agent-team-data` (stable, shared with whatever dev stack is running)
+- **`/app/project`** → host's main repo path (`C:/ai-projects/claude-agent-team` by default, override with `PROJECT_ROOT_HOST` env var). The supervisor performs git ops here — fetches from origin/main, checks out files, reverts on failure. Worktrees have a `.git` *file* pointing to an absolute host path that doesn't resolve inside the container, so we explicitly bind to the main repo regardless of where `docker compose -f docker-compose.supervisor.yml up` was invoked.
+
+So the supervisor's mental model is: "the user is iterating in some directory (main repo or a worktree); the dev stack is in a shared volume I can watch; for actual deployment, I rebuild against main repo's git tree." This works because:
+- Agents publish their commits to `origin/main` via the GitHub Trees API (no local working tree needed).
+- The supervisor pulls those commits into the main repo's working tree (`git fetch + git checkout origin/main -- <files>`), then runs `docker compose build` against that consistent source.
+- Containers get rebuilt with the new code from `origin/main`.
 
 ### Tests
 
@@ -114,7 +151,7 @@ Everything agent-related is defined in YAML under `config/` and loaded by `src/c
 3. **Orchestrator (`src/core/orchestrator.py`)** is the top-level coordinator. It implements the `AgentExecutor` protocol consumed by the workflow runner. `submit()` creates a `Request`, picks a workflow by `task_type`, and kicks off a background task running `WorkflowRunner.run()`. Results are aggregated and persisted via `StateStore`.
 4. **Dispatcher (`src/core/dispatcher.py`)** enforces delegation rules — an agent can only delegate to its direct reports as defined in the YAML. `route_by_domain()` maps domain keywords (e.g. "frontend", "testing") to the appropriate team lead.
 5. **Workflow runner (`src/workflows/runner.py`)** executes a `WorkflowDefinition` as a DAG: sequential stages, `ParallelStage` blocks, quality gates with `MAX_REWORK_CYCLES = 2` rework loops back to the `on_fail` stage. Each stage calls `executor.execute_agent(agent_id, request_id, inputs)` — the Orchestrator dispatches this to either the real `AgentSystemExecutor` or a mock path with randomized delays from `MOCK_AGENT_DELAYS`.
-6. **Agent execution (`src/agents/executor.py`)** — `AgentSystemExecutor` holds both `anthropic_client` (direct API, per-agent model from YAML) and `bedrock_client` (all agents on Claude Sonnet 4 via `BEDROCK_MODEL_ID`). The provider is chosen per-request. Tools are registered into `ToolRegistry` here: file I/O, git, code exec, test runner, static analysis, GitHub API/PR review, Firecrawl web search/scrape.
+6. **Agent execution (`src/agents/executor.py`)** — `AgentSystemExecutor` holds a single `anthropic_client` (an `AsyncAnthropicAWS` instance pointed at Claude Platform on AWS). Every agent shares the client and uses the model from its YAML (`claude-opus-4-7` across the board). `inference_geo` (`us` by default per `config/project.yaml::llm`) is set on every `messages.create()`. Tools are registered into `ToolRegistry` here: file I/O, git, code exec, test runner, static analysis, GitHub API/PR review, Firecrawl web search/scrape.
 7. **State (`src/state/sqlite_store.py`)** — all persistent state (requests, stories, subtasks, events, tokens/cost, deployments, users, releases) goes through `StateStore` in `src/state/base.py`. Never touch SQLite directly from routes.
 
 ### Special pipelines

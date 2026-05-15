@@ -158,13 +158,103 @@ def rollback(db: sqlite3.Connection, deployment_id: str, rollback_sha: str) -> N
     update_step(db, deployment_id, "rolled_back", "Rollback attempted — manual verification needed", error="Rollback health check uncertain")
 
 
+def _persist_judge_result(
+    db: sqlite3.Connection, deployment_id: str, result,
+) -> None:
+    """Write the judge's decision back to the deployment_states row so the UI
+    and audit trail can see WHY the supervisor took the action it did."""
+    db.execute(
+        """UPDATE deployment_states
+           SET strategy=?, strategy_reasoning=?, risk=?
+           WHERE deployment_id=?""",
+        (result.strategy, result.reasoning, result.risk, deployment_id),
+    )
+    db.commit()
+
+
 def deploy(db: sqlite3.Connection, deployment: dict) -> None:
     """Execute the full deployment pipeline for a single deployment."""
     dep_id = deployment["deployment_id"]
     req_id = deployment["request_id"]
     rollback_sha = deployment["rollback_sha"]
+    commit_sha = deployment.get("commit_sha", "")
+    files_committed_raw = deployment.get("files_committed") or "[]"
+    try:
+        files_committed = json.loads(files_committed_raw)
+    except json.JSONDecodeError:
+        files_committed = []
 
-    log(f"🚀 Starting deployment {dep_id} for {req_id}")
+    log(f"🚀 Starting deployment {dep_id} for {req_id} (sha={commit_sha[:8] or '?'})")
+
+    # ── Judge step (hybrid agent — Milestone 1) ─────────────────────────────
+    # Ask the deployment-judge LLM whether to deploy and how. The LLM never
+    # runs docker / git commands itself — it just returns a decision the
+    # deterministic Python code below executes. On any LLM failure, the
+    # judge returns a safe default (deploy_full + reasoning).
+    try:
+        from judge import JudgeResult, evaluate_deployment  # local import; runs in supervisor only
+    except Exception as e:
+        log(f"  ✗ judge module import failed: {e} — using safe default")
+        JudgeResult = None  # type: ignore
+        result = None
+    else:
+        update_step(db, dep_id, "judging", "Asking deployment judge for strategy")
+        result = evaluate_deployment(
+            commit_sha=commit_sha,
+            request_id=req_id,
+            files_committed=files_committed,
+            rollback_sha=rollback_sha,
+        )
+        _persist_judge_result(db, dep_id, result)
+        log(
+            f"  ⚖  judge: strategy={result.strategy} risk={result.risk} "
+            f"from_llm={result.from_llm}"
+        )
+        log(f"      reasoning: {result.reasoning[:200]}")
+
+        # Branch on the judge's strategy. SKIP and HOLD bypass docker entirely.
+        if result.strategy == "skip":
+            update_step(
+                db, dep_id, "completed",
+                f"Skipped per judge: {result.reasoning[:200]}",
+            )
+            log("  ⏭  judge said skip — no docker work needed")
+            return
+        if result.strategy == "hold":
+            update_step(
+                db, dep_id, "on_hold",
+                f"On hold per judge: {result.reasoning[:200]}",
+            )
+            log("  ⏸  judge said hold — deployment paused for manual review")
+            return
+        # For deploy_full and deploy_staging_only, fall through and execute.
+
+    # Step 0: Pull the agent's committed files from origin/main into the host
+    # working tree. CodeWriter already published the commit via the Trees API,
+    # but the host FS might not have them yet (depending on whether the
+    # backend container had a bind-mount onto frontend/src). Without this
+    # step, `docker compose build` would build from STALE source and the
+    # change would never reach any environment.
+    #
+    # We do a SURGICAL `git fetch` + `git checkout origin/main -- <files>`
+    # rather than `git pull` / `git reset --hard` so we don't clobber any
+    # uncommitted work on other paths.
+    if files_committed:
+        update_step(db, dep_id, "syncing", f"Fetching {len(files_committed)} file(s) from origin/main")
+        run_cmd("git fetch origin main", timeout=30)
+        # Quote each path so spaces/special chars are safe.
+        quoted = " ".join(f"'{f}'" for f in files_committed)
+        code, output = run_cmd(f"git checkout origin/main -- {quoted}", timeout=30)
+        if code != 0:
+            update_step(
+                db, dep_id, "syncing", output[:200],
+                error="git checkout from origin/main failed — files may not exist on remote yet",
+            )
+            return
+        update_step(
+            db, dep_id, "syncing",
+            f"Synced {len(files_committed)} file(s) from origin/main",
+        )
 
     # Step 1: Build Docker images
     update_step(db, dep_id, "building", "Building Docker images...")
@@ -192,6 +282,18 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
         return
 
     update_step(db, dep_id, "staging_healthy", "Staging deployed and healthy on :8010/:3010")
+
+    # If the judge said "deploy_staging_only", we stop here — staging is up,
+    # prod is intentionally untouched, and the row stays at staging_healthy
+    # until someone manually promotes. Sets completed_at so the request-side
+    # poller knows the deploy lifecycle is over.
+    if result and result.strategy == "deploy_staging_only":
+        update_step(
+            db, dep_id, "completed",
+            "Stopped at staging per judge: " + (result.reasoning[:150] if result else ""),
+        )
+        log("  🛑  judge said deploy_staging_only — prod skipped intentionally")
+        return
 
     # Step 4: Deploy to production
     update_step(db, dep_id, "prod_deploying", "Deploying to production...")

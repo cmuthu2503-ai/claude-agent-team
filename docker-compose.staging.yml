@@ -1,6 +1,10 @@
 # Staging Environment
 # Ports: backend=8010, frontend=3010
 # Network: staging-net
+#
+# `name:` pins the Compose project name so volumes/containers don't drift
+# when running from a worktree. See docker-compose.yml header for details.
+name: agent-team-staging
 
 services:
   backend:
@@ -19,6 +23,10 @@ services:
     environment:
       - ENVIRONMENT=staging
       - LOG_LEVEL=INFO
+      # Claude Platform on AWS — see docs/setup-claude-platform-on-aws.md.
+      # ANTHROPIC_AWS_API_KEY and ANTHROPIC_AWS_WORKSPACE_ID come from .env.staging.
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - ANTHROPIC_AWS_INFERENCE_GEO=${ANTHROPIC_AWS_INFERENCE_GEO:-us}
     networks:
       - staging-net
     healthcheck:

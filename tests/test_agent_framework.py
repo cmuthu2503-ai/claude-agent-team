@@ -6,7 +6,6 @@ from src.agents.factory import AgentFactory
 from src.agents.implementations import (
     BackendSpecialistAgent,
     CodeReviewerAgent,
-    EngineeringLeadAgent,
     PRDSpecialistAgent,
 )
 from src.agents.registry import AgentRegistry
@@ -29,44 +28,44 @@ def config():
 def test_factory_creates_all_agents(config):
     factory = AgentFactory(config)
     agents = factory.create_all()
-    assert len(agents) == 8
-    assert "engineering_lead" in agents
+    # 9 agents: PRD, user_story, BE, FE, code_reviewer, devops, tester, research, content.
+    assert len(agents) == 9
+    assert "prd_specialist" in agents
     assert "backend_specialist" in agents
 
 
 def test_factory_creates_correct_types(config):
     factory = AgentFactory(config)
     agents = factory.create_all()
-    assert isinstance(agents["engineering_lead"], EngineeringLeadAgent)
     assert isinstance(agents["prd_specialist"], PRDSpecialistAgent)
     assert isinstance(agents["code_reviewer"], CodeReviewerAgent)
     assert isinstance(agents["backend_specialist"], BackendSpecialistAgent)
 
 
 def test_factory_assigns_correct_models(config):
+    """All agents share the same model on Claude Platform on AWS."""
     factory = AgentFactory(config)
     agents = factory.create_all()
-    assert agents["engineering_lead"].model == "claude-opus-4-6"
-    assert agents["prd_specialist"].model == "claude-opus-4-6"
-    assert agents["code_reviewer"].model == "claude-opus-4-6"
-    assert agents["backend_specialist"].model == "claude-sonnet-4-6"
-    assert agents["frontend_specialist"].model == "claude-sonnet-4-6"
+    for agent_id, agent in agents.items():
+        assert agent.model == "claude-opus-4-7", (
+            f"Agent {agent_id} has model {agent.model!r}; expected claude-opus-4-7"
+        )
 
 
 def test_factory_assigns_delegation_targets(config):
+    """code_reviewer is the development team lead and delegates to the BE/FE specialists."""
     factory = AgentFactory(config)
     agents = factory.create_all()
-    el = agents["engineering_lead"]
-    assert "prd_specialist" in el.delegation_targets
-    assert "code_reviewer" in el.delegation_targets
-    assert "devops_specialist" in el.delegation_targets
+    cr = agents["code_reviewer"]
+    assert "backend_specialist" in cr.delegation_targets
+    assert "frontend_specialist" in cr.delegation_targets
 
 
 def test_factory_assigns_system_prompt(config):
     factory = AgentFactory(config)
     agents = factory.create_all()
-    assert "Engineering Lead" in agents["engineering_lead"].system_prompt
-    assert "decompose" in agents["engineering_lead"].system_prompt.lower()
+    assert "PRD" in agents["prd_specialist"].system_prompt
+    assert "code review" in agents["code_reviewer"].system_prompt.lower()
 
 
 # ── Registry Tests ───────────────────────────────
@@ -77,8 +76,8 @@ def test_registry_register_and_get(config):
     agents = factory.create_all()
     registry = AgentRegistry()
     registry.register_all(agents)
-    assert registry.count == 8
-    assert registry.get("engineering_lead") is not None
+    assert registry.count == 9
+    assert registry.get("prd_specialist") is not None
     assert registry.get("nonexistent") is None
 
 
@@ -100,7 +99,7 @@ def test_registry_agent_ids(config):
     registry = AgentRegistry()
     registry.register_all(agents)
     ids = registry.agent_ids()
-    assert len(ids) == 8
+    assert len(ids) == 9
     assert "tester_specialist" in ids
 
 
@@ -120,9 +119,10 @@ async def test_agent_mock_result(config):
 async def test_agent_delegation_check(config):
     factory = AgentFactory(config)
     agents = factory.create_all()
-    el = agents["engineering_lead"]
-    assert el.can_delegate_to("prd_specialist") is True
-    assert el.can_delegate_to("backend_specialist") is False
+    cr = agents["code_reviewer"]
+    assert cr.can_delegate_to("backend_specialist") is True
+    # PRD specialist sits on a different team and isn't reachable from code_reviewer.
+    assert cr.can_delegate_to("prd_specialist") is False
 
 
 # ── Tool Registry Tests ──────────────────────────
@@ -139,7 +139,7 @@ def test_tool_registry_loads_all(config):
 def test_tool_permissions(config):
     registry = ToolRegistry(config)
     # file_read available to all
-    assert registry.is_permitted("file_read", "engineering_lead") is True
+    assert registry.is_permitted("file_read", "code_reviewer") is True
     # deployment only available to devops_specialist
     assert registry.is_permitted("deployment", "devops_specialist") is True
     assert registry.is_permitted("deployment", "backend_specialist") is False

@@ -85,33 +85,35 @@ thresholds:
     description: "No regressions detected in test suite"
 
 # ── Cost & Token Management ─────────────────────
-# See cross-cutting-concerns.md Area 4
+# See cross-cutting-concerns.md Area 4.
+#
+# Pricing is denominated in USD per million tokens. Real billing flows through
+# AWS Marketplace in Claude Consumption Units (CCUs) — these values are used
+# for in-app cost estimation only.
+#
+# US inference_geo is the default (see config/project.yaml::llm.inference_geo),
+# which adds a 1.1× multiplier to base Claude Platform on AWS pricing. We bake
+# that 10% premium into the numbers below so the dashboard matches your bill.
+# If you flip inference_geo to "global", divide these by 1.1 (or just accept
+# the small over-estimate).
 cost:
-  pricing:                             # USD per million tokens
+  pricing:                             # USD per million tokens (1.1× US-geo multiplier baked in)
+    claude-opus-4-7:
+      input: 16.50                     # 15.00 × 1.1
+      output: 82.50                    # 75.00 × 1.1
+    # Legacy entries kept so old token_usage rows still resolve to a price.
     claude-opus-4-6:
-      input: 15.00
-      output: 75.00
+      input: 16.50
+      output: 82.50
     claude-sonnet-4-6:
-      input: 3.00
-      output: 15.00
-    # OpenAI — rough placeholders; verify against OpenAI platform pricing
-    # Keep the older IDs too so existing rows that logged gpt-5 / o3 still resolve.
-    gpt-5:
-      input: 3.00
-      output: 15.00
-    gpt-5.4:
-      input: 3.00
-      output: 15.00
-    o3:
-      input: 15.00
-      output: 60.00
-    o4-mini:
-      input: 3.00
-      output: 12.00
+      input: 3.30
+      output: 16.50
   budget:
-    daily_limit_usd: 50.00
-    monthly_limit_usd: 500.00
-    per_request_limit_usd: 10.00
+    # Bumped 5× from the original $50/$500 because Opus 4.7 across all 9 agents
+    # is roughly 5× the per-token spend of the prior mixed Sonnet/Opus setup.
+    daily_limit_usd: 250.00
+    monthly_limit_usd: 2500.00
+    per_request_limit_usd: 50.00
     alert_threshold_pct: 0.80
 
 # ── Testing Strategy ────────────────────────────

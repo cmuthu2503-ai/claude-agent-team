@@ -1,6 +1,17 @@
 # Local Development Environment
 # Ports: backend=8000, frontend=3000
 # Network: dev-net
+#
+# `name:` pins the Compose project name regardless of which directory you
+# invoke `docker compose` from. Without it, running from a git worktree like
+# .claude/worktrees/<random-name>/ would auto-derive a different project name,
+# and volume names would drift (e.g. `jolly-aryabhata-f0e6ad_agent-team-data`).
+# That breaks the supervisor's external-volume binding, which has to know the
+# volume name up front. Pinning the project name keeps everything stable.
+#
+# Override with COMPOSE_PROJECT_NAME=foo if you intentionally want an
+# isolated dev environment (env var wins over `name:` at the file level).
+name: agent-team-dev
 
 services:
   backend:
@@ -16,7 +27,23 @@ services:
       - ./config:/app/config
       - ./tests:/app/tests
       - ./demo:/app/demo
-      - ./docs:/app/docs
+      # supervisor/ is mounted read-only so backend tests can import judge.py
+      # to verify the cross-container contract (strategy field shape, terminal
+      # state names, etc.). The backend never executes supervisor code — this
+      # is purely for tests/test_deployment_judge.py.
+      - ./supervisor:/app/supervisor:ro
+      # frontend/ is bind-mounted so the CodeWriter's local writes
+      # (src/core/code_writer.py::_parse_and_write_files) reach the host
+      # filesystem. Without this mount, agent edits to frontend/src/**
+      # only land in the backend container's in-image FS and never become
+      # visible to the frontend container or to Vite HMR.
+      - ./frontend:/app/frontend
+      # docs/ is mounted from the MAIN repo (not the worktree) so research
+      # artifacts land at C:\ai-projects\claude-agent-team\docs\research\... —
+      # the natural project root, instead of being buried in .claude\worktrees.
+      # Any worktree-local doc edits won't be visible to the running container;
+      # commit them to a branch first to make them accessible.
+      - C:/ai-projects/claude-agent-team/docs:/app/docs
       - agent-team-data:/app/data
       - agent-team-reports:/app/reports
       - agent-team-backups:/app/backups
@@ -25,6 +52,9 @@ services:
     environment:
       - ENVIRONMENT=development
       - LOG_LEVEL=DEBUG
+      # Claude Platform on AWS — see docs/setup-claude-platform-on-aws.md.
+      # ANTHROPIC_AWS_API_KEY and ANTHROPIC_AWS_WORKSPACE_ID come from .env.
+      - AWS_REGION=${AWS_REGION:-us-east-1}
     networks:
       - dev-net
     healthcheck:

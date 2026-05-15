@@ -1,18 +1,48 @@
-FROM docker:27-cli
+# Supervisor image: needs Python 3.12 + Docker CLI + git + curl.
+#
+# We base on python:3.12-slim (Debian) rather than docker:27-cli (Alpine)
+# because Alpine's musl/expat combination breaks the Anthropic SDK install
+# (pyexpat symbol mismatch). Debian-slim is ~80MB heavier but Just Works for
+# the Python + Docker-CLI combo.
+FROM python:3.12-slim
 
-# Install Python and curl
-RUN apk add --no-cache python3 py3-pip curl git
+# Install Docker CLI + Compose plugin (so we can issue `docker compose`)
+# plus the OS tools the supervisor uses: curl (health-checks), git (fetch /
+# revert against origin/main), ca-certificates (HTTPS for both).
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl git ca-certificates gnupg && \
+    install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/debian/gpg \
+        -o /etc/apt/keyrings/docker.asc && \
+    chmod a+r /etc/apt/keyrings/docker.asc && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+        > /etc/apt/sources.list.d/docker.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        docker-ce-cli docker-compose-plugin && \
+    apt-get purge -y gnupg && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# Anthropic SDK + AWS extras. The deployment-judge agent calls Claude Platform
+# on AWS to decide deployment strategy (skip / staging_only / full / hold)
+# before each real-world deploy. Same package + version the backend uses.
+RUN pip install --no-cache-dir "anthropic[aws]>=0.52.0"
 
 WORKDIR /app
 
-COPY supervisor/deploy_supervisor.py ./deploy_supervisor.py
+# Copy the whole supervisor source dir — gives us deploy_supervisor.py AND
+# judge.py and any future helpers without one-file-at-a-time COPY noise.
+COPY supervisor/ ./
 
 # The supervisor needs access to:
 # 1. Docker socket (to run docker compose commands)
-# 2. SQLite database (to read/write deployment_state)
-# 3. Project source (to run git commands)
+# 2. SQLite database (to read/write deployment_states)
+# 3. Project source (to run git commands against the main repo)
+# 4. Anthropic credentials (to invoke the deployment judge LLM)
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD pgrep -f deploy_supervisor || exit 1
 
-CMD ["python3", "/app/deploy_supervisor.py"]
+CMD ["python", "/app/deploy_supervisor.py"]

@@ -37,7 +37,6 @@ interface Session {
   tone: string
   constraints: string
   options: Record<string, any>
-  provider: string
   template_id: string | null
   selected_variant_id: string | null
   variants?: Variant[]
@@ -69,23 +68,8 @@ interface ChatTurn {
   latency_ms?: number
 }
 
-// 5-button provider selector — keep in sync with CommandCenter.tsx
-// OpenAI buttons point at the latest models (gpt-5.4 and o4-mini); overridable
-// via OPENAI_GPT5_MODEL_ID / OPENAI_O3_MODEL_ID env vars in .env.
-const PROVIDER_OPTIONS: { id: string; label: string; title: string }[] = [
-  { id: "anthropic_opus",   label: "Opus",     title: "Claude Opus 4.6 (direct Anthropic API)" },
-  { id: "anthropic_sonnet", label: "Sonnet",   title: "Claude Sonnet 4.6 (direct Anthropic API)" },
-  { id: "bedrock",          label: "Bedrock",  title: "Claude Sonnet 4 via Amazon Bedrock" },
-  { id: "openai_gpt5",      label: "GPT-5.4",  title: "OpenAI GPT-5.4 — latest flagship (2026-03-05)" },
-  { id: "openai_o3",        label: "o4-mini",  title: "OpenAI o4-mini — latest reasoning model (2025-04-16)" },
-]
-
 export function PromptStudioPage() {
   const [activeTab, setActiveTab] = useState<"generator" | "execute" | "history">("generator")
-  const [provider, setProvider] = useState<string>(() => {
-    const stored = localStorage.getItem("llm_provider") || "anthropic_sonnet"
-    return stored === "anthropic" ? "anthropic_sonnet" : stored
-  })
 
   // Form state
   const [templates, setTemplates] = useState<Template[]>([])
@@ -189,7 +173,6 @@ export function PromptStudioPage() {
           length: optLength,
           category: optCategory,
         },
-        provider,
         template_id: selectedTemplateId || null,
       })
       setCurrentSession(res.data)
@@ -218,7 +201,6 @@ export function PromptStudioPage() {
     try {
       const res = await api.post(`/prompts/${currentSession.session_id}/refine`, {
         feedback: refineFeedback,
-        provider,
       })
       setCurrentSession(res.data)
       setRefineFeedback("")
@@ -322,7 +304,6 @@ export function PromptStudioPage() {
         body: JSON.stringify({
           system_prompt: executeSystemPrompt,
           messages: apiMessages,
-          provider,
           temperature: executeTemperature,
           max_tokens: executeMaxTokens,
           enable_tools: executeEnableTools,
@@ -495,29 +476,6 @@ export function PromptStudioPage() {
           <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
             Transform requirements into production-grade AI prompts
           </span>
-        </div>
-        {/* Provider toggle */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Model:</span>
-          <div style={{ display: "flex", borderRadius: "var(--radius)", overflow: "hidden", border: "1px solid var(--border)" }}>
-            {PROVIDER_OPTIONS.map((opt, i) => (
-              <button
-                key={opt.id}
-                type="button"
-                title={opt.title}
-                onClick={() => { setProvider(opt.id); localStorage.setItem("llm_provider", opt.id) }}
-                style={{
-                  padding: "5px 12px", fontSize: 12, fontWeight: 500,
-                  border: "none", cursor: "pointer", fontFamily: "var(--font)",
-                  background: provider === opt.id ? "var(--accent)" : "var(--bg-input)",
-                  color: provider === opt.id ? "#fff" : "var(--text-secondary)",
-                  borderRight: i < PROVIDER_OPTIONS.length - 1 ? "1px solid var(--border)" : "none",
-                }}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
         </div>
       </div>
 
@@ -1039,7 +997,7 @@ export function PromptStudioPage() {
               <span>Total in: {executeConversation.reduce((a, t) => a + (t.tokens_in || 0), 0)} tok</span>
               <span>Total out: {executeConversation.reduce((a, t) => a + (t.tokens_out || 0), 0)} tok</span>
               <span>Total cost: ${executeConversation.reduce((a, t) => a + (t.cost_usd || 0), 0).toFixed(4)}</span>
-              <span>Provider: {provider}</span>
+              <span>Model: claude-opus-4-7</span>
               {executeEnableTools && <span style={{ color: "var(--accent)" }}>🔍 Tools enabled</span>}
             </div>
           )}
@@ -1087,8 +1045,6 @@ export function PromptStudioPage() {
                     <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
                       {new Date(s.created_at).toLocaleString()}
                       {s.template_id && ` · template: ${s.template_id}`}
-                      {" · "}
-                      {s.provider}
                     </div>
                   </div>
                   <ChevronRight size={16} style={{ color: "var(--text-muted)", flexShrink: 0 }} />

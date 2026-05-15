@@ -52,15 +52,28 @@ const AGENT_STYLES: Record<string, { bg: string; color: string; label: string }>
   code_reviewer: { bg: C.accentBg, color: C.accent, label: "Code Reviewer" },
 }
 
-/* ── Pipeline stages ────────────────────────────────── */
-const PIPELINE_STAGES = [
-  { key: "prd", label: "PRD" },
-  { key: "stories", label: "Stories" },
-  { key: "development", label: "Development" },
-  { key: "review", label: "Review" },
-  { key: "testing", label: "Testing" },
-  { key: "done", label: "Done" },
-]
+/* ── Workflow stage typing ───────────────────────────
+   The pipeline bar is now WORKFLOW-DRIVEN: it reads `data.workflow.stages`
+   from the backend (see src/api/routes/requests.py::_serialize_workflow)
+   instead of hardcoding a 6-stage feature_development shape. This way the
+   bar accurately reflects whichever workflow actually ran — bug_fix shows
+   its 4 stages, research shows 3, etc.
+
+   Per-stage story counts (devCount/reviewCount/etc.) only apply when the
+   workflow also produces story records (i.e. has a user_story_author stage). */
+interface WorkflowStage {
+  id: string
+  label: string
+  agents: string[]
+  parallel: boolean
+  system: boolean   // true if no agents (handled by orchestrator, e.g. code_commit)
+}
+interface WorkflowDef {
+  id: string
+  trigger: string
+  produces_stories: boolean
+  stages: WorkflowStage[]
+}
 
 /* ── Inline keyframe styles (injected once) ─────────── */
 const STYLE_ID = "storyboard-keyframes"
@@ -108,7 +121,11 @@ export function StoryBoardPage() {
   const { requestId } = useParams()
   const [data, setData] = useState<any>(null)
   const [stories, setStories] = useState<any[]>([])
+  // Default tab: "board" for story-producing workflows, "timeline" otherwise.
+  // The initial value gets corrected by the load-data effect once the workflow
+  // info arrives. If the user manually picks a tab we never override their choice.
   const [activeTab, setActiveTab] = useState("board")
+  const [userPickedTab, setUserPickedTab] = useState(false)
 
   useEffect(() => { ensureKeyframes() }, [])
 
@@ -118,6 +135,12 @@ export function StoryBoardPage() {
       const res = await api.get(`/requests/${requestId}`)
       setData(res.data)
       setStories(res.data.stories || [])
+      // Auto-pick the sensible default tab the first time data arrives —
+      // unless the user has clicked a tab already (then we respect their choice).
+      if (!userPickedTab && res.data?.workflow) {
+        const producesStories = !!res.data.workflow.produces_stories
+        setActiveTab(producesStories ? "board" : "timeline")
+      }
     } catch {}
   }
 
@@ -129,33 +152,108 @@ export function StoryBoardPage() {
 
   if (!data) return null
 
-  /* ── Compute pipeline stage states ──────────────── */
+  /* ── Compute pipeline stage states (workflow-driven) ──────────────────
+     The pipeline bar's stage list comes from the backend's workflow info
+     (data.workflow.stages). For each stage, we compute state from the
+     subtask statuses of the agents that stage runs.
+
+     Story counts (devCount/reviewCount/testingCount) overlay on top for
+     stages whose ID matches the story-status vocabulary. Other stages
+     just show ✓/active/empty based on agent run state. */
   const subtasks = data.subtasks || []
+  const workflow: WorkflowDef | null = data.workflow || null
+
   const storyCountByCol: Record<string, number> = {}
-  for (const col of COLUMNS) storyCountByCol[col.key] = stories.filter((s: any) => s.status === col.key).length
-
-  function agentDone(id: string) { return subtasks.some((s: any) => s.agent_id === id && s.status === "completed") }
-  function agentActive(id: string) { return subtasks.some((s: any) => s.agent_id === id && s.status === "in_progress") }
-
-  const prdDone = agentDone("prd_specialist")
-  const storiesDone = agentDone("user_story_author")
-  const devActive = agentActive("backend_specialist") || agentActive("frontend_specialist")
-  const devCount = storyCountByCol["in_progress"] || 0
-  const reviewCount = storyCountByCol["review"] || 0
-  const reviewActive = reviewCount > 0
-  const testingCount = storyCountByCol["testing"] || 0
+  for (const col of COLUMNS) {
+    storyCountByCol[col.key] = stories.filter((s: any) => s.status === col.key).length
+  }
   const doneCount = storyCountByCol["done"] || 0
 
+  // Helper: aggregate subtask statuses for an agent (a single agent may have
+  // multiple subtask rows from rework cycles; "done" means at least one finished).
+  function agentRunState(agentId: string): "done" | "active" | "waiting" {
+    const rows = subtasks.filter((s: any) => s.agent_id === agentId)
+    if (rows.some((s: any) => s.status === "in_progress")) return "active"
+    if (rows.some((s: any) => s.status === "completed")) return "done"
+    return "waiting"
+  }
+
   type PipeState = "done" | "active" | "waiting"
-  const pipeStates: PipeState[] = [
-    prdDone ? "done" : "waiting",
-    storiesDone ? "done" : "waiting",
-    devActive || devCount > 0 ? "active" : (devCount === 0 && doneCount > 0 ? "done" : "waiting"),
-    reviewActive ? "active" : (reviewCount === 0 && doneCount > 0 ? "done" : "waiting"),
-    testingCount > 0 ? "active" : "waiting",
-    doneCount > 0 ? "done" : "waiting",
-  ]
-  const pipeCounts = ["✓", "✓", String(devCount), String(reviewCount), String(testingCount), String(doneCount)]
+
+  // Special handling for stages whose ID matches a story-status bucket — when
+  // a workflow produces stories, the per-bucket count is more useful than just
+  // "agents completed?". Maps stage.id → status bucket and count.
+  const stageStoryBucket: Record<string, string> = {
+    development: "in_progress",
+    review:      "review",
+    testing:     "testing",
+  }
+
+  // For deployment-shaped stages, the truth is in the supervisor's
+  // deployment_states row (data.deployment), not the agent's subtask status.
+  // A "completed" devops_specialist subtask doesn't mean a deploy happened —
+  // the agent might have just observed the supervisor's "skipped" or
+  // "on_hold" decision. Map the supervisor's current_step to pipeline state.
+  const deployment = data.deployment as null | {
+    current_step?: string
+    strategy?: string
+  }
+  function deploymentDerivedState(): PipeState {
+    if (!deployment) return "waiting"
+    const step = deployment.current_step || ""
+    if (step === "completed" || step === "rolled_back") return "done"
+    if (step === "failed" || step === "on_hold") return "done" // terminal, even if bad — render as ✓ and let label/tooltip show why
+    if (step === "code_committed") return "waiting"            // supervisor hasn't picked it up
+    return "active"                                            // judging / building / staging_deploying / prod_deploying
+  }
+
+  function computeStageState(stage: WorkflowStage): PipeState {
+    // Deployment/hotfix_deploy stages use the supervisor's real state, NOT
+    // the devops_specialist subtask status. Agent's subtask being "completed"
+    // just means it wrote a report — the actual deploy decision is in
+    // deployment_states.
+    if (stage.id === "deployment" || stage.id === "hotfix_deploy") {
+      return deploymentDerivedState()
+    }
+    // System stages (no agents, e.g. code_commit, publish) are "done" if the
+    // request artifacts indicate the system step ran (commit_sha set, files
+    // published). Otherwise treat as waiting.
+    if (stage.system) {
+      const artifacts = data.artifacts || {}
+      const hasOutput = artifacts.commit_sha || (artifacts.published_files || []).length > 0
+      return hasOutput ? "done" : "waiting"
+    }
+    // Multi-agent stages (parallel or sequential): done iff every listed agent
+    // completed; active iff any agent is in_progress; waiting otherwise.
+    const states = stage.agents.map(agentRunState)
+    if (states.length === 0) return "waiting"
+    if (states.every((s) => s === "done")) return "done"
+    if (states.some((s) => s === "active")) return "active"
+    // Story-flow special case: when no agent is currently active, but the
+    // workflow has produced "done" stories, intermediate development/review/
+    // testing stages should still read as "done" (stories moved past them).
+    const bucket = stageStoryBucket[stage.id]
+    if (bucket && (storyCountByCol[bucket] || 0) === 0 && doneCount > 0) return "done"
+    return "waiting"
+  }
+
+  // Fallback for older API responses where workflow isn't present yet.
+  const stages: WorkflowStage[] = workflow?.stages || []
+  const pipeStates: PipeState[] = stages.map(computeStageState)
+
+  // Label inside each stage circle. Rule: "done" → ✓; "active" with a story
+  // bucket → show the count; otherwise just blank for waiting (cleaner than
+  // showing "0" everywhere).
+  const pipeCounts: string[] = stages.map((stage, i) => {
+    const state = pipeStates[i]
+    if (state === "done") return "✓"
+    const bucket = stageStoryBucket[stage.id]
+    if (bucket && workflow?.produces_stories) {
+      return String(storyCountByCol[bucket] || 0)
+    }
+    if (state === "active") return "…"
+    return ""
+  })
 
   /* ── Compute stats ─────────────────────────────── */
   let totalTests = 0, passedTests = 0, totalCoverage = 0, coverageCount = 0
@@ -206,18 +304,23 @@ export function StoryBoardPage() {
         </div>
       </div>
 
-      {/* ── Pipeline overview ───────────────────────── */}
+      {/* ── Pipeline overview (workflow-driven) ─────── */}
       <div style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "16px 24px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {PIPELINE_STAGES.map((stage, i) => {
+        {stages.length === 0 && (
+          <div style={{ fontSize: 12, color: C.text3 }}>
+            Workflow definition unavailable. Pipeline visualization disabled.
+          </div>
+        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          {stages.map((stage, i) => {
             const state = pipeStates[i]
             const dotBg = state === "done" ? C.green : state === "active" ? C.accent : C.border
             const dotColor = state === "waiting" ? C.text4 : "#fff"
             const labelColor = state === "done" ? C.green : state === "active" ? C.accent : C.text3
             const labelWeight = state === "active" ? 600 : 400
             return (
-              <div key={stage.key} style={{ display: "contents" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <div key={stage.id} style={{ display: "contents" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }} title={`Agents: ${stage.agents.join(", ") || "(system)"}`}>
                   <div style={{
                     width: 28, height: 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center",
                     fontSize: 12, fontWeight: 700, background: dotBg, color: dotColor,
@@ -227,7 +330,7 @@ export function StoryBoardPage() {
                   </div>
                   <span style={{ fontSize: 11, color: labelColor, fontWeight: labelWeight }}>{stage.label}</span>
                 </div>
-                {i < PIPELINE_STAGES.length - 1 && (
+                {i < stages.length - 1 && (
                   <div style={{
                     width: 40, height: 2,
                     background: connectorState(i) === "done" ? C.green : connectorState(i) === "active" ? C.accent : C.border,
@@ -238,36 +341,60 @@ export function StoryBoardPage() {
           })}
         </div>
 
-        {/* Stats row */}
+        {/* Stats row — story-aware. For workflows that don't produce stories
+            (bug_fix, research, content, etc.) we show subtask-based stats
+            instead, since "stories: 0" / "coverage: 0%" would be misleading. */}
         <div style={{ display: "flex", gap: 24, marginTop: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.text3 }}>
-            Stories: <span style={{ fontWeight: 700, color: C.text1, fontSize: 14 }}>{stories.length}</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.text3 }}>
-            Tests: <span style={{ fontWeight: 700, color: C.accent, fontSize: 14 }}>{passedTests}/{totalTests}</span> passing
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.text3 }}>
-            Coverage: <span style={{ fontWeight: 700, color: C.green, fontSize: 14 }}>{avgCoverage}%</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.text3 }}>
-            PRs: <span style={{ fontWeight: 700, color: C.text1, fontSize: 14 }}>
-              {stories.filter((s: any) => s.github_issue_number).length || stories.filter((s: any) => s.status !== "todo" && s.status !== "done").length}
-            </span> open
-          </div>
+          {workflow?.produces_stories ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.text3 }}>
+                Stories: <span style={{ fontWeight: 700, color: C.text1, fontSize: 14 }}>{stories.length}</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.text3 }}>
+                Tests: <span style={{ fontWeight: 700, color: C.accent, fontSize: 14 }}>{passedTests}/{totalTests}</span> passing
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.text3 }}>
+                Coverage: <span style={{ fontWeight: 700, color: C.green, fontSize: 14 }}>{avgCoverage}%</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.text3 }}>
+                PRs: <span style={{ fontWeight: 700, color: C.text1, fontSize: 14 }}>
+                  {stories.filter((s: any) => s.github_issue_number).length || stories.filter((s: any) => s.status !== "todo" && s.status !== "done").length}
+                </span> open
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.text3 }}>
+                Workflow: <span style={{ fontWeight: 700, color: C.text1, fontSize: 13 }}>{workflow?.id || "—"}</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.text3 }}>
+                Subtasks: <span style={{ fontWeight: 700, color: C.text1, fontSize: 14 }}>
+                  {subtasks.filter((s: any) => s.status === "completed").length}/{subtasks.length}
+                </span> completed
+              </div>
+              <div style={{ fontSize: 12, color: C.text4, fontStyle: "italic" }}>
+                This workflow doesn't produce user stories — see the Agent Timeline below.
+              </div>
+            </>
+          )}
         </div>
       </div>
 
-      {/* ── Tab bar ─────────────────────────────────── */}
+      {/* ── Tab bar ───────────────────────────────────
+          "Story Board" tab is hidden when the workflow doesn't produce stories
+          (bug_fix, research, content, etc.) — there's nothing for it to show.
+          "Agent Timeline" becomes the default in that case. */}
       <div style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "0 24px", display: "flex", gap: 4 }}>
         {[
-          { key: "board", label: "Story Board", count: stories.length },
-          { key: "timeline", label: "Agent Timeline", count: 0 },
+          ...(workflow?.produces_stories
+            ? [{ key: "board", label: "Story Board", count: stories.length }]
+            : []),
+          { key: "timeline", label: "Agent Timeline", count: subtasks.length },
           { key: "outputs", label: "Outputs", count: 0 },
-          { key: "tests", label: "Test Report", count: 0 },
         ].map((tab) => (
           <div
             key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
+            onClick={() => { setActiveTab(tab.key); setUserPickedTab(true) }}
             style={{
               padding: "12px 16px", fontSize: 13, fontWeight: 500, cursor: "pointer",
               color: activeTab === tab.key ? C.accent : C.text3,
@@ -276,7 +403,7 @@ export function StoryBoardPage() {
             }}
           >
             {tab.label}
-            {tab.key === "board" && (
+            {(tab.key === "board" || tab.key === "timeline") && tab.count > 0 && (
               <span style={{
                 background: C.accentBg, color: C.accent, fontSize: 11, fontWeight: 600,
                 padding: "1px 6px", borderRadius: 8, marginLeft: 6,
@@ -291,8 +418,13 @@ export function StoryBoardPage() {
       {/* ── Outputs tab ─────────────────────────────── */}
       {activeTab === "outputs" && <OutputsTab data={data} />}
 
-      {/* ── Kanban board ────────────────────────────── */}
-      {activeTab === "board" && (
+      {/* ── Agent Timeline tab ──────────────────────── */}
+      {activeTab === "timeline" && <AgentTimelineTab subtasks={subtasks} workflow={workflow} />}
+
+      {/* ── Kanban board ──────────────────────────────
+          Only renders when the workflow produces stories. Otherwise the user
+          sees Agent Timeline instead. */}
+      {activeTab === "board" && workflow?.produces_stories && (
       <div style={{
         display: "flex", gap: 16, padding: "20px 24px", overflowX: "auto",
         minHeight: "calc(100vh - 340px)", alignItems: "flex-start",
@@ -359,6 +491,114 @@ function fileIconChar(path: string): string {
 function fileLabelOnly(path: string): string {
   return path.split('/').pop() || path
 }
+
+/* ── Agent Timeline tab ──────────────────────────────
+   Shown by default for workflows that don't produce stories (bug_fix,
+   research, content, demo, docs). Lists every subtask in chronological
+   order with status + duration. For workflows with stories, this tab is
+   still available as an alternative to the Kanban view. */
+function AgentTimelineTab({
+  subtasks, workflow,
+}: { subtasks: any[]; workflow: WorkflowDef | null }) {
+  if (!subtasks || subtasks.length === 0) {
+    return (
+      <div style={{ padding: 32, color: C.text4, fontSize: 13, textAlign: "center" }}>
+        No agent activity recorded yet for this request.
+      </div>
+    )
+  }
+
+  // Build a stage lookup for the agent badges: which workflow stage did this
+  // agent run as part of? Only used for the small "stage" hint per row.
+  const agentToStage: Record<string, string> = {}
+  for (const st of workflow?.stages || []) {
+    for (const aid of st.agents) {
+      // First mention wins — same agent might appear in multiple stages but
+      // typically runs once per workflow.
+      if (!agentToStage[aid]) agentToStage[aid] = st.label
+    }
+  }
+
+  // Subtasks come from the API in insertion order. For chronological display
+  // we sort by started_at when present (some subtasks haven't started yet).
+  const sorted = [...subtasks].sort((a, b) => {
+    if (!a.started_at && !b.started_at) return 0
+    if (!a.started_at) return 1
+    if (!b.started_at) return -1
+    return a.started_at.localeCompare(b.started_at)
+  })
+
+  return (
+    <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 8 }}>
+      {sorted.map((s: any) => {
+        const agentStyle = AGENT_STYLES[s.agent_id] || { bg: C.pendingBg, color: C.text2, label: s.agent_id }
+        const stageLabel = agentToStage[s.agent_id]
+        const duration = s.started_at && s.completed_at
+          ? formatDuration(s.started_at, s.completed_at)
+          : null
+        const statusStyle = STATUS_STYLES[s.status] || STATUS_STYLES.pending
+        return (
+          <div
+            key={s.subtask_id}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "auto 1fr auto auto",
+              alignItems: "center",
+              gap: 12,
+              padding: "10px 14px",
+              background: C.white,
+              border: `1px solid ${C.border}`,
+              borderRadius: 8,
+            }}
+          >
+            <span style={{
+              fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 4,
+              background: agentStyle.bg, color: agentStyle.color, whiteSpace: "nowrap",
+            }}>
+              {agentStyle.label}
+            </span>
+            <span style={{ fontSize: 12, color: C.text3 }}>
+              {stageLabel ? `Stage: ${stageLabel}` : "—"}
+              {s.started_at && (
+                <span style={{ marginLeft: 8, color: C.text4 }}>
+                  · started {timeAgo(s.started_at)}
+                </span>
+              )}
+            </span>
+            <span style={{
+              fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4,
+              background: statusStyle.bg, color: statusStyle.color, whiteSpace: "nowrap",
+            }}>
+              {s.status.replace(/_/g, " ")}
+            </span>
+            <span style={{ fontSize: 11, color: C.text4, minWidth: 60, textAlign: "right", fontFamily: "ui-monospace, monospace" }}>
+              {duration || "—"}
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+const STATUS_STYLES: Record<string, { bg: string; color: string }> = {
+  pending:     { bg: C.pendingBg, color: C.text3 },
+  in_progress: { bg: C.accentBg, color: C.accent },
+  completed:   { bg: C.greenBg, color: C.green },
+  failed:      { bg: C.redBg, color: C.red },
+  cancelled:   { bg: C.pendingBg, color: C.text4 },
+}
+
+function formatDuration(startIso: string, endIso: string): string {
+  const ms = new Date(endIso).getTime() - new Date(startIso).getTime()
+  if (!isFinite(ms) || ms < 0) return "—"
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  const rs = s % 60
+  return `${m}m${rs > 0 ? ` ${rs}s` : ""}`
+}
+
 
 function OutputsTab({ data }: { data: any }) {
   const artifacts = data?.artifacts || {}

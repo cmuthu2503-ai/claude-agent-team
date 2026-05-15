@@ -59,11 +59,13 @@ class ConfigValidator:
                         f"agents/{agent_id}", f"Missing required field: {field}"
                     )
 
-            # Validate model is a known value
+            # Validate model — single shared model for all agents on Claude Platform on AWS.
             model = config.get("model", "")
-            if model not in ("claude-opus-4-6", "claude-sonnet-4-6"):
+            if model != "claude-opus-4-7":
                 self._add_error(
-                    f"agents/{agent_id}", f"Invalid model: {model}"
+                    f"agents/{agent_id}",
+                    f"Invalid model: {model}. All agents must use claude-opus-4-7 "
+                    f"(Claude Platform on AWS). See docs/setup-claude-platform-on-aws.md.",
                 )
 
             # Validate team exists

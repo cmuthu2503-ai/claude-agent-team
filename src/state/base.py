@@ -65,6 +65,11 @@ class StateStore(ABC):
     @abstractmethod
     async def get_subtasks_for_request(self, request_id: str) -> list[Subtask]: ...
 
+    @abstractmethod
+    async def get_active_subtasks(self) -> list[Subtask]:
+        """Return all subtasks currently in IN_PROGRESS, newest started first."""
+        ...
+
     # ── Artifacts ────────────────────────────────
 
     @abstractmethod

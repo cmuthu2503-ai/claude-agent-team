@@ -2,6 +2,7 @@
 
 import os
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -9,8 +10,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from src.agents.executor import VALID_PROVIDERS
 from src.auth.service import get_current_user, require_role
+from src.workflows.loader import ParallelStage, WorkflowDefinition
 
 router = APIRouter(prefix="/api/v1/requests", tags=["requests"])
 
@@ -30,21 +31,109 @@ def _envelope(data: Any, meta: dict | None = None) -> dict:
     return {"data": data, "meta": meta, "error": None}
 
 
+def _iso_utc(dt: datetime | None) -> str | None:
+    """Serialize a datetime as an ISO string the browser will parse as UTC.
+
+    The backend stores all timestamps as naive UTC (datetime.utcnow). Without
+    a timezone marker, JavaScript's `new Date(iso)` parses the string as the
+    browser's LOCAL time, which makes "X minutes ago" math wildly wrong for
+    anyone not in UTC (e.g., a user in EDT sees "-239 minutes ago" instead
+    of "5 minutes ago"). Appending 'Z' tells the browser it's UTC.
+    """
+    if dt is None:
+        return None
+    iso = dt.isoformat()
+    # Only mark naive timestamps; if it's already aware, leave the offset alone.
+    if "+" not in iso and not iso.endswith("Z"):
+        iso += "Z"
+    return iso
+
+
+# Friendly labels for workflow stage IDs. Auto-derivation (replace _ with space
+# + title-case) handles most cases; this overrides where the auto result is
+# wrong or wordy.
+_STAGE_LABEL_OVERRIDES: dict[str, str] = {
+    "requirements":    "PRD",
+    "story_creation":  "Stories",
+    "review_and_test": "Review & Test",
+    "hotfix_deploy":   "Deploy",
+    "code_commit":     "Code Commit",
+    "deployment":      "Deploy",
+}
+
+
+def _stage_label(stage_id: str) -> str:
+    """Convert a workflow stage_id to a human-readable label."""
+    if stage_id in _STAGE_LABEL_OVERRIDES:
+        return _STAGE_LABEL_OVERRIDES[stage_id]
+    return stage_id.replace("_", " ").title()
+
+
+def _serialize_workflow(wf: WorkflowDefinition | None) -> dict[str, Any] | None:
+    """Serialize a WorkflowDefinition into a JSON-friendly shape the frontend
+    Story Board can use to render a workflow-driven pipeline bar.
+
+    Shape:
+        {
+            "id": str,
+            "trigger": str,
+            "produces_stories": bool,
+            "stages": [
+                {
+                    "id": str,
+                    "label": str,
+                    "agents": list[str],   # flattened across parallel groups
+                    "parallel": bool,
+                    "system": bool,        # True if no agents (handled by orchestrator)
+                },
+                ...
+            ],
+        }
+    """
+    if wf is None:
+        return None
+    stages = []
+    for stage_id, stage in wf.stages.items():
+        if isinstance(stage, ParallelStage):
+            agents: list[str] = []
+            for group in stage.groups:
+                agents.extend(group.agents)
+            stages.append({
+                "id": stage_id,
+                "label": _stage_label(stage_id),
+                "agents": agents,
+                "parallel": True,
+                "system": len(agents) == 0,
+            })
+        else:
+            stages.append({
+                "id": stage_id,
+                "label": _stage_label(stage_id),
+                "agents": list(stage.agents),
+                "parallel": False,
+                "system": len(stage.agents) == 0,
+            })
+    # A workflow "produces stories" if it has a stage that runs user_story_author.
+    produces_stories = any(
+        "user_story_author" in s["agents"] for s in stages
+    )
+    return {
+        "id": wf.workflow_id,
+        "trigger": wf.trigger,
+        "produces_stories": produces_stories,
+        "stages": stages,
+    }
+
+
 @router.post("")
 async def submit_request(
     request: Request,
     description: str = Form(...),
     task_type: str = Form("feature_request"),
     priority: str = Form("medium"),
-    provider: str = Form("anthropic_sonnet"),
     screenshots: list[UploadFile] = File(default=[]),
     user: dict = Depends(require_role("developer", "admin")),
 ):
-    if provider not in VALID_PROVIDERS:
-        raise HTTPException(
-            400,
-            f"Invalid provider '{provider}'. Must be one of: {sorted(VALID_PROVIDERS)}",
-        )
     # Save uploaded screenshots
     saved_files: list[dict[str, str]] = []
     for file in screenshots:
@@ -81,14 +170,12 @@ async def submit_request(
         task_type=task_type,
         priority=priority,
         created_by=user.get("username", ""),
-        provider=provider,
     )
     return _envelope({
         "request_id": result.request_id,
         "status": result.status,
         "description": result.description,
         "priority": result.priority,
-        "provider": result.provider,
         "created_at": result.created_at.isoformat(),
         "attachments": saved_files,
     })
@@ -126,9 +213,8 @@ async def list_requests(
                 "priority": r.priority,
                 "status": r.status,
                 "created_by": r.created_by,
-                "created_at": r.created_at.isoformat(),
-                "completed_at": r.completed_at.isoformat() if r.completed_at else None,
-                "provider": r.provider,
+                "created_at": _iso_utc(r.created_at),
+                "completed_at": _iso_utc(r.completed_at),
             }
             for r in requests
         ],
@@ -151,6 +237,33 @@ async def get_request_detail(
     token_usage = await state.get_token_usage_for_request(request_id)
     documents = await state.get_documents_for_request(request_id)
     total_cost = sum(u.cost_usd for u in token_usage)
+
+    # Resolve the workflow this request ran through, so the Story Board can
+    # render a pipeline bar that matches the ACTUAL stages rather than
+    # hardcoding feature_development's 6-stage shape.
+    orchestrator = request.app.state.orchestrator
+    workflow = orchestrator.workflow_loader.get_workflow_for_trigger(req.task_type)
+    workflow_payload = _serialize_workflow(workflow)
+
+    # Pull the supervisor's deployment state if there's one for this request.
+    # The Story Board uses this to render the REAL deploy stage state (judge
+    # strategy + supervisor step_history) instead of just the agent's subtask.
+    deployment_state = await state.get_deployment_state_for_request(request_id)
+    deployment_payload = None
+    if deployment_state:
+        deployment_payload = {
+            "deployment_id": deployment_state.deployment_id,
+            "current_step": deployment_state.current_step,
+            "strategy": deployment_state.strategy,
+            "strategy_reasoning": deployment_state.strategy_reasoning,
+            "risk": deployment_state.risk,
+            "commit_sha": deployment_state.commit_sha,
+            "step_history": deployment_state.step_history,
+            "files_committed": deployment_state.files_committed,
+            "error_message": deployment_state.error_message,
+            "started_at": _iso_utc(deployment_state.started_at),
+            "completed_at": _iso_utc(deployment_state.completed_at),
+        }
 
     # Build stories with nested acceptance criteria + test cases (async)
     stories_data = []
@@ -182,7 +295,7 @@ async def get_request_detail(
                     "test_id": tc.test_id,
                     "name": tc.name,
                     "status": tc.status,
-                    "last_run_at": tc.last_run_at.isoformat() if tc.last_run_at else None,
+                    "last_run_at": _iso_utc(tc.last_run_at),
                 }
                 for tc in tcs
             ],
@@ -194,17 +307,17 @@ async def get_request_detail(
         "task_type": req.task_type,
         "priority": req.priority,
         "status": req.status,
-        "provider": req.provider,
-        "created_at": req.created_at.isoformat(),
-        "completed_at": req.completed_at.isoformat() if req.completed_at else None,
+        "created_at": _iso_utc(req.created_at),
+        "completed_at": _iso_utc(req.completed_at),
+        "workflow": workflow_payload,
         "subtasks": [
             {
                 "subtask_id": s.subtask_id,
                 "agent_id": s.agent_id,
                 "display_name": request.app.state.config.agents.get(s.agent_id, {}).get("display_name", s.agent_id),
                 "status": s.status,
-                "started_at": s.started_at.isoformat() if s.started_at else None,
-                "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+                "started_at": _iso_utc(s.started_at),
+                "completed_at": _iso_utc(s.completed_at),
                 "output_text": s.output_text or "",
                 "output_artifacts": s.output_artifacts,
                 "error_message": s.error_message,
@@ -212,6 +325,7 @@ async def get_request_detail(
             for s in subtasks
         ],
         "stories": stories_data,
+        "deployment": deployment_payload,
         "total_cost": {"cost_usd": round(total_cost, 4)},
         "artifacts": {
             "documents": [
@@ -221,7 +335,7 @@ async def get_request_detail(
                     "title": d.title,
                     "agent_id": d.agent_id,
                     "version": d.version,
-                    "created_at": d.created_at.isoformat() if d.created_at else None,
+                    "created_at": _iso_utc(d.created_at),
                 }
                 for d in documents
             ],
@@ -254,9 +368,8 @@ async def retry_request(
         task_type=req.task_type,
         priority=req.priority,
         created_by=user.get("username", ""),
-        provider=req.provider,
     )
-    return _envelope({"request_id": result.request_id, "status": result.status, "provider": result.provider})
+    return _envelope({"request_id": result.request_id, "status": result.status})
 
 
 def _assert_owner_or_admin(req: Any, user: dict) -> None:

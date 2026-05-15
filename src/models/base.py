@@ -91,7 +91,10 @@ class Request(BaseModel):
     completed_at: datetime | None = None
     estimated_cost_usd: float | None = None
     actual_cost_usd: float | None = None
-    provider: str = "anthropic_sonnet"  # see src/agents/executor.py::VALID_PROVIDERS
+    # Legacy DB column — kept for backward compatibility with rows from before the
+    # Claude Platform on AWS migration. Always "claude_platform_aws" for new rows;
+    # not exposed in the API or UI anymore.
+    provider: str = "claude_platform_aws"
     # Artifacts produced by the workflow (set by publish/code_commit handlers)
     published_files: list[str] = Field(default_factory=list)  # repo-relative paths
     commit_sha: str | None = None  # short SHA of the publish commit
@@ -217,7 +220,9 @@ class Document(BaseModel):
 
 class DeploymentStep(StrEnum):
     CODE_COMMITTED = "code_committed"
+    JUDGING = "judging"        # supervisor is asking the deployment judge for a strategy
     BUILDING = "building"
+    SYNCING = "syncing"        # supervisor is `git fetch + checkout`-ing files from origin/main
     STAGING_DEPLOYING = "staging_deploying"
     STAGING_HEALTHY = "staging_healthy"
     PROD_DEPLOYING = "prod_deploying"
@@ -226,6 +231,7 @@ class DeploymentStep(StrEnum):
     FAILED = "failed"
     ROLLING_BACK = "rolling_back"
     ROLLED_BACK = "rolled_back"
+    ON_HOLD = "on_hold"        # judge picked "hold" — paused for manual unblock
 
 
 class DeploymentState(BaseModel):
@@ -242,6 +248,11 @@ class DeploymentState(BaseModel):
     completed_at: datetime | None = None
     error_message: str | None = None
     rollback_sha: str = ""  # previous commit SHA for rollback
+    # Judgment from the deployment-judge LLM (set by the supervisor BEFORE
+    # any docker work). Empty until the judge runs.
+    strategy: str = ""           # skip | deploy_staging_only | deploy_full | hold
+    strategy_reasoning: str = ""  # plain-language explanation
+    risk: str = ""               # low | medium | high
 
 
 # ── Deployment Models ────────────────────────────
@@ -342,8 +353,8 @@ class PromptSession(BaseModel):
     constraints: str = ""
     # Advanced options as a flexible dict (target_model, output_format, few_shot, cot, length, category)
     options: dict[str, Any] = Field(default_factory=dict)
-    # LLM provider used — see src/agents/executor.py::VALID_PROVIDERS
-    provider: str = "anthropic_sonnet"
+    # Legacy DB column — provider is no longer selectable. Always "claude_platform_aws".
+    provider: str = "claude_platform_aws"
     # Starting template id (if any)
     template_id: str | None = None
     # Which variant the user selected (drives refinement context)

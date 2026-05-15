@@ -13,21 +13,6 @@ function isTerminal(status: string): boolean {
   return (TERMINAL_STATUSES as readonly string[]).includes(status)
 }
 
-// 5-button provider selector. Each button forces ALL agents to a single model
-// for the duration of a request (mirrors the existing Bedrock override pattern).
-// The two OpenAI buttons point at the latest models on OpenAI's API as of
-// 2026-04-08: gpt-5.4 (flagship, 2026-03-05) and o4-mini (latest o-series
-// reasoning, 2025-04-16). Override via OPENAI_GPT5_MODEL_ID / OPENAI_O3_MODEL_ID
-// in .env without touching this file.
-// Keep in sync with PromptStudio.tsx and src/agents/executor.py::VALID_PROVIDERS.
-const PROVIDER_OPTIONS: { id: string; label: string; title: string }[] = [
-  { id: "anthropic_opus",   label: "Opus",     title: "Claude Opus 4.6 (direct Anthropic API)" },
-  { id: "anthropic_sonnet", label: "Sonnet",   title: "Claude Sonnet 4.6 (direct Anthropic API)" },
-  { id: "bedrock",          label: "Bedrock",  title: "Claude Sonnet 4 via Amazon Bedrock" },
-  { id: "openai_gpt5",      label: "GPT-5.4",  title: "OpenAI GPT-5.4 — latest flagship (2026-03-05)" },
-  { id: "openai_o3",        label: "o4-mini",  title: "OpenAI o4-mini — latest reasoning model (2025-04-16)" },
-]
-
 interface RequestItem {
   request_id: string
   description: string
@@ -53,11 +38,6 @@ export function CommandCenterPage() {
   const [selectedTeam, setSelectedTeam] = useState("engineering")
   const [taskType, setTaskType] = useState("feature_request")
   const [priority, setPriority] = useState("medium")
-  const [provider, setProvider] = useState<string>(() => {
-    const stored = localStorage.getItem("llm_provider") || "anthropic_sonnet"
-    // Migrate legacy "anthropic" value → new "anthropic_sonnet"
-    return stored === "anthropic" ? "anthropic_sonnet" : stored
-  })
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState("")
   const [attachCount, setAttachCount] = useState(0)
@@ -129,7 +109,6 @@ export function CommandCenterPage() {
       formData.append("description", content.text)
       formData.append("task_type", taskType)
       formData.append("priority", priority)
-      formData.append("provider", provider)
       for (const file of content.files) {
         formData.append("screenshots", file)
       }
@@ -337,36 +316,6 @@ export function CommandCenterPage() {
               ))}
             </div>
 
-            {/* Model Provider Selector */}
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Model:</span>
-              <div style={{ display: "flex", borderRadius: "var(--radius)", overflow: "hidden", border: "1px solid var(--border)" }}>
-                {PROVIDER_OPTIONS.map((opt, i) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    title={opt.title}
-                    onClick={() => {
-                      setProvider(opt.id)
-                      localStorage.setItem("llm_provider", opt.id)
-                    }}
-                    style={{
-                      padding: "5px 12px",
-                      fontSize: 12,
-                      fontWeight: 500,
-                      border: "none",
-                      cursor: "pointer",
-                      fontFamily: "var(--font)",
-                      background: provider === opt.id ? "var(--accent)" : "var(--bg-input)",
-                      color: provider === opt.id ? "#fff" : "var(--text-secondary)",
-                      borderRight: i < PROVIDER_OPTIONS.length - 1 ? "1px solid var(--border)" : "none",
-                    }}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
             {attachCount > 0 && (
               <span style={{ fontSize: 12, color: "var(--accent)" }}>
                 📎 {attachCount} screenshot{attachCount > 1 ? "s" : ""} attached
@@ -409,11 +358,11 @@ export function CommandCenterPage() {
               <div
                 key={r.request_id}
                 style={{
-                  position: "relative",
                   background: "var(--bg-card)",
                   border: "1px solid var(--border)",
                   borderRadius: "var(--radius)",
                   transition: "border-color 0.15s, box-shadow 0.15s",
+                  overflow: "hidden",
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.borderColor = "var(--accent)"
@@ -424,17 +373,84 @@ export function CommandCenterPage() {
                   e.currentTarget.style.boxShadow = "none"
                 }}
               >
+                {/* Top header strip — request_id on the left, status + cancel as
+                    flex siblings on the right. NOT inside the Link so they don't
+                    overlap and stopPropagation isn't needed. */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    padding: "12px 16px 0",
+                  }}
+                >
+                  <Link
+                    to={`/request/${r.request_id}`}
+                    style={{
+                      fontSize: 12,
+                      fontFamily: "var(--font-mono)",
+                      color: "var(--text-muted)",
+                      textDecoration: "none",
+                    }}
+                  >
+                    {r.request_id}
+                  </Link>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                    <StatusBadge status={r.status} />
+                    {canMutate(r) && (
+                      <button
+                        type="button"
+                        title="Cancel this request"
+                        disabled={busyId === r.request_id}
+                        onClick={() => handleCancel(r.request_id)}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 3,
+                          padding: "2px 7px",
+                          fontSize: 11,
+                          fontWeight: 500,
+                          fontFamily: "var(--font)",
+                          background: "transparent",
+                          color: "var(--text-muted)",
+                          border: "1px solid var(--border)",
+                          borderRadius: "var(--radius)",
+                          cursor: busyId === r.request_id ? "wait" : "pointer",
+                          opacity: busyId === r.request_id ? 0.5 : 1,
+                          transition: "background 0.15s, color 0.15s, border-color 0.15s",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = "var(--danger-subtle)"
+                          e.currentTarget.style.color = "var(--danger)"
+                          e.currentTarget.style.borderColor = "var(--danger)"
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "transparent"
+                          e.currentTarget.style.color = "var(--text-muted)"
+                          e.currentTarget.style.borderColor = "var(--border)"
+                        }}
+                      >
+                        <X size={10} />
+                        {busyId === r.request_id ? "..." : "Cancel"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Body — description + meta. Wrapped in its own Link so the body
+                    is clickable to navigate, but the cancel button isn't fighting
+                    a parent click handler. */}
                 <Link
                   to={`/request/${r.request_id}`}
-                  style={{ display: "block", padding: 16, textDecoration: "none", color: "inherit" }}
+                  style={{
+                    display: "block",
+                    padding: "8px 16px 16px",
+                    textDecoration: "none",
+                    color: "inherit",
+                  }}
                 >
-                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
-                    <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
-                      {r.request_id}
-                    </span>
-                    <StatusBadge status={r.status} />
-                  </div>
-                  <p style={{ marginTop: 8, fontSize: 14, color: "var(--text-secondary)", overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+                  <p style={{ fontSize: 14, color: "var(--text-secondary)", overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", margin: 0 }}>
                     {r.description}
                   </p>
                   <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-muted)" }}>
@@ -443,49 +459,6 @@ export function CommandCenterPage() {
                     <span style={{ textTransform: "capitalize" }}>{r.priority}</span>
                   </div>
                 </Link>
-                {canMutate(r) && (
-                  <div style={{ position: "absolute", top: 12, right: 56, display: "flex", gap: 4 }}>
-                    <button
-                      type="button"
-                      title="Cancel this request"
-                      disabled={busyId === r.request_id}
-                      onClick={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        handleCancel(r.request_id)
-                      }}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 3,
-                        padding: "2px 6px",
-                        fontSize: 10,
-                        fontWeight: 500,
-                        fontFamily: "var(--font)",
-                        background: "transparent",
-                        color: "var(--text-muted)",
-                        border: "1px solid var(--border)",
-                        borderRadius: "var(--radius)",
-                        cursor: busyId === r.request_id ? "wait" : "pointer",
-                        opacity: busyId === r.request_id ? 0.5 : 1,
-                        transition: "background 0.15s, color 0.15s, border-color 0.15s",
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background = "var(--danger-subtle)"
-                        e.currentTarget.style.color = "var(--danger)"
-                        e.currentTarget.style.borderColor = "var(--danger)"
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = "transparent"
-                        e.currentTarget.style.color = "var(--text-muted)"
-                        e.currentTarget.style.borderColor = "var(--border)"
-                      }}
-                    >
-                      <X size={10} />
-                      {busyId === r.request_id ? "..." : "Cancel"}
-                    </button>
-                  </div>
-                )}
               </div>
             ))}
           </div>

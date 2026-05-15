@@ -68,12 +68,12 @@ def test_cassette_save_and_load(tmp_path):
         name="test_workflow",
         interactions=[
             CassetteInteraction(
-                request_model="claude-sonnet-4-6",
+                request_model="claude-opus-4-7",
                 response_text="Here is the PRD document...",
                 response_usage={"input_tokens": 500, "output_tokens": 1500},
             ),
             CassetteInteraction(
-                request_model="claude-sonnet-4-6",
+                request_model="claude-opus-4-7",
                 response_text="Here are the user stories...",
                 response_usage={"input_tokens": 800, "output_tokens": 2000},
             ),

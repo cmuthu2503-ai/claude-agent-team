@@ -61,7 +61,10 @@ async def lifespan(app: FastAPI):
 
     # Initialize agent system with real LLM (if API key is set)
     from src.agents.executor import AgentSystemExecutor
-    agent_executor = AgentSystemExecutor(config)
+    # `state` threaded in so tools like `wait_for_deployment` (used by
+    # devops_specialist) can read deployment_states without opening a
+    # parallel SQLite connection.
+    agent_executor = AgentSystemExecutor(config, state=state)
     if agent_executor.client:
         orchestrator.set_agent_executor(agent_executor)
         logger.info("agent_system_connected", mode="real_llm")

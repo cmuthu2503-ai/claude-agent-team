@@ -22,6 +22,7 @@ from src.models.base import (
     RequestStatus,
     Story,
     Subtask,
+    SubtaskStatus,
     TestCase,
     TokenUsage,
     User,
@@ -218,7 +219,14 @@ CREATE TABLE IF NOT EXISTS deployment_states (
     updated_at TIMESTAMP,
     completed_at TIMESTAMP,
     error_message TEXT,
-    rollback_sha TEXT DEFAULT ''
+    rollback_sha TEXT DEFAULT '',
+    -- Judgment from the deployment-judge LLM (Milestone 1, hybrid agent).
+    -- Populated by the supervisor BEFORE it runs any docker commands. Lets
+    -- the agent decide skip/staging-only/full/hold based on the commit shape
+    -- without the LLM ever issuing the actual deploy commands itself.
+    strategy TEXT DEFAULT '',           -- skip | deploy_staging_only | deploy_full | hold
+    strategy_reasoning TEXT DEFAULT '', -- agent's plain-language explanation
+    risk TEXT DEFAULT ''                -- low | medium | high
 );
 
 CREATE INDEX IF NOT EXISTS idx_deployment_states_request ON deployment_states(request_id);
@@ -314,6 +322,12 @@ class SQLiteStateStore(StateStore):
             "ALTER TABLE requests ADD COLUMN published_files TEXT DEFAULT '[]'",
             "ALTER TABLE requests ADD COLUMN commit_sha TEXT",
             "ALTER TABLE requests ADD COLUMN commit_url TEXT",
+            # Deployment judge fields (Milestone 1, hybrid agent). Populated by
+            # the supervisor BEFORE it runs docker commands; lets the agent
+            # decide skip/staging-only/full/hold based on the commit shape.
+            "ALTER TABLE deployment_states ADD COLUMN strategy TEXT DEFAULT ''",
+            "ALTER TABLE deployment_states ADD COLUMN strategy_reasoning TEXT DEFAULT ''",
+            "ALTER TABLE deployment_states ADD COLUMN risk TEXT DEFAULT ''",
         ]
         for stmt in migrations:
             try:
@@ -443,7 +457,7 @@ class SQLiteStateStore(StateStore):
             except (IndexError, KeyError):
                 return default
 
-        provider = _safe_get("provider") or "anthropic_sonnet"
+        provider = _safe_get("provider") or "claude_platform_aws"
         published_files_raw = _safe_get("published_files") or "[]"
         try:
             published_files = json.loads(published_files_raw) if published_files_raw else []
@@ -522,6 +536,16 @@ class SQLiteStateStore(StateStore):
         db = await self._get_db()
         async with db.execute(
             "SELECT * FROM subtasks WHERE request_id = ?", (request_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_subtask(r) for r in rows]
+
+    async def get_active_subtasks(self) -> list[Subtask]:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM subtasks WHERE status = ? "
+            "ORDER BY started_at IS NULL, started_at DESC",
+            (SubtaskStatus.IN_PROGRESS,),
         ) as cursor:
             rows = await cursor.fetchall()
         return [self._row_to_subtask(r) for r in rows]
@@ -808,7 +832,7 @@ class SQLiteStateStore(StateStore):
             tone=row["tone"] or "",
             constraints=row["constraints"] or "",
             options=options,
-            provider=row["provider"] or "anthropic_sonnet",
+            provider=row["provider"] or "claude_platform_aws",
             template_id=row["template_id"],
             selected_variant_id=row["selected_variant_id"],
         )
@@ -1320,6 +1344,14 @@ class SQLiteStateStore(StateStore):
         await db.commit()
 
     def _row_to_deployment_state(self, row: aiosqlite.Row) -> DeploymentState:
+        # The judge fields are added by a later ALTER TABLE migration; for very
+        # old DBs the columns may not be present, so look them up defensively.
+        def _safe_get(name: str, default: Any = "") -> Any:
+            try:
+                return row[name]
+            except (IndexError, KeyError):
+                return default
+
         return DeploymentState(
             deployment_id=row["deployment_id"],
             request_id=row["request_id"],
@@ -1336,4 +1368,7 @@ class SQLiteStateStore(StateStore):
             ),
             error_message=row["error_message"],
             rollback_sha=row["rollback_sha"] or "",
+            strategy=_safe_get("strategy") or "",
+            strategy_reasoning=_safe_get("strategy_reasoning") or "",
+            risk=_safe_get("risk") or "",
         )
