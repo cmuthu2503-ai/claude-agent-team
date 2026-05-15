@@ -660,13 +660,14 @@ export function PromptStudioPage() {
               {generating ? (
                 <>
                   <RefreshCw size={16} style={{ animation: "ps-spin 1s linear infinite" }} />
-                  Generating 3 variants...
+                  Generating prompt...
                 </>
               ) : (
                 <>
                   <Sparkles size={16} />
-                  Generate 3 Variants
+                  Generate Prompts
                 </>
+
               )}
             </button>
           </div>
