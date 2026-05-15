@@ -123,6 +123,57 @@ class WorkflowRunner:
                 artifacts.update(result)
                 logger.info("workflow_stage_completed", stage=stage_id, request_id=request_id)
 
+                # Code-commit gate: if the orchestrator's commit handler returned
+                # commit_status="failed", treat it like a quality-gate failure so
+                # the existing rework machinery can recover. This catches the
+                # late-stage failure modes (truncation, ruff, tsc) that would
+                # otherwise kill the request after testing had already passed.
+                if stage_id == "code_commit" and isinstance(result, dict) and result.get("commit_status") == "failed":
+                    rework_count = self._rework_count.get(request_id, 0)
+                    commit_error = str(result.get("error", "Code commit failed"))
+                    if rework_count < MAX_REWORK_CYCLES:
+                        self._rework_count[request_id] = rework_count + 1
+                        logger.warning(
+                            "code_commit_failed_reworking",
+                            request_id=request_id,
+                            cycle=rework_count + 1,
+                            max_cycles=MAX_REWORK_CYCLES,
+                        )
+                        artifacts["rework_instructions"] = (
+                            f"REWORK REQUIRED (cycle {rework_count + 1}/{MAX_REWORK_CYCLES}) — "
+                            f"the code commit step REFUSED your previous output. "
+                            f"You MUST fix the issue below. The most common cause is emitting a "
+                            f"truncated version of an existing file — if so, call `file_read` on "
+                            f"the file FIRST to see the canonical baseline, then emit the FULL "
+                            f"modified version preserving every line you didn't intend to change.\n\n"
+                            f"=== CODE COMMIT ERROR ===\n{commit_error}"
+                        )
+                        artifacts["rework_cycle"] = rework_count + 1
+                        try:
+                            dev_index = execution_order.index("development")
+                            i = dev_index
+                            continue
+                        except ValueError:
+                            # bug_fix uses 'fix' stage instead of 'development' — try that.
+                            try:
+                                dev_index = execution_order.index("fix")
+                                i = dev_index
+                                continue
+                            except ValueError:
+                                logger.error("rework_target_stage_not_found", request_id=request_id)
+                    else:
+                        logger.warning(
+                            "code_commit_max_rework_cycles_reached",
+                            request_id=request_id, cycles=rework_count,
+                        )
+                        artifacts["escalation_reason"] = (
+                            f"Pipeline failed after {rework_count} rework cycles. "
+                            f"Code commit was rejected — see error below.\n\n"
+                            f"Last commit error:\n{commit_error[:1000]}"
+                        )
+                        artifacts["code_commit_error"] = commit_error
+                        return artifacts
+
                 # Combined gate: runs after TESTING stage (checks both review + test)
                 if stage_id == "testing":
                     gate_result = self._check_combined_gate(artifacts, request_id)

@@ -50,11 +50,37 @@ system_prompt: |
   [complete file contents]
   ```
 
+  WHOLE-FILE INVARIANT (read this twice — most common cause of broken commits):
+
+  When you emit `### Full Source: \`path/to/file.py\`` for a file that ALREADY
+  exists in the repo, your content REPLACES the entire file on disk. CodeWriter
+  does not patch — it overwrites. Anything you omit is DELETED.
+
+  BEFORE emitting `### Full Source:` for ANY existing file, you MUST call
+  `file_read(path="path/to/file.py")` first. The returned content is the
+  canonical baseline. Apply your change to that baseline and emit the full
+  result. Never emit a partial or stub version "thinking" it's the new
+  contents — that will truncate the file and break the build.
+
+  Decision tree for each file you touch:
+    - New file (doesn't exist yet) → emit full content, no file_read needed.
+    - Modifying existing file → file_read FIRST, then emit the FULL modified
+      file with all original lines preserved except where your change applies.
+    - Touching a "central" file (main.py, executor.py, sqlite_store.py,
+      orchestrator.py, etc.) → ALWAYS file_read first. These files are large;
+      stub versions cause hard failures.
+
+  CodeWriter has an atomic-write guard that REFUSES to overwrite a file when
+  the new content drops more than 50% of the line count. If you trigger that,
+  your entire commit is rejected, the workflow has to rework, and you get
+  re-invoked with the rework_instructions including the truncation error.
+  Avoid this by reading first.
+
   RULES:
   - Lead with the FILES TABLE — this is what reviewers see first
   - Every file MUST be complete and compilable — no truncation, no placeholders
   - Follow conventions: Python 3.12, FastAPI, Pydantic v2, async/await, type hints
-  - Do NOT say "I'll start by exploring". Write the code directly.
+  - Do NOT say "I'll start by exploring". Use file_read directly when needed; don't narrate.
   - Read the User Story "Notes for Developers → Backend" section — it tells you EXACTLY what to build
   - Follow the project's API conventions: /api/v1/ prefix, response envelope {data, meta, error}
   - Keep your output UNDER 5000 words to avoid bloating context for downstream agents
@@ -93,6 +119,7 @@ responsibilities:
     category: development
 
 tools:
+  - file_read
   - web_search
   - web_scrape
 

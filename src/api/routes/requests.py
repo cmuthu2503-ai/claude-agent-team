@@ -326,6 +326,10 @@ async def get_request_detail(
         ],
         "stories": stories_data,
         "deployment": deployment_payload,
+        # code_commit failure detail (when present). Lets the Story Board show
+        # the code_commit stage's failure reason instead of leaving users to
+        # guess why the request stopped between testing and deployment.
+        "code_commit_error": req.code_commit_error,
         "total_cost": {"cost_usd": round(total_cost, 4)},
         "artifacts": {
             "documents": [

@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS requests (
     provider TEXT NOT NULL DEFAULT 'anthropic',
     published_files TEXT DEFAULT '[]',
     commit_sha TEXT,
-    commit_url TEXT
+    commit_url TEXT,
+    code_commit_error TEXT
 );
 
 CREATE TABLE IF NOT EXISTS subtasks (
@@ -322,6 +323,7 @@ class SQLiteStateStore(StateStore):
             "ALTER TABLE requests ADD COLUMN published_files TEXT DEFAULT '[]'",
             "ALTER TABLE requests ADD COLUMN commit_sha TEXT",
             "ALTER TABLE requests ADD COLUMN commit_url TEXT",
+            "ALTER TABLE requests ADD COLUMN code_commit_error TEXT",
             # Deployment judge fields (Milestone 1, hybrid agent). Populated by
             # the supervisor BEFORE it runs docker commands; lets the agent
             # decide skip/staging-only/full/hold based on the commit shape.
@@ -384,7 +386,7 @@ class SQLiteStateStore(StateStore):
         db = await self._get_db()
         await db.execute(
             """UPDATE requests SET status=?, completed_at=?, actual_cost_usd=?,
-               published_files=?, commit_sha=?, commit_url=?
+               published_files=?, commit_sha=?, commit_url=?, code_commit_error=?
                WHERE request_id=?""",
             (
                 request.status,
@@ -393,6 +395,7 @@ class SQLiteStateStore(StateStore):
                 json.dumps(request.published_files),
                 request.commit_sha,
                 request.commit_url,
+                request.code_commit_error,
                 request.request_id,
             ),
         )
@@ -483,6 +486,7 @@ class SQLiteStateStore(StateStore):
             published_files=published_files,
             commit_sha=_safe_get("commit_sha"),
             commit_url=_safe_get("commit_url"),
+            code_commit_error=_safe_get("code_commit_error"),
         )
 
     # ── Subtasks ─────────────────────────────────
