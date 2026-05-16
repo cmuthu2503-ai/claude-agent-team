@@ -660,7 +660,7 @@ export function PromptStudioPage() {
               {generating ? (
                 <>
                   <RefreshCw size={16} style={{ animation: "ps-spin 1s linear infinite" }} />
-                  Preparing your prompt...
+                  Working on your prompt...
                 </>
               ) : (
                 <>
