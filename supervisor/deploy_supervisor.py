@@ -488,25 +488,28 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
 
     update_step(db, dep_id, "staging_healthy", "Staging deployed and healthy on :8010/:3010")
 
-    # Prod deployment was removed from the supervisor's flow (per user request).
-    # The judge's "deploy_staging_only" strategy is now effectively the only
-    # path; "deploy_full" is treated identically. Reason: prod-up under the
-    # supervisor was intermittently failing during back-to-back staging→prod
-    # builds, and the user decided prod isn't a priority. Staging-healthy +
-    # dev rebuild is the new success criterion.
+    # Step 4: Tear staging down IMMEDIATELY now that its healthcheck passed.
+    # Staging is a transient validation environment — its only job was to prove
+    # the new image starts cleanly and responds to /health. Once that's
+    # confirmed, keeping staging up while we rebuild dev wastes 2-4 minutes of
+    # RAM/CPU on a container that does no further work. Previously the teardown
+    # ran AFTER dev rebuild, leaving staging idle for ~80% of its lifetime.
+    log("Staging validated. Tearing down staging before dev rebuild (no more idle time)...")
+    run_cmd(f"docker compose -f {STAGING_COMPOSE} down", timeout=30)
 
-    # Step 4: Rebuild dev environment with the new code.
+    # Step 5: Rebuild dev environment with the new code.
     #
-    # Healthcheck strategy:
+    # Prod deployment was removed earlier (per user request). The judge's
+    # "deploy_staging_only" and "deploy_full" both reach this point.
+    #
+    # Healthcheck strategy for dev:
     #   1. Generous initial window (120s) for the dev backend's heavy cold start
     #      (9 agents + 17 tools + StateStore + Anthropic client init).
     #   2. If the first window fails, do ONE restart attempt — catches the
     #      "container started but uvicorn race-condition'd on first init" case
     #      we hit on REQ-3EED7F. Then poll another 80s.
-    #   3. If dev STILL isn't healthy: mark the deployment FAILED (not
-    #      "completed uncertain"). The user sees a definitive ❌ in the UI
-    #      and knows to act, rather than seeing ✅ and being surprised that
-    #      dev isn't actually serving traffic.
+    #   3. If dev STILL isn't healthy: mark the deployment FAILED. UI shows a
+    #      definitive ❌ rather than silently leaving the user with a broken dev.
     log("Rebuilding dev environment...")
     run_cmd(f"docker compose -f {DEV_COMPOSE} down", timeout=30)
     run_cmd(f"docker compose -f {DEV_COMPOSE} up -d --build", timeout=180)
@@ -523,23 +526,13 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
         # we're not just racing init; something is genuinely wrong.
         dev_healthy = health_check(8000, retries=20, interval=4)
 
-    # Step 5: Tear down staging now that dev verification is settled. Staging
-    # is a transient validation environment — once dev is running (or has
-    # definitively failed) with the same code, keeping staging up wastes
-    # RAM/CPU. Best-effort teardown either way.
-    log("Tearing down staging (validation complete)...")
-    run_cmd(f"docker compose -f {STAGING_COMPOSE} down", timeout=30)
-
     if dev_healthy:
         update_step(
             db, dep_id, "completed",
-            "Staging validated and torn down; dev rebuilt and healthy on :8000.",
+            "Staging validated + torn down; dev rebuilt and healthy on :8000.",
         )
-        log(f"✅ Deployment {dep_id} COMPLETED (staging torn down, dev live)")
+        log(f"✅ Deployment {dep_id} COMPLETED (dev live)")
     else:
-        # Definitive failure outcome — no more "uncertain". The UI will show
-        # this as a failed deployment with a clear reason, so the user
-        # doesn't have to guess whether the app is actually live.
         update_step(
             db, dep_id, "failed",
             "Dev did not become healthy on :8000 after rebuild + restart (~200s total).",
