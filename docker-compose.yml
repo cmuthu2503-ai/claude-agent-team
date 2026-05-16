@@ -44,7 +44,12 @@ services:
       # Any worktree-local doc edits won't be visible to the running container;
       # commit them to a branch first to make them accessible.
       - C:/ai-projects/claude-agent-team/docs:/app/docs
-      - agent-team-data:/app/data
+      # `data` switched from named volume to host bind-mount so the supervisor
+      # running on the HOST (not in Docker — see CLAUDE.md "Supervisor scope")
+      # can read SQLite directly without needing Docker volume gymnastics.
+      # `reports` and `backups` stay as named volumes — they're write-only
+      # caches the host doesn't need to read.
+      - ./data:/app/data
       - agent-team-reports:/app/reports
       - agent-team-backups:/app/backups
     env_file:
@@ -94,7 +99,7 @@ services:
       retries: 3
 
 volumes:
-  agent-team-data:
+  # agent-team-data is now bind-mounted to ./data (see backend.volumes above)
   agent-team-reports:
   agent-team-backups:
 

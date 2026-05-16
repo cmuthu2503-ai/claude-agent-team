@@ -19,16 +19,54 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-# Configuration — works both on host and inside Docker container
-# Inside Docker: DB at /app/data/agent_team.db, project at /app/project
-# On host: DB at ./data/agent_team.db, project at .
-PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT", "/app/project"))
-DB_PATH = Path(os.getenv("DB_PATH", "/app/data/agent_team.db"))
+# Force UTF-8 stdout/stderr on Windows (default cp1252 can't render the emoji
+# glyphs we use in log lines — ✅ ⚖ 🧹 📥 etc. — and crashes the supervisor
+# at first log call). No-op on macOS/Linux.
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
-# Fallback for running directly on host
-if not DB_PATH.parent.exists():
-    PROJECT_ROOT = Path(__file__).parent.parent
-    DB_PATH = PROJECT_ROOT / "data" / "agent_team.db"
+# Load environment variables from .env file if present. The supervisor needs
+# ANTHROPIC_AWS_API_KEY / ANTHROPIC_AWS_WORKSPACE_ID (for the deployment judge
+# LLM) and GITHUB_TOKEN / GITHUB_REPO (for rollback git push). When the
+# supervisor runs on host, these come from the same .env that docker compose
+# reads. Minimal parser — no quoting / escaping support, but the project's
+# .env is simple KEY=VALUE.
+def _load_dotenv(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+# Configuration — supervisor runs on the HOST (not in Docker).
+#
+# Why on host: when the supervisor ran inside a container, it couldn't manage
+# dev's bind-mounted compose stack because Docker daemon resolved relative
+# volume paths against the HOST filesystem, not the supervisor's container
+# filesystem (the "/app/project/frontend/vite.config.ts not a directory"
+# error). Moving the supervisor to host eliminates that path-translation
+# class of bugs entirely — `docker compose` from host resolves bind mounts
+# normally, exactly as a human developer would.
+#
+# Defaults assume project root = parent of this file's directory (i.e.,
+# the supervisor script lives at <project>/supervisor/deploy_supervisor.py).
+# Env vars `PROJECT_ROOT` and `DB_PATH` override for non-standard layouts.
+_DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT", str(_DEFAULT_PROJECT_ROOT)))
+DB_PATH = Path(os.getenv("DB_PATH", str(PROJECT_ROOT / "data" / "agent_team.db")))
 POLL_INTERVAL = 5  # seconds
 HEALTH_CHECK_RETRIES = 10
 HEALTH_CHECK_INTERVAL = 3  # seconds
@@ -100,14 +138,11 @@ def health_check(
     n_interval = interval if interval is not None else HEALTH_CHECK_INTERVAL
     total_seconds = n_retries * n_interval
     for attempt in range(n_retries):
-        # When the supervisor runs inside its own Docker container, `localhost`
-        # loops back to the supervisor — NOT the host's exposed ports. Use
-        # `host.docker.internal` so curl reaches the host's :8010/:8020/:8000
-        # where docker-compose has published the staging/prod/dev backends.
-        # This is what was causing every staging health check to fail with
-        # Exit 7 (000) on REQ-3F2EAD, REQ-D20A12, REQ-438313 — the supervisor
-        # was probing itself, not the staging container.
-        host = os.getenv("HEALTHCHECK_HOST", "host.docker.internal")
+        # Supervisor runs on the host, so `localhost` resolves to the
+        # host's published ports (:8000 / :8010 / :8020) as expected.
+        # The HEALTHCHECK_HOST env var stays available as an override for
+        # weird network setups, but defaults to localhost on host.
+        host = os.getenv("HEALTHCHECK_HOST", "localhost")
         code, output = run_cmd(f'curl -sf -o /dev/null -w "%{{http_code}}" http://{host}:{port}/api/v1/health', timeout=10)
         if code == 0 and "200" in output:
             log(f"  ✓ Health check passed on :{port} (attempt {attempt + 1})")

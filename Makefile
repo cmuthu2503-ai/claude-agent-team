@@ -54,15 +54,23 @@ clean: ## Remove all containers, volumes, and images for this project
 # Supervisor (standalone — survives app rebuilds)
 # ============================================
 
-supervisor: ## Start the deployment supervisor (standalone container)
-	docker compose -f docker-compose.supervisor.yml up -d --build
-	@echo "Supervisor running. Logs: make supervisor-logs"
+supervisor: ## Start the deployment supervisor on the HOST (foreground)
+	@echo "Starting supervisor on host (NOT in Docker)."
+	@echo "See CLAUDE.md 'Supervisor scope' for why host execution is required."
+	@bash scripts/run-supervisor.sh
 
-supervisor-logs: ## Tail supervisor logs
-	docker compose -f docker-compose.supervisor.yml logs -f
+supervisor-bg: ## Start the supervisor in the background (logs → supervisor.log)
+	@nohup bash scripts/run-supervisor.sh > supervisor.log 2>&1 &
+	@echo "Supervisor started in background. Logs: tail -f supervisor.log"
 
-supervisor-stop: ## Stop the supervisor
-	docker compose -f docker-compose.supervisor.yml down
+supervisor-stop: ## Kill the host supervisor process
+	@pkill -f "python supervisor/deploy_supervisor.py" || echo "No supervisor running"
+
+supervisor-container-deprecated: ## DEPRECATED: container-based supervisor — see CLAUDE.md
+	@echo "ERROR: The containerized supervisor is deprecated."
+	@echo "The supervisor must run on the host to manage dev's bind-mounted compose."
+	@echo "Use 'make supervisor' (foreground) or 'make supervisor-bg' (background) instead."
+	@exit 1
 
 # ============================================
 # Staging / Production / Demo (P6)

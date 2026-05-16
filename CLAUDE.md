@@ -38,21 +38,29 @@ make demo      # ports 8030/3030 — docker-compose.demo.yml (seed data)
 make down-all  # Stop everything across all envs
 ```
 
-**Deployment supervisor** (standalone container that survives app rebuilds, has Docker socket access, drives staging→prod rollouts by watching `deployment_states` in the shared SQLite volume):
+**Deployment supervisor** runs on the HOST (not in Docker — see "Supervisor scope" below for why) and drives staging + dev rollouts by watching `deployment_states` in the local SQLite at `./data/agent_team.db`:
 
 ```bash
-make supervisor          # Start the supervisor stack
-make supervisor-logs     # Tail
-make supervisor-stop     # Stop
+make supervisor          # Start supervisor in foreground (see logs live)
+make supervisor-bg       # Start in background (logs → supervisor.log)
+make supervisor-stop     # Kill the host process
+
+# Or directly:
+python supervisor/deploy_supervisor.py
+scripts/run-supervisor.bat   # Windows
+scripts/run-supervisor.sh    # macOS / Linux
 ```
 
+Prerequisites on host: Python 3.12, `pip install "anthropic[aws]>=0.52.0"`, Git CLI, Docker CLI + Compose plugin, `.env` file with `ANTHROPIC_AWS_API_KEY` / `ANTHROPIC_AWS_WORKSPACE_ID` / `GITHUB_TOKEN` / `GITHUB_REPO`.
+
 The supervisor's `deploy()` flow on a `code_committed` row:
-1. `git fetch origin main && git checkout origin/main -- <files_committed>` — pulls the agent's published files from the remote into the host working tree (so the build sees them even if CodeWriter's local write didn't reach the host).
-2. `docker compose build` — rebuilds the dev image.
-3. `docker compose -f docker-compose.staging.yml up -d --build` + healthcheck on :8010.
-4. `docker compose -f docker-compose.prod.yml up -d --build` + healthcheck on :8020.
-5. `docker compose up -d --build` — rebuild dev + healthcheck on :8000.
-6. On any healthcheck failure: `git revert HEAD --no-edit && git push origin main`, then rebuild + restart prod with the reverted code.
+1. `git fetch origin main && git checkout origin/main -- <files_committed>` — pulls the agent's published files from origin into the host working tree.
+2. Calls the **deployment judge LLM** to decide strategy (`deploy_full` / `deploy_staging_only` / `skip` / `hold`).
+3. `docker compose build` — rebuilds dev image.
+4. `docker compose -f docker-compose.staging.yml up -d --build` + healthcheck on :8010.
+5. `docker compose -f docker-compose.yml up -d --build` — rebuild dev + healthcheck on :8000 (120s window + auto-restart fallback + final pass/fail).
+6. `docker compose -f docker-compose.staging.yml down` — tear staging down (validation complete).
+7. On any failure: `git stash` working tree → `git revert HEAD --no-edit && git push origin main` → rebuild + bring up reverted dev. **Prod step was removed** (was intermittently failing under back-to-back staging→prod builds; not a priority).
 
 ### Stable Compose project names
 
@@ -70,18 +78,23 @@ Without `name:`, Compose auto-derives the project name from the directory (e.g.,
 
 Override the file-level name with `COMPOSE_PROJECT_NAME=foo` env var if you intentionally want an isolated environment. The dev volume `agent-team-dev_agent-team-data` is shared between any directory running the dev stack — so request history persists across worktree switches by design.
 
-### Supervisor scope: shared volume + main-repo git tree
+### Supervisor scope: runs on HOST, not in Docker
 
-The supervisor (`docker-compose.supervisor.yml`) is wired to work with **whichever stack is currently using the stable `agent-team-dev_agent-team-data` volume** — that includes the main repo and any worktree, since they all share the same volume thanks to the pinned project name.
+The supervisor **must run on the host machine**, not inside a Docker container. The previous containerized supervisor (`docker-compose.supervisor.yml`, deprecated) couldn't manage the dev stack because of a structural Docker-in-Docker bind-mount issue:
 
-Two volume mounts on the supervisor matter:
-- **`/app/data`** → `agent-team-dev_agent-team-data` (stable, shared with whatever dev stack is running)
-- **`/app/project`** → host's main repo path (`C:/ai-projects/claude-agent-team` by default, override with `PROJECT_ROOT_HOST` env var). The supervisor performs git ops here — fetches from origin/main, checks out files, reverts on failure. Worktrees have a `.git` *file* pointing to an absolute host path that doesn't resolve inside the container, so we explicitly bind to the main repo regardless of where `docker compose -f docker-compose.supervisor.yml up` was invoked.
+> When the supervisor runs `docker compose -f docker-compose.yml up -d --build` from inside its own container, Compose reads volume mounts like `./frontend/vite.config.ts` and resolves them to `/app/project/frontend/vite.config.ts` (the supervisor's view). It then sends that path to the Docker daemon, which runs on the HOST and tries to find the path **on the host's filesystem** — where it doesn't exist. Mount fails. Container doesn't start. Healthcheck times out forever.
+>
+> This wasn't fixable with a config tweak. Running the supervisor on the host eliminates the path-translation step entirely — relative paths in `docker-compose.yml` resolve against the host (where they actually exist), just as they would for a human running `docker compose` from a terminal.
 
-So the supervisor's mental model is: "the user is iterating in some directory (main repo or a worktree); the dev stack is in a shared volume I can watch; for actual deployment, I rebuild against main repo's git tree." This works because:
-- Agents publish their commits to `origin/main` via the GitHub Trees API (no local working tree needed).
-- The supervisor pulls those commits into the main repo's working tree (`git fetch + git checkout origin/main -- <files>`), then runs `docker compose build` against that consistent source.
-- Containers get rebuilt with the new code from `origin/main`.
+**What this looks like in practice:**
+- Supervisor process runs on the host (foreground `make supervisor` or background `make supervisor-bg`)
+- Reads SQLite at `./data/agent_team.db` directly (the dev backend bind-mounts the same dir at `/app/data`)
+- Performs `git` and `docker compose` against the main repo as the developer would
+- Agents publish commits to `origin/main` via the GitHub Trees API
+- Supervisor pulls those commits into the main repo's working tree (`git fetch + git checkout origin/main -- <files>`), then runs `docker compose build` against that consistent source
+- All `docker compose` calls happen from the host, so bind mounts in `docker-compose.yml` resolve correctly
+
+The `agent-team-data` volume (previously named) is now a bind mount to `./data/` on the host — that's how the supervisor and the dev backend share the SQLite database without docker-volume gymnastics.
 
 ### Tests
 
