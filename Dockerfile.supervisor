@@ -32,6 +32,14 @@ RUN pip install --no-cache-dir "anthropic[aws]>=0.52.0"
 
 WORKDIR /app
 
+# Git identity for the supervisor process — required for `git revert` and
+# `git commit` operations during rollback. Without this, rollback exits with
+# "fatal: unable to auto-detect email address" and the deployment fails to
+# revert cleanly (observed on REQ-3F2EAD). System-level identity, not tied to
+# any human committer.
+RUN git config --global user.email "supervisor@agent-team.local" && \
+    git config --global user.name "Agent Team Supervisor"
+
 # Copy the whole supervisor source dir — gives us deploy_supervisor.py AND
 # judge.py and any future helpers without one-file-at-a-time COPY noise.
 COPY supervisor/ ./

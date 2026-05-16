@@ -63,6 +63,18 @@ system_prompt: |
   - Do NOT write multi-paragraph explanations for passing tests.
   - Do NOT ask questions. Test based on provided information.
 
+  SCOPE DISCIPLINE — STRICT:
+
+  - Write ONE test case per acceptance criterion from the user stories. Do
+    not invent test cases for behavior the stories don't cover.
+  - Do NOT modify EXISTING test files (e.g., `tests/test_orchestrator.py`,
+    `tests/test_config_validation.py`) just to make them assert new agent
+    counts, new role lists, or to add explanatory comments. Those files are
+    out of scope. CodeWriter will REJECT changes to them.
+  - Do NOT modify your own agent YAML or anything under `config/agents/**`.
+  - Rework instructions point at a SPECIFIC error: address ONLY that error.
+    Do NOT re-emit your prior full output.
+
   FILE READ:
   You have `file_read(path)` available. Use it when you need to verify what
   the emitted code actually looks like on disk — e.g., to check that an

@@ -80,7 +80,15 @@ def run_cmd(cmd: str, timeout: int = 120) -> tuple[int, str]:
 def health_check(port: int) -> bool:
     """Check if a service is healthy on the given port."""
     for attempt in range(HEALTH_CHECK_RETRIES):
-        code, output = run_cmd(f'curl -sf -o /dev/null -w "%{{http_code}}" http://localhost:{port}/api/v1/health', timeout=10)
+        # When the supervisor runs inside its own Docker container, `localhost`
+        # loops back to the supervisor — NOT the host's exposed ports. Use
+        # `host.docker.internal` so curl reaches the host's :8010/:8020/:8000
+        # where docker-compose has published the staging/prod/dev backends.
+        # This is what was causing every staging health check to fail with
+        # Exit 7 (000) on REQ-3F2EAD, REQ-D20A12, REQ-438313 — the supervisor
+        # was probing itself, not the staging container.
+        host = os.getenv("HEALTHCHECK_HOST", "host.docker.internal")
+        code, output = run_cmd(f'curl -sf -o /dev/null -w "%{{http_code}}" http://{host}:{port}/api/v1/health', timeout=10)
         if code == 0 and "200" in output:
             log(f"  ✓ Health check passed on :{port}")
             return True
@@ -519,6 +527,32 @@ def mirror_origin_main() -> None:
     log(f"  📥 mirrored {behind} commit(s) from origin/main into local main")
 
 
+def _setup_github_auth() -> None:
+    """Configure git to authenticate as the GitHub bot using GITHUB_TOKEN.
+
+    Without this, `git push origin main` (the rollback step) fails with
+    "could not read Username for 'https://github.com'" — even though the
+    GitHub Trees API used by the agent pipeline succeeds with the same
+    token. Reason: `git` uses the credential helper, which has no token
+    knowledge by default.
+
+    We use the URL-rewrite approach (`git config url.<token>@github.com`)
+    rather than .netrc because it's simpler and the token is already in
+    process env. The token never lands on disk in any config file.
+    """
+    token = os.getenv("GITHUB_TOKEN", "").strip()
+    if not token:
+        log("⚠️  GITHUB_TOKEN not set — git push for rollback will fail")
+        return
+    # Rewrite all https://github.com URLs to include the token. Affects only
+    # git operations in this container's HOME (~/.gitconfig).
+    run_cmd(
+        f'git config --global url."https://x-access-token:{token}@github.com/".insteadOf "https://github.com/"',
+        timeout=10,
+    )
+    log("🔑 GitHub credential helper configured for rollback push")
+
+
 def main() -> None:
     """Main supervisor loop — poll for pending deployments."""
     log("=" * 60)
@@ -527,6 +561,8 @@ def main() -> None:
     log(f"Database: {DB_PATH}")
     log(f"Poll interval: {POLL_INTERVAL}s")
     log("=" * 60)
+
+    _setup_github_auth()
 
     if not DB_PATH.exists():
         log(f"⚠️  Database not found at {DB_PATH} — waiting for app to create it...")

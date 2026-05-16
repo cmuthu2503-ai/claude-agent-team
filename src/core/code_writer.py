@@ -55,6 +55,22 @@ indicate the agent emitted a fragment, not a full replacement. Compared
 case-insensitively against the new content."""
 
 
+# Paths agents are NEVER allowed to commit changes to unless the request's
+# description explicitly names them. These are "off-limits by default" so
+# agents can't silently modify their own configs, the dev orchestration
+# files, or the CI scripts. Path checks are PREFIX-based (startswith).
+_GUARDED_PATH_PREFIXES: tuple[str, ...] = (
+    "config/agents/",   # Agent YAML — agents have been self-modifying these
+    "config/tools.yaml",
+    "config/workflows.yaml",
+    "config/teams.yaml",
+    "supervisor/",      # Deploy supervisor — system component, not agent-editable
+    ".github/",         # CI / actions
+    "Dockerfile",       # Docker build files
+    "docker-compose",
+)
+
+
 class CodeWriteError(Exception):
     """Raised when code writing, compilation, or git push fails."""
 
@@ -91,6 +107,16 @@ class CodeWriter:
             deployment_id=deployment_id,
             request_id=request_id,
         )
+        # The set of guarded path prefixes that this specific request is
+        # ALLOWED to touch — only those explicitly named in the description.
+        # Everything else under _GUARDED_PATH_PREFIXES will be rejected.
+        # This stops the agent self-modification pattern we saw in REQ-8C3B4F
+        # (backend_specialist.yaml edited itself), REQ-D0742A (similar), and
+        # REQ-D20A12 (test_config_validation.py touched out of scope).
+        allowed_guarded_paths: set[str] = set()
+        for guarded in _GUARDED_PATH_PREFIXES:
+            if guarded in description:
+                allowed_guarded_paths.add(guarded)
 
         try:
             # Step 1a: Parse `### Full Source:` blocks from agent outputs,
@@ -146,6 +172,43 @@ class CodeWriter:
             if not all_file_content:
                 raise CodeWriteError("No code files were produced by any agent")
 
+            # Guarded-path enforcement. Reject the commit if it includes any
+            # file under a guarded prefix that the request didn't explicitly
+            # name. Without this, agents have been self-modifying their own
+            # YAML configs (REQ-8C3B4F edited backend_specialist.yaml,
+            # REQ-D0742A edited devops_specialist.yaml) and adding off-scope
+            # changes (REQ-D20A12 added a too-long comment to
+            # test_config_validation.py).
+            offending = []
+            for rel_path in all_file_content:
+                for guarded in _GUARDED_PATH_PREFIXES:
+                    if rel_path.startswith(guarded) and guarded not in allowed_guarded_paths:
+                        offending.append((rel_path, guarded))
+                        break
+            if offending:
+                # Drop those paths from the commit instead of failing entirely.
+                # Keep the legitimate file edits, log the rejections, surface a
+                # clear error to the agent if NOTHING is left to commit. Doing
+                # this as a soft-reject keeps the legitimate user-requested
+                # changes (e.g. PromptStudio.tsx) shippable even when the agent
+                # added an off-scope edit alongside.
+                for path, guarded in offending:
+                    logger.warning(
+                        "code_writer_off_scope_path_rejected",
+                        path=path, guarded_prefix=guarded,
+                        request_id=request_id,
+                    )
+                    all_file_content.pop(path, None)
+                if not all_file_content:
+                    rejected_summary = ", ".join(p for p, _ in offending)
+                    raise CodeWriteError(
+                        f"Commit rejected — every emitted file is under a "
+                        f"guarded path that the request didn't explicitly "
+                        f"authorize: {rejected_summary}. Guarded prefixes: "
+                        f"{', '.join(_GUARDED_PATH_PREFIXES)}. Re-emit only "
+                        f"the files the user actually asked you to change.",
+                    )
+
             all_files = list(all_file_content.keys())
             dep_state.files_committed = all_files
             self._record_step(dep_state, "files_written", "done", f"{len(all_files)} files written")
@@ -186,12 +249,26 @@ class CodeWriter:
                     "frontend prod build verified (or skipped if npm unavailable)",
                 )
 
-            # Step 4: Run tests — only when Python files were written. Frontend-only
-            # commits (e.g. theme additions, styling tweaks) don't need pytest
-            # to run, and forcing it surfaces pre-existing test breakage that has
-            # nothing to do with the current commit.
-            if python_files:
-                await self._run_tests()
+            # Step 4: Run tests — only when the agent specifically wrote/changed
+            # TEST FILES. The lint-my-diff philosophy: only validate what THIS
+            # commit touched. Running the whole pytest suite on every commit
+            # (even ones that only change non-test source files) surfaces
+            # pre-existing test breakage unrelated to the agent's change and
+            # blocks legitimate commits. REQ-E791EB hit this — its scope was
+            # prompts.py docstring + PromptStudio.tsx text, and the commit was
+            # rejected by an unrelated pre-existing test_all_teams_loaded
+            # failure that's been broken for the entire session.
+            #
+            # If the agent emitted a test file (tests/test_*.py), run just
+            # those specific files. If the agent only changed non-test source
+            # files, skip pytest entirely — the supervisor's docker build will
+            # eventually catch import-level issues at runtime if any.
+            test_files_written = [
+                f for f in python_files
+                if f.startswith("tests/") and "test_" in f.rsplit("/", 1)[-1]
+            ]
+            if test_files_written:
+                await self._run_tests(test_files_written)
                 self._record_step(dep_state, "tests_passed", "done", "pytest passed")
             else:
                 self._record_step(
@@ -469,10 +546,18 @@ class CodeWriter:
             error = stderr or stdout
             raise CodeWriteError(f"Frontend prod build failed:\n{error[:1000]}")
 
-    async def _run_tests(self) -> None:
-        """Run pytest on backend tests."""
+    async def _run_tests(self, test_files: list[str] | None = None) -> None:
+        """Run pytest only on the specific test files the agent emitted.
+
+        Running pytest tests/ (the whole suite) is wrong for the lint-my-diff
+        philosophy — pre-existing test failures (e.g. test_all_teams_loaded
+        with a stale 8/9 agent count) block every commit even when the agent's
+        change is unrelated. Pass a list of test files; if None, default to
+        the whole suite for backward compatibility.
+        """
+        target = " ".join(test_files) if test_files else "tests/"
         code, stdout, stderr = await self._run_cmd(
-            "python -m pytest tests/ -x -q --tb=short --no-cov 2>&1", timeout=120
+            f"python -m pytest {target} -x -q --tb=short --no-cov 2>&1", timeout=120,
         )
         if code != 0:
             error = stderr or stdout

@@ -140,13 +140,18 @@ class WorkflowRunner:
                             max_cycles=MAX_REWORK_CYCLES,
                         )
                         artifacts["rework_instructions"] = (
-                            f"REWORK REQUIRED (cycle {rework_count + 1}/{MAX_REWORK_CYCLES}) — "
-                            f"the code commit step REFUSED your previous output. "
-                            f"You MUST fix the issue below. The most common cause is emitting a "
-                            f"truncated version of an existing file — if so, call `file_read` on "
-                            f"the file FIRST to see the canonical baseline, then emit the FULL "
-                            f"modified version preserving every line you didn't intend to change.\n\n"
-                            f"=== CODE COMMIT ERROR ===\n{commit_error}"
+                            f"REWORK REQUIRED (cycle {rework_count + 1}/{MAX_REWORK_CYCLES}). "
+                            f"The code commit step REFUSED your previous output with the EXACT "
+                            f"error shown below. You MUST address ONLY that error — apply the "
+                            f"minimum change that resolves it. DO NOT:\n"
+                            f"  - re-emit your full prior output\n"
+                            f"  - add new content or 'helpful' edits to unrelated files\n"
+                            f"  - touch files outside the original request's scope\n"
+                            f"  - modify your own agent YAML (config/agents/**)\n"
+                            f"If the error names a file and a line number, that single line "
+                            f"is the only thing you need to fix. Use `search_replace` on that "
+                            f"file with the smallest possible old_string → new_string diff.\n\n"
+                            f"=== CODE COMMIT ERROR (FIX EXACTLY THIS) ===\n{commit_error}"
                         )
                         artifacts["rework_cycle"] = rework_count + 1
                         try:
