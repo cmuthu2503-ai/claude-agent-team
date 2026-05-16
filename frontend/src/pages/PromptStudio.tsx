@@ -660,14 +660,13 @@ export function PromptStudioPage() {
               {generating ? (
                 <>
                   <RefreshCw size={16} style={{ animation: "ps-spin 1s linear infinite" }} />
-                  Generating prompt...
+                  Generating your reply...
                 </>
               ) : (
                 <>
                   <Sparkles size={16} />
-                  Generate Prompts
+                  Generate with Claude Opus 4.7
                 </>
-
               )}
             </button>
           </div>
@@ -688,119 +687,137 @@ export function PromptStudioPage() {
                     🔄 Refinement iteration #{iteration}: {iterVariants[0]?.feedback_applied}
                   </div>
                 )}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-                  {iterVariants.map((variant) => {
-                    const isSelected = selectedVariantId === variant.variant_id
-                    const isCopied = copiedVariantId === variant.variant_id
-                    const techniquesOpen = expandedTechniques.has(variant.variant_id)
-                    return (
+                {/* Single-result panel — backend now returns one variant from
+                    Claude Opus 4.7. If multiple come back (legacy sessions in
+                    History), we defensively render only the first. */}
+                {iterVariants.length > 0 && (() => {
+                  const variant = iterVariants[0]
+                  const isSelected = selectedVariantId === variant.variant_id
+                  const isCopied = copiedVariantId === variant.variant_id
+                  const techniquesOpen = expandedTechniques.has(variant.variant_id)
+                  return (
+                    <div
+                      key={variant.variant_id}
+                      style={{
+                        background: "var(--bg-card)",
+                        border: `2px solid ${isSelected ? "var(--accent)" : "var(--border)"}`,
+                        borderRadius: "var(--radius)",
+                        padding: 16,
+                        display: "flex", flexDirection: "column",
+                      }}
+                    >
+                      <div style={{
+                        display: "flex", alignItems: "center",
+                        justifyContent: "space-between", marginBottom: 10,
+                      }}>
+                        <div>
+                          <div style={{
+                            fontSize: 10, fontWeight: 600, color: "var(--text-muted)",
+                            textTransform: "uppercase", letterSpacing: 0.5,
+                          }}>
+                            Result · Claude Opus 4.7
+                          </div>
+                          <div style={{
+                            fontSize: 14, fontWeight: 600, color: "var(--text-primary)",
+                          }}>
+                            {variant.approach}
+                          </div>
+                        </div>
+                        {isSelected && (
+                          <span style={{
+                            fontSize: 10, padding: "2px 8px", borderRadius: "var(--radius)",
+                            background: "var(--accent)", color: "#fff", fontWeight: 600,
+                          }}>
+                            SAVED
+                          </span>
+                        )}
+                      </div>
                       <div
-                        key={variant.variant_id}
+                        className="max-h-[60vh] overflow-y-auto"
                         style={{
-                          background: "var(--bg-card)",
-                          border: `2px solid ${isSelected ? "var(--accent)" : "var(--border)"}`,
-                          borderRadius: "var(--radius)",
-                          padding: 16,
-                          display: "flex", flexDirection: "column",
+                          background: "var(--bg-input)", border: "1px solid var(--border)",
+                          borderRadius: "var(--radius)", padding: 12, fontSize: 12,
+                          fontFamily: "ui-monospace, monospace", color: "var(--text-primary)",
+                          whiteSpace: "pre-wrap", marginBottom: 10, lineHeight: 1.5,
                         }}
                       >
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                          <div>
-                            <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.5 }}>
-                              Variant {variant.variant_index}
-                            </div>
-                            <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>
-                              {variant.approach}
-                            </div>
-                          </div>
-                          {isSelected && (
-                            <span style={{
-                              fontSize: 10, padding: "2px 8px", borderRadius: "var(--radius)",
-                              background: "var(--accent)", color: "#fff", fontWeight: 600,
-                            }}>
-                              SELECTED
-                            </span>
-                          )}
-                        </div>
-                        <div style={{
-                          background: "var(--bg-input)", border: "1px solid var(--border)",
-                          borderRadius: "var(--radius)", padding: 10, fontSize: 11,
-                          fontFamily: "ui-monospace, monospace", color: "var(--text-primary)",
-                          whiteSpace: "pre-wrap", maxHeight: 320, overflowY: "auto",
-                          marginBottom: 10, lineHeight: 1.45,
-                        }}>
-                          {variant.prompt_text}
-                        </div>
-                        <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 8 }}>
-                          {variant.prompt_text.length} chars
-                        </div>
-                        <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-                          <button
-                            onClick={() => handleCopy(variant)}
-                            style={{
-                              flex: 1, padding: "6px 8px", fontSize: 11, fontWeight: 500,
-                              background: isCopied ? "var(--success-subtle)" : "var(--bg-hover)",
-                              color: isCopied ? "var(--success)" : "var(--text-secondary)",
-                              border: "1px solid var(--border)", borderRadius: "var(--radius)",
-                              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-                              fontFamily: "var(--font)",
-                            }}
-                          >
-                            {isCopied ? <><Check size={12} /> Copied</> : <><Copy size={12} /> Copy</>}
-                          </button>
-                          <button
-                            onClick={() => handleSelect(variant)}
-                            disabled={isSelected}
-                            style={{
-                              flex: 1, padding: "6px 8px", fontSize: 11, fontWeight: 500,
-                              background: isSelected ? "var(--accent-subtle)" : "var(--accent)",
-                              color: isSelected ? "var(--accent)" : "#fff",
-                              border: "none", borderRadius: "var(--radius)",
-                              cursor: isSelected ? "default" : "pointer",
-                              fontFamily: "var(--font)",
-                            }}
-                          >
-                            {isSelected ? "Selected" : "Select"}
-                          </button>
-                        </div>
+                        {variant.prompt_text}
+                      </div>
+                      <div style={{
+                        fontSize: 10, color: "var(--text-muted)", marginBottom: 8,
+                      }}>
+                        {variant.prompt_text.length} chars
+                      </div>
+                      <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                        <button
+                          onClick={() => handleCopy(variant)}
+                          style={{
+                            flex: 1, padding: "8px 12px", fontSize: 12, fontWeight: 500,
+                            background: isCopied ? "var(--success-subtle)" : "var(--bg-hover)",
+                            color: isCopied ? "var(--success)" : "var(--text-secondary)",
+                            border: "1px solid var(--border)", borderRadius: "var(--radius)",
+                            cursor: "pointer", display: "flex", alignItems: "center",
+                            justifyContent: "center", gap: 4, fontFamily: "var(--font)",
+                          }}
+                        >
+                          {isCopied
+                            ? <><Check size={13} /> Copied</>
+                            : <><Copy size={13} /> Copy</>}
+                        </button>
+                        <button
+                          onClick={() => handleSelect(variant)}
+                          disabled={isSelected}
+                          style={{
+                            flex: 1, padding: "8px 12px", fontSize: 12, fontWeight: 500,
+                            background: isSelected ? "var(--accent-subtle)" : "var(--accent)",
+                            color: isSelected ? "var(--accent)" : "#fff",
+                            border: "none", borderRadius: "var(--radius)",
+                            cursor: isSelected ? "default" : "pointer",
+                            fontFamily: "var(--font)",
+                          }}
+                        >
+                          {isSelected ? "Saved" : "Save"}
+                        </button>
                         <button
                           onClick={() => tryInExecute(variant.prompt_text)}
                           title="Open in Execute tab to test this prompt against an LLM"
                           style={{
-                            width: "100%", padding: "6px 8px", fontSize: 11, fontWeight: 500,
+                            flex: 1, padding: "8px 12px", fontSize: 12, fontWeight: 500,
                             background: "var(--bg-hover)", color: "var(--accent)",
                             border: "1px solid var(--accent)", borderRadius: "var(--radius)",
-                            cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-                            fontFamily: "var(--font)", marginBottom: 8,
+                            cursor: "pointer", display: "flex", alignItems: "center",
+                            justifyContent: "center", gap: 4, fontFamily: "var(--font)",
                           }}
                         >
-                          <Play size={12} /> Try in Execute
+                          <Play size={13} /> Try in Execute
                         </button>
-                        <button
-                          onClick={() => toggleTechniques(variant.variant_id)}
-                          style={{
-                            display: "flex", alignItems: "center", gap: 4,
-                            fontSize: 11, color: "var(--text-muted)",
-                            background: "transparent", border: "none", cursor: "pointer",
-                            padding: "4px 0", fontFamily: "var(--font)",
-                          }}
-                        >
-                          {techniquesOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                          Techniques applied ({variant.techniques.length})
-                        </button>
-                        {techniquesOpen && (
-                          <ul style={{ listStyle: "none", margin: "4px 0 0 16px", padding: 0 }}>
-                            {variant.techniques.map((t, i) => (
-                              <li key={i} style={{ fontSize: 11, color: "var(--text-secondary)", padding: "2px 0" }}>
-                                ✓ {t}
-                              </li>
-                            ))}
-                          </ul>
-                        )}
                       </div>
-                    )
-                  })}
-                </div>
+                      <button
+                        onClick={() => toggleTechniques(variant.variant_id)}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 4,
+                          fontSize: 11, color: "var(--text-muted)",
+                          background: "transparent", border: "none", cursor: "pointer",
+                          padding: "4px 0", fontFamily: "var(--font)", marginTop: 4,
+                        }}
+                      >
+                        {techniquesOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                        Techniques applied ({variant.techniques.length})
+                      </button>
+                      {techniquesOpen && (
+                        <ul style={{ listStyle: "none", margin: "4px 0 0 16px", padding: 0 }}>
+                          {variant.techniques.map((t, i) => (
+                            <li key={i} style={{
+                              fontSize: 11, color: "var(--text-secondary)", padding: "2px 0",
+                            }}>
+                              ✓ {t}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
             )
           })}
