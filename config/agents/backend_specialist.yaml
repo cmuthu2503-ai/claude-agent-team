@@ -162,6 +162,7 @@ responsibilities:
 
 tools:
   - file_read
+  - file_write
   - search_replace
   - web_search
   - web_scrape
