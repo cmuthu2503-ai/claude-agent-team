@@ -398,17 +398,58 @@ class Orchestrator(AgentExecutor):
         await self.events.emit("code_commit.started", {"request_id": request_id})
         logger.info("code_commit_started", request_id=request_id)
 
-        # Collect code outputs from backend and frontend specialists
+        # Collect code outputs from backend and frontend specialists.
+        # IMPORTANT: we collect from EVERY subtask cycle, not just the latest
+        # one in artifacts. Reason: when a rework cycle happens, only that
+        # cycle's output ends up in `artifacts` — but the cycle-0 agent's
+        # work (e.g., search_replace edits on disk, `## Files Modified`
+        # listings) lives only in the cycle-0 subtask row. CodeWriter needs
+        # to see both so its `### Full Source:` parser AND its `## Files
+        # Modified` parser can pick up everything that was ever emitted.
+        # Without this, the rework-cycle agent's empty/incomplete Files
+        # Modified section silently drops earlier edits from the commit
+        # (the REQ-8C3B4F failure: cycle-1 listed only its own self-yaml-
+        # edit, so the real prompts.py + PromptStudio.tsx changes from
+        # cycle 0 were ON DISK but never made it to GitHub).
         agent_outputs: dict[str, str] = {}
+        subtasks = await self.state.get_subtasks_for_request(request_id)
+        code_agents = ("backend_specialist", "frontend_specialist")
+        for idx, st in enumerate(
+            sorted(
+                (s for s in subtasks if s.agent_id in code_agents and s.output_text),
+                key=lambda s: s.started_at,
+            )
+        ):
+            # Key by agent_id + cycle index so each cycle's output is a
+            # separate entry in the dict. CodeWriter iterates over the dict
+            # and parses each value independently, so all `### Full Source:`
+            # blocks AND all `## Files Modified` lists get picked up.
+            # Later cycles overwrite earlier ones for the SAME file content
+            # via dict update (correct: latest emitted version wins), but
+            # files only emitted in cycle 0 still survive.
+            agent_outputs[f"{st.agent_id}_cycle_{idx:02d}"] = st.output_text
+
+        # Backward-compatible fallback to artifacts in case the subtask
+        # query missed something (no row yet for the current cycle's agent).
         for key, value in artifacts.items():
-            if isinstance(value, str) and ("backend_specialist" in key or "backend_code" in key):
-                agent_outputs["backend_specialist"] = value
-            if isinstance(value, str) and ("frontend_specialist" in key or "frontend_code" in key):
-                agent_outputs["frontend_specialist"] = value
+            if not isinstance(value, str):
+                continue
+            for agent in code_agents:
+                if (agent in key or agent.split("_")[0] + "_code" in key) and value:
+                    fallback_key = f"{agent}_fallback"
+                    if fallback_key not in agent_outputs:
+                        agent_outputs[fallback_key] = value
 
         if not agent_outputs:
             logger.warning("no_code_outputs_for_commit", request_id=request_id)
             return {"commit_status": "skipped", "reason": "No code outputs found"}
+
+        logger.info(
+            "code_commit_collecting_outputs",
+            request_id=request_id,
+            outputs_count=len(agent_outputs),
+            keys=list(agent_outputs.keys()),
+        )
 
         try:
             description = artifacts.get("description", request_id)[:80]

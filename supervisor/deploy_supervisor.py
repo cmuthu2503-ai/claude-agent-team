@@ -53,7 +53,19 @@ def run_cmd(cmd: str, timeout: int = 120) -> tuple[int, str]:
         )
         output = result.stdout + result.stderr
         if result.returncode != 0:
-            log(f"  ✗ Exit {result.returncode}: {output[:200]}")
+            # On failure, log MUCH more output. Was truncating to 200 chars
+            # which hid the actual cause of every staging build failure in
+            # this session (REQ-7C6527, REQ-D0742A, REQ-8C3B4F all showed
+            # "Sending build context to Docker daemon  524.4kB" with no
+            # actual error). 4000 chars covers a full Docker build error
+            # including the failing layer's stderr. The supervisor's stdout
+            # goes to docker logs anyway, so the cost is one big log entry
+            # per failure — worth it.
+            log(f"  ✗ Exit {result.returncode}:")
+            for line in output[:4000].splitlines():
+                log(f"      {line}")
+            if len(output) > 4000:
+                log(f"      ... [truncated, {len(output) - 4000} more chars]")
         else:
             log(f"  ✓ OK")
         return result.returncode, output
