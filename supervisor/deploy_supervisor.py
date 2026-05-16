@@ -16,6 +16,8 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -89,15 +91,31 @@ def log(msg: str) -> None:
     print(f"[{ts}] SUPERVISOR: {msg}", flush=True)
 
 
-def run_cmd(cmd: str, timeout: int = 120) -> tuple[int, str]:
-    """Run a shell command and return (exit_code, output)."""
-    log(f"  → {cmd}")
+def run_cmd(cmd: str | list[str], timeout: int = 120) -> tuple[int, str]:
+    """Run a command and return (exit_code, output).
+
+    Pass a list[str] (argv) for any call that interpolates dynamic data
+    like file paths — argv form is shell-free and immune to platform
+    quoting differences (cmd.exe vs /bin/sh handle single quotes
+    differently, which silently breaks `git checkout -- 'path'` on
+    Windows). String form remains supported for static commands like
+    `docker compose build`.
+    """
+    use_shell = isinstance(cmd, str)
+    display = cmd if use_shell else " ".join(cmd)
+    log(f"  → {display}")
     try:
+        # encoding='utf-8' overrides the platform default (cp1252 on Windows),
+        # which can't decode UTF-8 progress spinners / emoji in docker output
+        # and silently crashes the subprocess reader thread → result.stdout=None
+        # → `None + str` blows up. errors='replace' keeps us alive on any
+        # remaining oddball bytes.
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True,
+            cmd, shell=use_shell, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
             cwd=str(PROJECT_ROOT), timeout=timeout,
         )
-        output = result.stdout + result.stderr
+        output = (result.stdout or "") + (result.stderr or "")
         if result.returncode != 0:
             # On failure, log MUCH more output. Was truncating to 200 chars
             # which hid the actual cause of every staging build failure in
@@ -143,11 +161,26 @@ def health_check(
         # The HEALTHCHECK_HOST env var stays available as an override for
         # weird network setups, but defaults to localhost on host.
         host = os.getenv("HEALTHCHECK_HOST", "localhost")
-        code, output = run_cmd(f'curl -sf -o /dev/null -w "%{{http_code}}" http://{host}:{port}/api/v1/health', timeout=10)
-        if code == 0 and "200" in output:
+        url = f"http://{host}:{port}/api/v1/health"
+        # Use urllib (stdlib) instead of shelling out to curl. The previous
+        # `curl -sf -o /dev/null` returned exit 23 on Windows because cmd.exe
+        # treats `/dev/null` as a literal path (no such file on Windows) —
+        # the body write failed even though the HTTP response was 200, so the
+        # supervisor mistakenly concluded staging was unhealthy and triggered
+        # rollback. urllib has no shell involvement and works identically on
+        # every platform.
+        status_code = 0
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                status_code = resp.status
+        except urllib.error.HTTPError as e:
+            status_code = e.code
+        except Exception:
+            status_code = 0
+        if status_code == 200:
             log(f"  ✓ Health check passed on :{port} (attempt {attempt + 1})")
             return True
-        log(f"  ⏳ Health check attempt {attempt + 1}/{n_retries} on :{port}...")
+        log(f"  ⏳ Health check attempt {attempt + 1}/{n_retries} on :{port} (got {status_code})...")
         time.sleep(n_interval)
     log(f"  ✗ Health check FAILED on :{port} after {n_retries} retries ({total_seconds}s)")
     return False
@@ -335,8 +368,11 @@ def rollback(
             )
             return
 
-        # 5. Bring dev back up with the reverted image.
-        code, _ = run_cmd(f"docker compose -f {DEV_COMPOSE} up -d", timeout=60)
+        # 5. Bring dev back up with the reverted image. 180s window because
+        # cold container start on Windows can easily take 60–90s, and a
+        # rollback that hits its own timeout strands the user with both
+        # the failed deploy AND a non-running dev environment.
+        code, _ = run_cmd(f"docker compose -f {DEV_COMPOSE} up -d", timeout=180)
         if code != 0:
             update_step(
                 db, deployment_id, "rolled_back",
@@ -403,9 +439,15 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
     if files_committed:
         update_step(db, dep_id, "syncing", f"Fetching {len(files_committed)} file(s) from origin/main")
         run_cmd("git fetch origin main", timeout=30)
-        # Quote each path so spaces/special chars are safe.
-        quoted = " ".join(f"'{f}'" for f in files_committed)
-        code, output = run_cmd(f"git checkout origin/main -- {quoted}", timeout=30)
+        # Pass paths via argv (list) — no shell, no quoting needed. The
+        # previous shell-string version wrapped each path in single quotes,
+        # which broke on Windows: cmd.exe does not strip single quotes the
+        # way /bin/sh does, so git received literal `'path'` as the pathspec
+        # and 404'd every file. argv form sidesteps the shell entirely.
+        code, output = run_cmd(
+            ["git", "checkout", "origin/main", "--", *files_committed],
+            timeout=30,
+        )
         if code != 0:
             update_step(
                 db, dep_id, "syncing", output[:200],
