@@ -665,7 +665,7 @@ export function PromptStudioPage() {
               ) : (
                 <>
                   <Sparkles size={16} />
-                  Generate with Claude Opus 4.7
+                  Generate Prompt
                 </>
               )}
             </button>
