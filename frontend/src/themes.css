@@ -97,57 +97,188 @@
   --font-mono: "Geist Mono", ui-monospace, monospace;
 }
 
-/* ---------- CYBERPUNK HYPERDRIVE (dark) ----------
-   Source: docs/mockups/themes/theme-27-cyberpunk-hyperdrive.html
-   Neon pink (#ff2a6d) + cyan (#00f0ff) + matrix green (#39ff14)
-   on near-black (#0a0014). Sharp corners, glowing shadows.
-*/
-[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] {
-  --bg-primary: #0a0014;
-  --bg-secondary: #100020;
-  --bg-card: #14082a;
-  --bg-hover: #1c1040;
-  --border: #2a1850;
-  --text-primary: #e0e0ff;
-  --text-secondary: #8080a0;
-  --text-muted: #50506a;
-  --accent: #ff2a6d;
-  --accent-hover: #ff5c8f;
-  --success: #39ff14;
-  --danger: #ff2a6d;
-  --warning: #f9f871;
-  --info: #00f0ff;
-  --radius: 0px;
-  --shadow: 0 2px 12px rgba(255, 42, 109, 0.25);
-  --shadow-glow: 0 0 16px rgba(0, 240, 255, 0.5);
-  --font: "JetBrains Mono", "Fira Code", "Courier New", monospace;
-  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+/* ---------- DISCORD (dark) ---------- */
+[data-theme="discord"][data-mode="dark"] {
+  --bg-primary: #313338;
+  --bg-secondary: #2b2d31;
+  --bg-card: #383a40;
+  --bg-hover: #404249;
+  --border: #1e1f22;
+  --text-primary: #f2f3f5;
+  --text-secondary: #b5bac1;
+  --text-muted: #80848e;
+  --accent: #5865f2;
+  --accent-hover: #4752c4;
+  --success: #23a559;
+  --danger: #f23f43;
+  --warning: #f0b232;
+  --info: #5865f2;
+  --radius: 8px;
+  --shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  --shadow-glow: 0 0 0 2px rgba(88, 101, 242, 0.3);
+  --font: "gg sans", "Noto Sans", sans-serif;
+  --font-mono: "Consolas", ui-monospace, monospace;
 }
 
-/* ---------- CYBERPUNK HYPERDRIVE (light) ----------
-   Light-mode variant: pale lavender background, deep magenta
-   accents, still neon-feeling but legible in daylight.
-*/
-[data-theme="cyberpunk-hyperdrive"][data-mode="light"] {
-  --bg-primary: #f8f4ff;
-  --bg-secondary: #ece4ff;
+/* ---------- DISCORD (light) ---------- */
+[data-theme="discord"][data-mode="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f2f3f5;
   --bg-card: #ffffff;
-  --bg-hover: #e0d4f5;
-  --border: #d0b8e8;
-  --text-primary: #1a0030;
-  --text-secondary: #4a3060;
-  --text-muted: #806a96;
-  --accent: #d6005c;
-  --accent-hover: #b00048;
-  --success: #1aa800;
-  --danger: #d6005c;
-  --warning: #c89a00;
-  --info: #007a9a;
+  --bg-hover: #ebedef;
+  --border: #e3e5e8;
+  --text-primary: #060607;
+  --text-secondary: #4e5058;
+  --text-muted: #80848e;
+  --accent: #5865f2;
+  --accent-hover: #4752c4;
+  --success: #23a559;
+  --danger: #f23f43;
+  --warning: #f0b232;
+  --info: #5865f2;
+  --radius: 8px;
+  --shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  --shadow-glow: 0 0 0 2px rgba(88, 101, 242, 0.2);
+  --font: "gg sans", "Noto Sans", sans-serif;
+  --font-mono: "Consolas", ui-monospace, monospace;
+}
+
+/* ---------- FLAT (dark) ---------- */
+[data-theme="flat"][data-mode="dark"] {
+  --bg-primary: #2c3e50;
+  --bg-secondary: #34495e;
+  --bg-card: #3d566e;
+  --bg-hover: #4a6680;
+  --border: #4a6680;
+  --text-primary: #ecf0f1;
+  --text-secondary: #bdc3c7;
+  --text-muted: #95a5a6;
+  --accent: #1abc9c;
+  --accent-hover: #16a085;
+  --success: #2ecc71;
+  --danger: #e74c3c;
+  --warning: #f39c12;
+  --info: #3498db;
+  --radius: 4px;
+  --shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  --shadow-glow: 0 0 0 2px rgba(26, 188, 156, 0.3);
+  --font: "Lato", -apple-system, sans-serif;
+  --font-mono: "Source Code Pro", ui-monospace, monospace;
+}
+
+/* ---------- FLAT (light) ---------- */
+[data-theme="flat"][data-mode="light"] {
+  --bg-primary: #ecf0f1;
+  --bg-secondary: #ffffff;
+  --bg-card: #ffffff;
+  --bg-hover: #f4f6f7;
+  --border: #d5dbdb;
+  --text-primary: #2c3e50;
+  --text-secondary: #5d6d7e;
+  --text-muted: #95a5a6;
+  --accent: #1abc9c;
+  --accent-hover: #16a085;
+  --success: #2ecc71;
+  --danger: #e74c3c;
+  --warning: #f39c12;
+  --info: #3498db;
+  --radius: 4px;
+  --shadow: 0 2px 4px rgba(0, 0, 0, 0.06);
+  --shadow-glow: 0 0 0 2px rgba(26, 188, 156, 0.2);
+  --font: "Lato", -apple-system, sans-serif;
+  --font-mono: "Source Code Pro", ui-monospace, monospace;
+}
+
+/* ---------- BRUTALIST (dark) ---------- */
+[data-theme="brutalist"][data-mode="dark"] {
+  --bg-primary: #000000;
+  --bg-secondary: #0a0a0a;
+  --bg-card: #1a1a1a;
+  --bg-hover: #2a2a2a;
+  --border: #ffffff;
+  --text-primary: #ffffff;
+  --text-secondary: #cccccc;
+  --text-muted: #888888;
+  --accent: #ffff00;
+  --accent-hover: #e6e600;
+  --success: #00ff00;
+  --danger: #ff0000;
+  --warning: #ff8800;
+  --info: #00ffff;
   --radius: 0px;
-  --shadow: 0 2px 8px rgba(214, 0, 92, 0.15);
-  --shadow-glow: 0 0 12px rgba(0, 122, 154, 0.3);
-  --font: "JetBrains Mono", "Fira Code", "Courier New", monospace;
-  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+  --shadow: 4px 4px 0 #ffffff;
+  --shadow-glow: 0 0 0 3px #ffff00;
+  --font: "Courier New", monospace;
+  --font-mono: "Courier New", monospace;
+}
+
+/* ---------- BRUTALIST (light) ---------- */
+[data-theme="brutalist"][data-mode="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f5f5;
+  --bg-card: #ffffff;
+  --bg-hover: #ebebeb;
+  --border: #000000;
+  --text-primary: #000000;
+  --text-secondary: #333333;
+  --text-muted: #666666;
+  --accent: #ff00ff;
+  --accent-hover: #cc00cc;
+  --success: #00aa00;
+  --danger: #cc0000;
+  --warning: #ff6600;
+  --info: #0066cc;
+  --radius: 0px;
+  --shadow: 4px 4px 0 #000000;
+  --shadow-glow: 0 0 0 3px #ff00ff;
+  --font: "Courier New", monospace;
+  --font-mono: "Courier New", monospace;
+}
+
+/* ---------- Y2K (dark) ---------- */
+[data-theme="y2k"][data-mode="dark"] {
+  --bg-primary: #1a0a2e;
+  --bg-secondary: #2a1248;
+  --bg-card: #371d5e;
+  --bg-hover: #45267a;
+  --border: #ff00ff;
+  --text-primary: #ffe0ff;
+  --text-secondary: #c8a8ff;
+  --text-muted: #8870b8;
+  --accent: #ff10f0;
+  --accent-hover: #d010c8;
+  --success: #00ffaa;
+  --danger: #ff3366;
+  --warning: #ffcc00;
+  --info: #00ccff;
+  --radius: 12px;
+  --shadow: 0 0 20px rgba(255, 16, 240, 0.4);
+  --shadow-glow: 0 0 16px rgba(255, 16, 240, 0.6);
+  --font: "Comic Sans MS", "Trebuchet MS", sans-serif;
+  --font-mono: "Courier New", ui-monospace, monospace;
+}
+
+/* ---------- Y2K (light) ---------- */
+[data-theme="y2k"][data-mode="light"] {
+  --bg-primary: #ffe4f3;
+  --bg-secondary: #ffd0ec;
+  --bg-card: #ffffff;
+  --bg-hover: #ffc0e4;
+  --border: #ff66cc;
+  --text-primary: #4a0a4a;
+  --text-secondary: #7a2a7a;
+  --text-muted: #b070b0;
+  --accent: #ff10a0;
+  --accent-hover: #d00890;
+  --success: #00aa66;
+  --danger: #dd2255;
+  --warning: #e69900;
+  --info: #0099cc;
+  --radius: 12px;
+  --shadow: 0 4px 12px rgba(255, 16, 160, 0.2);
+  --shadow-glow: 0 0 12px rgba(255, 16, 160, 0.3);
+  --font: "Comic Sans MS", "Trebuchet MS", sans-serif;
+  --font-mono: "Courier New", ui-monospace, monospace;
 }
 
 /* ============================================================
