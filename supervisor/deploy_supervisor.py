@@ -265,12 +265,12 @@ def rollback(
                 )
                 return
 
-        # 3. Stop staging and prod (best-effort — these usually succeed even
-        #    when the stack is already half-down).
+        # 3. Stop staging (best-effort). Prod was removed from the supervisor
+        #    flow, so no prod to tear down here.
         run_cmd(f"docker compose -f {STAGING_COMPOSE} down", timeout=30)
-        run_cmd(f"docker compose -f {PROD_COMPOSE} down", timeout=30)
 
-        # 4. Rebuild with reverted code.
+        # 4. Rebuild dev with reverted code so the running dev stack reflects
+        #    the rollback state.
         code, _ = run_cmd("docker compose build", timeout=300)
         if code != 0:
             update_step(
@@ -280,26 +280,26 @@ def rollback(
             )
             return
 
-        # 5. Restart prod with reverted image.
-        code, _ = run_cmd(f"docker compose -f {PROD_COMPOSE} up -d", timeout=60)
+        # 5. Bring dev back up with the reverted image.
+        code, _ = run_cmd(f"docker compose -f {DEV_COMPOSE} up -d", timeout=60)
         if code != 0:
             update_step(
                 db, deployment_id, "rolled_back",
-                "docker compose prod up after revert failed",
-                error="Rollback aborted — could not bring up reverted prod",
+                "docker compose dev up after revert failed",
+                error="Rollback aborted — could not bring up reverted dev",
             )
             return
 
-        if health_check(8020):
+        if health_check(8000):
             update_step(
                 db, deployment_id, "rolled_back",
-                "Rollback successful — production restored to pre-deploy state",
+                "Rollback successful — dev restored to pre-deploy state on :8000",
             )
         else:
             update_step(
                 db, deployment_id, "rolled_back",
-                "Rollback completed but health check uncertain",
-                error="Rollback uncertain — prod not responding on :8020 after revert",
+                "Rollback completed but dev health check uncertain on :8000",
+                error="Rollback uncertain — dev not responding on :8000 after revert",
             )
     finally:
         if stashed:
@@ -433,50 +433,30 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
 
     update_step(db, dep_id, "staging_healthy", "Staging deployed and healthy on :8010/:3010")
 
-    # If the judge said "deploy_staging_only", we stop here — staging is up,
-    # prod is intentionally untouched, and the row stays at staging_healthy
-    # until someone manually promotes. Sets completed_at so the request-side
-    # poller knows the deploy lifecycle is over.
-    if result and result.strategy == "deploy_staging_only":
-        update_step(
-            db, dep_id, "completed",
-            "Stopped at staging per judge: " + (result.reasoning[:150] if result else ""),
-        )
-        log("  🛑  judge said deploy_staging_only — prod skipped intentionally")
-        return
+    # Prod deployment was removed from the supervisor's flow (per user request).
+    # The judge's "deploy_staging_only" strategy is now effectively the only
+    # path; "deploy_full" is treated identically. Reason: prod-up under the
+    # supervisor was intermittently failing during back-to-back staging→prod
+    # builds, and the user decided prod isn't a priority. Staging-healthy +
+    # dev rebuild is the new success criterion.
 
-    # Step 4: Deploy to production
-    update_step(db, dep_id, "prod_deploying", "Deploying to production...")
-    code, _ = run_cmd(f"docker compose -f {PROD_COMPOSE} up -d --build", timeout=120)
-    if code != 0:
-        update_step(db, dep_id, "prod_deploying", "Production deploy failed", error="docker compose prod failed")
-        run_cmd(f"docker compose -f {STAGING_COMPOSE} down")
-        rollback(db, dep_id, rollback_sha, commit_sha)
-        return
-
-    # Step 5: Verify production health
-    log("Checking production health...")
-    if not health_check(8020):
-        update_step(db, dep_id, "prod_deploying", "Production unhealthy", error="Production health check failed")
-        run_cmd(f"docker compose -f {PROD_COMPOSE} down")
-        run_cmd(f"docker compose -f {STAGING_COMPOSE} down")
-        rollback(db, dep_id, rollback_sha, commit_sha)
-        return
-
-    update_step(db, dep_id, "prod_healthy", "Production deployed and healthy on :8020/:3020")
-
-    # Step 6: Rebuild dev environment with new code
+    # Step 4: Rebuild dev environment with new code (final step now).
     log("Rebuilding dev environment...")
     run_cmd(f"docker compose -f {DEV_COMPOSE} down", timeout=30)
     run_cmd(f"docker compose -f {DEV_COMPOSE} up -d --build", timeout=120)
 
-    # Wait for dev to be healthy
     if health_check(8000):
-        update_step(db, dep_id, "completed", "All environments deployed and healthy. Dev:8000 Staging:8010 Prod:8020")
+        update_step(
+            db, dep_id, "completed",
+            "Staging healthy on :8010, dev rebuilt and healthy on :8000. Prod stage skipped.",
+        )
     else:
-        update_step(db, dep_id, "completed", "Staging+Prod healthy. Dev rebuild pending — may need manual restart.")
+        update_step(
+            db, dep_id, "completed",
+            "Staging healthy on :8010. Dev rebuild fired but health check uncertain — may need manual restart.",
+        )
 
-    log(f"✅ Deployment {dep_id} COMPLETED")
+    log(f"✅ Deployment {dep_id} COMPLETED (staging + dev only)")
 
 
 # How often the supervisor checks origin/main for new commits to mirror down.
