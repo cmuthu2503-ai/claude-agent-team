@@ -23,7 +23,16 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')" || exit 1
 
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# --reload was REMOVED. It caused recurring backend deadlocks: when an agent
+# wrote a file via search_replace/file_write mid-workflow, WatchFiles tried to
+# reload uvicorn, which couldn't shut down because the agent's async task
+# (part of the in-flight workflow) was still running — and the workflow
+# couldn't complete because uvicorn was mid-shutdown. Result: container shows
+# (unhealthy), login spinner hangs forever, in-flight requests get stranded.
+# This happened 4+ times in one session (login stuck, REQ-AE7F17, REQ-5858F5,
+# REQ-C5B69F). Manual `docker compose restart backend` is the documented
+# dev workflow per CLAUDE.md anyway, so --reload is pure liability.
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 # ============================================
 # Stage 2: Production (slim, no dev deps)
