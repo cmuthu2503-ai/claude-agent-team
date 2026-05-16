@@ -828,7 +828,7 @@ export function PromptStudioPage() {
               background: "var(--bg-card)", border: "1px solid var(--border)",
               borderRadius: "var(--radius)", padding: 16, marginTop: 16,
             }}>
-              <label style={labelStyle}>Refine selected variant</label>
+              <label style={labelStyle}>Refine result</label>
               <div style={{ display: "flex", gap: 8 }}>
                 <input
                   type="text"
