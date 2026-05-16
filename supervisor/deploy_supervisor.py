@@ -33,6 +33,14 @@ POLL_INTERVAL = 5  # seconds
 HEALTH_CHECK_RETRIES = 10
 HEALTH_CHECK_INTERVAL = 3  # seconds
 
+# Dev rebuild needs MUCH more patience than staging/prod. Cold start runs the
+# FastAPI lifespan: instantiates 9 agents from YAML, loads 17 tool schemas,
+# opens the AnthropicAWS client, runs SQLite migrations. Takes 10-30s before
+# /health returns 200. The default 30s window (10x3s) raced and lost on
+# REQ-3EED7F, marking the deploy "uncertain" while dev was still mid-init.
+DEV_HEALTH_CHECK_RETRIES = 30
+DEV_HEALTH_CHECK_INTERVAL = 4  # 30 * 4 = 120s window
+
 STAGING_COMPOSE = "docker-compose.staging.yml"
 PROD_COMPOSE = "docker-compose.prod.yml"
 DEV_COMPOSE = "docker-compose.yml"
@@ -77,9 +85,21 @@ def run_cmd(cmd: str, timeout: int = 120) -> tuple[int, str]:
         return 1, str(e)
 
 
-def health_check(port: int) -> bool:
-    """Check if a service is healthy on the given port."""
-    for attempt in range(HEALTH_CHECK_RETRIES):
+def health_check(
+    port: int,
+    retries: int | None = None,
+    interval: int | None = None,
+) -> bool:
+    """Check if a service is healthy on the given port.
+
+    Accepts per-call overrides for retries/interval so callers can give dev
+    cold-start more patience than staging (where the image is already
+    built and starts fast). When None, falls back to module defaults.
+    """
+    n_retries = retries if retries is not None else HEALTH_CHECK_RETRIES
+    n_interval = interval if interval is not None else HEALTH_CHECK_INTERVAL
+    total_seconds = n_retries * n_interval
+    for attempt in range(n_retries):
         # When the supervisor runs inside its own Docker container, `localhost`
         # loops back to the supervisor — NOT the host's exposed ports. Use
         # `host.docker.internal` so curl reaches the host's :8010/:8020/:8000
@@ -90,11 +110,11 @@ def health_check(port: int) -> bool:
         host = os.getenv("HEALTHCHECK_HOST", "host.docker.internal")
         code, output = run_cmd(f'curl -sf -o /dev/null -w "%{{http_code}}" http://{host}:{port}/api/v1/health', timeout=10)
         if code == 0 and "200" in output:
-            log(f"  ✓ Health check passed on :{port}")
+            log(f"  ✓ Health check passed on :{port} (attempt {attempt + 1})")
             return True
-        log(f"  ⏳ Health check attempt {attempt + 1}/{HEALTH_CHECK_RETRIES} on :{port}...")
-        time.sleep(HEALTH_CHECK_INTERVAL)
-    log(f"  ✗ Health check FAILED on :{port} after {HEALTH_CHECK_RETRIES} retries")
+        log(f"  ⏳ Health check attempt {attempt + 1}/{n_retries} on :{port}...")
+        time.sleep(n_interval)
+    log(f"  ✗ Health check FAILED on :{port} after {n_retries} retries ({total_seconds}s)")
     return False
 
 
@@ -441,16 +461,37 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
     # dev rebuild is the new success criterion.
 
     # Step 4: Rebuild dev environment with the new code.
+    #
+    # Healthcheck strategy:
+    #   1. Generous initial window (120s) for the dev backend's heavy cold start
+    #      (9 agents + 17 tools + StateStore + Anthropic client init).
+    #   2. If the first window fails, do ONE restart attempt — catches the
+    #      "container started but uvicorn race-condition'd on first init" case
+    #      we hit on REQ-3EED7F. Then poll another 80s.
+    #   3. If dev STILL isn't healthy: mark the deployment FAILED (not
+    #      "completed uncertain"). The user sees a definitive ❌ in the UI
+    #      and knows to act, rather than seeing ✅ and being surprised that
+    #      dev isn't actually serving traffic.
     log("Rebuilding dev environment...")
     run_cmd(f"docker compose -f {DEV_COMPOSE} down", timeout=30)
-    run_cmd(f"docker compose -f {DEV_COMPOSE} up -d --build", timeout=120)
-    dev_healthy = health_check(8000)
+    run_cmd(f"docker compose -f {DEV_COMPOSE} up -d --build", timeout=180)
+    dev_healthy = health_check(
+        8000,
+        retries=DEV_HEALTH_CHECK_RETRIES,
+        interval=DEV_HEALTH_CHECK_INTERVAL,
+    )
 
-    # Step 5: Tear down staging now that dev is verified. Staging is a transient
-    # validation environment — once dev is running with the same code, keeping
-    # staging up wastes RAM/CPU and confuses Docker dashboards (two copies of
-    # the same app running side-by-side). Best-effort: if it fails the deploy
-    # is still successful because dev is what the user actually uses.
+    if not dev_healthy:
+        log("Dev didn't become healthy in 120s — attempting one restart...")
+        run_cmd(f"docker compose -f {DEV_COMPOSE} restart", timeout=60)
+        # Shorter second window — if the restart didn't fix it within 80s,
+        # we're not just racing init; something is genuinely wrong.
+        dev_healthy = health_check(8000, retries=20, interval=4)
+
+    # Step 5: Tear down staging now that dev verification is settled. Staging
+    # is a transient validation environment — once dev is running (or has
+    # definitively failed) with the same code, keeping staging up wastes
+    # RAM/CPU. Best-effort teardown either way.
     log("Tearing down staging (validation complete)...")
     run_cmd(f"docker compose -f {STAGING_COMPOSE} down", timeout=30)
 
@@ -459,13 +500,17 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
             db, dep_id, "completed",
             "Staging validated and torn down; dev rebuilt and healthy on :8000.",
         )
+        log(f"✅ Deployment {dep_id} COMPLETED (staging torn down, dev live)")
     else:
+        # Definitive failure outcome — no more "uncertain". The UI will show
+        # this as a failed deployment with a clear reason, so the user
+        # doesn't have to guess whether the app is actually live.
         update_step(
-            db, dep_id, "completed",
-            "Staging validated and torn down; dev rebuild fired but health check uncertain — may need manual restart.",
+            db, dep_id, "failed",
+            "Dev did not become healthy on :8000 after rebuild + restart (~200s total).",
+            error="Dev healthcheck failed after rebuild + one retry — manual intervention needed",
         )
-
-    log(f"✅ Deployment {dep_id} COMPLETED (staging torn down, dev live)")
+        log(f"✗ Deployment {dep_id} FAILED (staging deployed OK; dev never came up)")
 
 
 # How often the supervisor checks origin/main for new commits to mirror down.
