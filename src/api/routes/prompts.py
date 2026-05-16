@@ -161,7 +161,7 @@ async def generate_prompt(
     request: Request,
     user: dict = Depends(get_current_user),
 ):
-    """Generate 3 variant prompts from structured inputs. Creates a new session."""
+    """Build a single polished prompt from the structured inputs."""
     if not body.use_case or not body.use_case.strip():
         raise HTTPException(status_code=400, detail="use_case is required")
 
