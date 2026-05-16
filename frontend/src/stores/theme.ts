@@ -4,10 +4,7 @@ import { persist } from 'zustand/middleware';
 export type ThemeId =
   | 'linear'
   | 'vercel'
-  | 'discord'
-  | 'flat'
-  | 'brutalist'
-  | 'y2k'
+  | 'cyberpunk-hyperdrive'
   | 'neon';
 
 export type ThemeMode = 'light' | 'dark';
@@ -34,28 +31,10 @@ export const THEMES: ThemeMeta[] = [
     swatch: ['#000000', '#FFFFFF', '#888888', '#FFFFFF'],
   },
   {
-    id: 'discord',
-    label: 'Discord',
-    description: 'Friendly blurple community vibes.',
-    swatch: ['#36393F', '#5865F2', '#7289DA', '#5865F2'],
-  },
-  {
-    id: 'flat',
-    label: 'Flat',
-    description: 'Bright flat-design palette.',
-    swatch: ['#ECF0F1', '#3498DB', '#E74C3C', '#2ECC71'],
-  },
-  {
-    id: 'brutalist',
-    label: 'Brutalist',
-    description: 'Raw, high-contrast, unapologetic.',
-    swatch: ['#FFFFFF', '#000000', '#FF0000', '#000000'],
-  },
-  {
-    id: 'y2k',
-    label: 'Y2K',
-    description: 'Chrome, bubble-tech nostalgia.',
-    swatch: ['#C0E8FF', '#FF69B4', '#9D5CFF', '#C0C0C0'],
+    id: 'cyberpunk-hyperdrive',
+    label: 'Cyberpunk Hyperdrive',
+    description: 'Neon pink/cyan grid with glowing accents.',
+    swatch: ['#0A0014', '#FF2A6D', '#00F0FF', '#39FF14'],
   },
   {
     id: 'neon',
@@ -69,7 +48,7 @@ const VALID_THEME_IDS: ReadonlySet<string> = new Set(
   THEMES.map((t) => t.id),
 );
 
-const DEFAULT_THEME: ThemeId = 'linear';
+const DEFAULT_THEME: ThemeId = 'cyberpunk-hyperdrive';
 const DEFAULT_MODE: ThemeMode = 'dark';
 
 interface ThemeState {
