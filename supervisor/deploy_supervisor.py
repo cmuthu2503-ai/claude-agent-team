@@ -440,23 +440,32 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
     # builds, and the user decided prod isn't a priority. Staging-healthy +
     # dev rebuild is the new success criterion.
 
-    # Step 4: Rebuild dev environment with new code (final step now).
+    # Step 4: Rebuild dev environment with the new code.
     log("Rebuilding dev environment...")
     run_cmd(f"docker compose -f {DEV_COMPOSE} down", timeout=30)
     run_cmd(f"docker compose -f {DEV_COMPOSE} up -d --build", timeout=120)
+    dev_healthy = health_check(8000)
 
-    if health_check(8000):
+    # Step 5: Tear down staging now that dev is verified. Staging is a transient
+    # validation environment — once dev is running with the same code, keeping
+    # staging up wastes RAM/CPU and confuses Docker dashboards (two copies of
+    # the same app running side-by-side). Best-effort: if it fails the deploy
+    # is still successful because dev is what the user actually uses.
+    log("Tearing down staging (validation complete)...")
+    run_cmd(f"docker compose -f {STAGING_COMPOSE} down", timeout=30)
+
+    if dev_healthy:
         update_step(
             db, dep_id, "completed",
-            "Staging healthy on :8010, dev rebuilt and healthy on :8000. Prod stage skipped.",
+            "Staging validated and torn down; dev rebuilt and healthy on :8000.",
         )
     else:
         update_step(
             db, dep_id, "completed",
-            "Staging healthy on :8010. Dev rebuild fired but health check uncertain — may need manual restart.",
+            "Staging validated and torn down; dev rebuild fired but health check uncertain — may need manual restart.",
         )
 
-    log(f"✅ Deployment {dep_id} COMPLETED (staging + dev only)")
+    log(f"✅ Deployment {dep_id} COMPLETED (staging torn down, dev live)")
 
 
 # How often the supervisor checks origin/main for new commits to mirror down.
