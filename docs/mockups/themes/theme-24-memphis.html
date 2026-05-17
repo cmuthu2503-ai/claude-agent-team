@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team Command Center — Memphis Revival Theme</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Space Grotesk', 'Inter', -apple-system, sans-serif; background: #f5f1e8; color: #0a0a0a; display: flex; height: 100vh; overflow: hidden; -webkit-font-smoothing: antialiased; position: relative; }
+
+  /* Memphis pattern decorations — confetti shapes scattered */
+  body::before { content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: 0.6;
+    background-image:
+      radial-gradient(circle at 8% 18%, #ffd93d 0, #ffd93d 8px, transparent 9px),
+      radial-gradient(circle at 92% 8%, #4a9eff 0, #4a9eff 6px, transparent 7px),
+      radial-gradient(circle at 70% 92%, #ff4d4d 0, #ff4d4d 10px, transparent 11px),
+      radial-gradient(circle at 15% 78%, #ff85a1 0, #ff85a1 7px, transparent 8px);
+  }
+  body > * { position: relative; z-index: 1; }
+
+  /* Theme Banner */
+  .theme-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: #0a0a0a; color: #ffd93d; text-align: center; padding: 8px 0; font-size: 13px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; }
+  .theme-banner span { color: #f5f1e8; opacity: 0.8; font-weight: 500; margin-left: 8px; text-transform: none; letter-spacing: 0.3px; }
+
+  /* Sidebar */
+  .sidebar { width: 240px; background: #f5f1e8; border-right: 3px solid #0a0a0a; display: flex; flex-direction: column; padding-top: 50px; flex-shrink: 0; position: relative; }
+  .sidebar::after { content: ''; position: absolute; right: -8px; top: 80px; width: 50px; height: 50px; background: #ffd93d; border: 3px solid #0a0a0a; transform: rotate(15deg); z-index: -1; }
+  .sidebar-logo { padding: 24px 22px 28px; font-size: 22px; font-weight: 900; letter-spacing: -1px; color: #0a0a0a; display: flex; align-items: center; gap: 14px; text-transform: uppercase; }
+  .sidebar-logo .icon { width: 44px; height: 44px; background: #ff4d4d; border: 3px solid #0a0a0a; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 900; color: #f5f1e8; box-shadow: 4px 4px 0 #0a0a0a; transform: rotate(-3deg); }
+  .nav-items { flex: 1; display: flex; flex-direction: column; gap: 8px; padding: 0 16px; }
+  .nav-item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; font-size: 14px; font-weight: 700; color: #0a0a0a; cursor: pointer; transition: all 0.15s; border: 3px solid transparent; background: transparent; }
+  .nav-item:hover { border-color: #0a0a0a; background: #fff; box-shadow: 4px 4px 0 #0a0a0a; transform: translate(-2px, -2px); }
+  .nav-item.active { border-color: #0a0a0a; background: #4a9eff; color: #f5f1e8; box-shadow: 4px 4px 0 #0a0a0a; transform: translate(-1px, -1px); }
+  .nav-item .nav-icon { width: 18px; text-align: center; font-size: 16px; }
+  .sidebar-user { padding: 16px 22px; border-top: 3px solid #0a0a0a; display: flex; align-items: center; gap: 12px; background: #ffd93d; }
+  .avatar { width: 40px; height: 40px; background: #ff85a1; border: 3px solid #0a0a0a; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 900; color: #0a0a0a; box-shadow: 3px 3px 0 #0a0a0a; }
+  .sidebar-user .user-name { color: #0a0a0a; font-weight: 900; font-size: 14px; }
+  .sidebar-user .user-role { color: #0a0a0a; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  /* Main */
+  .main { flex: 1; background: #f5f1e8; padding-top: 50px; overflow-y: auto; position: relative; }
+  .main::before { content: ''; position: absolute; top: 110px; right: 48px; width: 60px; height: 60px; border: 3px solid #0a0a0a; transform: rotate(45deg); background: transparent; opacity: 0.4; }
+  .main::after { content: ''; position: absolute; top: 380px; right: 100px; width: 0; height: 0; border-left: 24px solid transparent; border-right: 24px solid transparent; border-bottom: 40px solid #ff85a1; opacity: 0.5; }
+  .main-header { display: flex; align-items: center; justify-content: space-between; padding: 32px 40px 28px; position: relative; }
+  .main-header h1 { font-size: 44px; font-weight: 900; letter-spacing: -2px; color: #0a0a0a; text-transform: uppercase; line-height: 0.95; }
+  .main-header h1 span { display: inline-block; background: #ffd93d; padding: 0 8px; transform: rotate(-2deg); }
+  .notification-bell { position: relative; cursor: pointer; width: 50px; height: 50px; display: flex; align-items: center; justify-content: center; background: #f5f1e8; border: 3px solid #0a0a0a; transition: transform 0.15s; box-shadow: 4px 4px 0 #0a0a0a; }
+  .notification-bell:hover { transform: translate(-2px, -2px); box-shadow: 6px 6px 0 #0a0a0a; }
+  .notification-bell .bell-icon { font-size: 20px; }
+  .notification-bell .badge { position: absolute; top: -10px; right: -10px; background: #ff4d4d; color: #f5f1e8; font-size: 12px; font-weight: 900; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; border: 3px solid #0a0a0a; }
+
+  /* Request Input */
+  .request-input { margin: 0 40px 32px; padding: 24px; background: #fff; border: 3px solid #0a0a0a; box-shadow: 8px 8px 0 #0a0a0a; position: relative; }
+  .request-input::before { content: 'New ↓'; position: absolute; top: -16px; left: 24px; background: #ffd93d; padding: 4px 12px; border: 3px solid #0a0a0a; font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: 1px; }
+  .request-input textarea { width: 100%; background: #f5f1e8; border: 3px solid #0a0a0a; color: #0a0a0a; padding: 14px 16px; font-size: 15px; font-family: inherit; resize: none; height: 80px; outline: none; font-weight: 500; }
+  .request-input textarea::placeholder { color: #0a0a0a80; }
+  .request-input textarea:focus { background: #ffd93d20; }
+  .input-controls { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+  .type-select { background: #fff; border: 3px solid #0a0a0a; color: #0a0a0a; padding: 8px 14px; font-size: 13px; font-family: inherit; outline: none; cursor: pointer; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 3px 3px 0 #0a0a0a; }
+  .priority-pills { display: flex; gap: 8px; }
+  .priority-pill { padding: 8px 16px; font-size: 12px; font-weight: 800; border: 3px solid #0a0a0a; background: #fff; color: #0a0a0a; cursor: pointer; transition: all 0.15s; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 3px 3px 0 #0a0a0a; }
+  .priority-pill:hover { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 #0a0a0a; }
+  .priority-pill.selected { background: #ff4d4d; color: #fff; }
+  .submit-btn { margin-left: auto; background: #4a9eff; color: #fff; border: 3px solid #0a0a0a; padding: 10px 26px; font-size: 14px; font-weight: 900; cursor: pointer; transition: all 0.15s; font-family: inherit; text-transform: uppercase; letter-spacing: 1px; box-shadow: 4px 4px 0 #0a0a0a; }
+  .submit-btn:hover { transform: translate(-2px, -2px); box-shadow: 6px 6px 0 #0a0a0a; }
+
+  /* Section */
+  .section { margin: 0 40px 32px; }
+  .section-title { font-size: 16px; font-weight: 900; color: #0a0a0a; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 18px; display: flex; align-items: center; gap: 12px; }
+  .section-title::before { content: ''; display: inline-block; width: 28px; height: 28px; background: #ffd93d; border: 3px solid #0a0a0a; transform: rotate(45deg); }
+  .section-title::after { content: ''; flex: 1; height: 3px; background: #0a0a0a; }
+
+  /* Request Cards */
+  .request-card { background: #fff; border: 3px solid #0a0a0a; padding: 16px 20px; margin-bottom: 12px; display: flex; align-items: center; gap: 14px; box-shadow: 5px 5px 0 #0a0a0a; transition: all 0.15s; }
+  .request-card:hover { transform: translate(-2px, -2px); box-shadow: 7px 7px 0 #0a0a0a; }
+  .status-dot { width: 16px; height: 16px; border: 3px solid #0a0a0a; flex-shrink: 0; }
+  .status-dot.in-progress { background: #4a9eff; animation: bounce 1.5s ease-in-out infinite; }
+  .status-dot.analyzing { background: #ff85a1; animation: bounce 1.8s ease-in-out infinite; }
+  .status-dot.completed { background: #5fb158; }
+  @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+  .card-content { flex: 1; min-width: 0; }
+  .card-top { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .request-id { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #0a0a0a; font-weight: 900; background: #ffd93d; padding: 2px 8px; border: 2px solid #0a0a0a; }
+  .card-title { font-size: 15px; color: #0a0a0a; font-weight: 700; }
+  .card-meta { display: flex; gap: 6px; flex-shrink: 0; }
+  .pill { padding: 4px 10px; font-size: 11px; font-weight: 900; border: 2px solid #0a0a0a; text-transform: uppercase; letter-spacing: 0.5px; }
+  .pill-status { background: #4a9eff; color: #fff; }
+  .pill-status.analyzing { background: #ff85a1; color: #fff; }
+  .pill-status.completed { background: #5fb158; color: #fff; }
+  .pill-type { background: #f5f1e8; color: #0a0a0a; }
+  .pill-priority-high { background: #ff4d4d; color: #fff; }
+  .pill-priority-medium { background: #ffd93d; color: #0a0a0a; }
+
+  /* Completed */
+  .completed-list { background: #fff; border: 3px solid #0a0a0a; box-shadow: 5px 5px 0 #0a0a0a; }
+  .completed-row { display: flex; align-items: center; gap: 14px; padding: 14px 20px; border-bottom: 2px solid #0a0a0a; }
+  .completed-row:last-child { border-bottom: none; }
+  .completed-row .card-title { font-size: 14px; color: #0a0a0a; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="theme-banner">Theme 24: Memphis Revival<span>— Bold geometric shapes, primary colors, sharp shadows, 80s postmodern playfulness (2026 trend)</span></div>
+
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="icon">A</div>
+    Agent
+  </div>
+  <div class="nav-items">
+    <div class="nav-item active"><span class="nav-icon">&#9678;</span> Command</div>
+    <div class="nav-item"><span class="nav-icon">&#8634;</span> History</div>
+    <div class="nav-item"><span class="nav-icon">&#9881;</span> Releases</div>
+    <div class="nav-item"><span class="nav-icon">&#9823;</span> Team</div>
+    <div class="nav-item"><span class="nav-icon">&#36;</span> Cost</div>
+  </div>
+  <div class="sidebar-user">
+    <div class="avatar">CL</div>
+    <div class="user-info">
+      <div class="user-name">Claude</div>
+      <div class="user-role">Admin</div>
+    </div>
+  </div>
+</nav>
+
+<main class="main">
+  <div class="main-header">
+    <h1>Command<br><span>Center</span></h1>
+    <div class="notification-bell">
+      <span class="bell-icon">&#128276;</span>
+      <span class="badge">3</span>
+    </div>
+  </div>
+
+  <div class="request-input">
+    <textarea placeholder="What should the agent team build next?"></textarea>
+    <div class="input-controls">
+      <select class="type-select">
+        <option>Feature</option>
+        <option>Bug Fix</option>
+        <option>Refactor</option>
+        <option>Docs</option>
+      </select>
+      <div class="priority-pills">
+        <button class="priority-pill">Low</button>
+        <button class="priority-pill selected">Medium</button>
+        <button class="priority-pill">High</button>
+        <button class="priority-pill">Critical</button>
+      </div>
+      <button class="submit-btn">Submit!</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Active</div>
+    <div class="request-card">
+      <div class="status-dot in-progress"></div>
+      <div class="card-content">
+        <div class="card-top"><span class="request-id">REQ-A1B2C3</span></div>
+        <div class="card-title">Build login page with JWT authentication</div>
+      </div>
+      <div class="card-meta">
+        <span class="pill pill-status">in_progress</span>
+        <span class="pill pill-type">feature</span>
+        <span class="pill pill-priority-high">high</span>
+      </div>
+    </div>
+    <div class="request-card">
+      <div class="status-dot analyzing"></div>
+      <div class="card-content">
+        <div class="card-top"><span class="request-id">REQ-D4E5F6</span></div>
+        <div class="card-title">Add dark mode support</div>
+      </div>
+      <div class="card-meta">
+        <span class="pill pill-status analyzing">analyzing</span>
+        <span class="pill pill-type">feature</span>
+        <span class="pill pill-priority-medium">medium</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Completed</div>
+    <div class="completed-list">
+      <div class="completed-row">
+        <div class="status-dot completed"></div>
+        <span class="request-id">REQ-001</span>
+        <span class="card-title">Fix image upload timeout</span>
+        <span class="pill pill-status completed" style="margin-left:auto;">completed</span>
+      </div>
+      <div class="completed-row">
+        <div class="status-dot completed"></div>
+        <span class="request-id">REQ-002</span>
+        <span class="card-title">Update API docs</span>
+        <span class="pill pill-status completed" style="margin-left:auto;">completed</span>
+      </div>
+      <div class="completed-row">
+        <div class="status-dot completed"></div>
+        <span class="request-id">REQ-003</span>
+        <span class="card-title">Setup CI/CD pipeline</span>
+        <span class="pill pill-status completed" style="margin-left:auto;">completed</span>
+      </div>
+    </div>
+  </div>
+</main>
+
+</body>
+</html>

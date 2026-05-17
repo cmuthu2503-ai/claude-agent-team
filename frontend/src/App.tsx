@@ -2,6 +2,8 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom"
 import { useAuthStore } from "./stores/auth"
 import { useThemeStore } from "./stores/theme"
 import { Navbar } from "./components/layout/Navbar"
+import { Sidebar } from "./components/layout/Sidebar"
+import { CyberpunkOverlay } from "./components/layout/CyberpunkOverlay"
 import { LoginPage } from "./pages/Login"
 import { CommandCenterPage } from "./pages/CommandCenter"
 import { RequestDetailPage } from "./pages/RequestDetail"
@@ -32,7 +34,10 @@ function Layout({ children }: { children: React.ReactNode }) {
       }}
     >
       <Navbar />
-      {children}
+      <Sidebar />
+      {/* Sidebar is position:fixed (width 220); main content sits to its
+          right via marginLeft. */}
+      <div style={{ marginLeft: 220, minWidth: 0 }}>{children}</div>
     </div>
   )
 }
@@ -43,6 +48,7 @@ function App() {
 
   return (
     <div data-theme={theme} data-mode={mode}>
+      <CyberpunkOverlay />
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />

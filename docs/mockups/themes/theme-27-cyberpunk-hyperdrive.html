@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team Command Center — Cyberpunk Hyperdrive</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace; background: #0a0014; color: #e0e0ff; display: flex; height: 100vh; overflow: hidden; -webkit-font-smoothing: antialiased; position: relative; animation: flicker 8s infinite; }
+
+  /* ━━━━━━━━━━━━━━━━━━ KEYFRAMES ━━━━━━━━━━━━━━━━━━ */
+  @keyframes flicker {
+    0%, 100%, 78%, 80%, 84% { opacity: 1; }
+    79%, 82% { opacity: 0.93; }
+    81% { opacity: 0.86; }
+  }
+  @keyframes scan-sweep {
+    0% { transform: translateY(-10vh); opacity: 0; }
+    5%, 95% { opacity: 1; }
+    100% { transform: translateY(110vh); opacity: 0; }
+  }
+  @keyframes glitch-1 {
+    0%, 90%, 100% { transform: translate(0); }
+    91% { transform: translate(-2px, 1px); }
+    92% { transform: translate(2px, -1px); }
+    93% { transform: translate(-1px, -2px); }
+    94% { transform: translate(1px, 2px); }
+  }
+  @keyframes glitch-2 {
+    0%, 90%, 100% { transform: translate(0); clip-path: inset(0 0 0 0); }
+    91% { transform: translate(2px, 0); clip-path: inset(20% 0 40% 0); }
+    93% { transform: translate(-2px, 0); clip-path: inset(60% 0 10% 0); }
+  }
+  @keyframes pulse-shockwave {
+    0% { box-shadow: 0 0 0 0 currentColor, 0 0 12px currentColor; }
+    100% { box-shadow: 0 0 0 14px transparent, 0 0 12px currentColor; }
+  }
+  @keyframes pulse-glow {
+    0%, 100% { opacity: 1; filter: drop-shadow(0 0 6px currentColor); }
+    50% { opacity: 0.55; filter: drop-shadow(0 0 14px currentColor); }
+  }
+  @keyframes ticker-scroll {
+    0% { transform: translateX(100%); }
+    100% { transform: translateX(-100%); }
+  }
+  @keyframes radar-sweep {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+  @keyframes radar-blip {
+    0%, 100% { opacity: 0; }
+    10%, 30% { opacity: 1; }
+  }
+  @keyframes blink {
+    0%, 50% { opacity: 1; }
+    51%, 100% { opacity: 0; }
+  }
+  @keyframes progress-fill {
+    0% { width: 0; }
+    100% { width: var(--p, 60%); }
+  }
+  @keyframes matrix-fall {
+    0% { transform: translateY(-100%); }
+    100% { transform: translateY(110vh); }
+  }
+  @keyframes border-trace {
+    0% { background-position: 0% 50%; }
+    100% { background-position: 200% 50%; }
+  }
+  @keyframes hue-rotate {
+    0%, 100% { filter: hue-rotate(0deg); }
+    50% { filter: hue-rotate(20deg); }
+  }
+  @keyframes float-up {
+    0% { transform: translateY(100vh) translateX(0); opacity: 0; }
+    10% { opacity: 0.6; }
+    90% { opacity: 0.6; }
+    100% { transform: translateY(-10vh) translateX(20px); opacity: 0; }
+  }
+
+  /* ━━━━━━━━━━━━━━━━━━ ATMOSPHERE LAYERS ━━━━━━━━━━━━━━━━━━ */
+
+  /* Static scanlines */
+  body::before { content: ''; position: fixed; inset: 0; z-index: 50; pointer-events: none;
+    background: repeating-linear-gradient(0deg, transparent 0, transparent 2px, rgba(0, 240, 255, 0.025) 2px, rgba(0, 240, 255, 0.025) 3px);
+  }
+  /* CRT vignette */
+  body::after { content: ''; position: fixed; inset: 0; z-index: 49; pointer-events: none;
+    background: radial-gradient(ellipse at center, transparent 40%, rgba(10, 0, 20, 0.8) 100%);
+  }
+
+  /* Scrolling scanline beam */
+  .scan-beam { position: fixed; left: 0; right: 0; height: 80px; z-index: 51; pointer-events: none;
+    background: linear-gradient(180deg, transparent 0%, rgba(0, 240, 255, 0.04) 40%, rgba(0, 240, 255, 0.1) 50%, rgba(0, 240, 255, 0.04) 60%, transparent 100%);
+    animation: scan-sweep 6s linear infinite;
+  }
+
+  /* Matrix rain columns (CSS-only) */
+  .matrix-col { position: fixed; top: 0; width: 18px; z-index: 1; pointer-events: none;
+    font-family: 'JetBrains Mono', monospace; font-size: 14px; line-height: 1.4;
+    color: #39ff14; opacity: 0.15; text-shadow: 0 0 8px #39ff14;
+    white-space: pre; writing-mode: vertical-rl;
+    animation: matrix-fall linear infinite;
+  }
+  .matrix-col:nth-child(1) { left: 6%; animation-duration: 14s; animation-delay: 0s; }
+  .matrix-col:nth-child(2) { left: 18%; animation-duration: 18s; animation-delay: -3s; }
+  .matrix-col:nth-child(3) { left: 32%; animation-duration: 12s; animation-delay: -7s; color: #00f0ff; text-shadow: 0 0 8px #00f0ff; }
+  .matrix-col:nth-child(4) { left: 44%; animation-duration: 20s; animation-delay: -2s; }
+  .matrix-col:nth-child(5) { left: 56%; animation-duration: 16s; animation-delay: -10s; }
+  .matrix-col:nth-child(6) { left: 68%; animation-duration: 13s; animation-delay: -5s; color: #ff2a6d; text-shadow: 0 0 8px #ff2a6d; opacity: 0.12; }
+  .matrix-col:nth-child(7) { left: 80%; animation-duration: 17s; animation-delay: -8s; }
+  .matrix-col:nth-child(8) { left: 92%; animation-duration: 15s; animation-delay: -1s; }
+
+  /* Floating data particles */
+  .particle { position: fixed; width: 3px; height: 3px; border-radius: 50%; pointer-events: none; z-index: 2;
+    animation: float-up linear infinite;
+  }
+  .particle.p1 { left: 12%; background: #00f0ff; box-shadow: 0 0 8px #00f0ff; animation-duration: 11s; animation-delay: 0s; }
+  .particle.p2 { left: 28%; background: #ff2a6d; box-shadow: 0 0 8px #ff2a6d; animation-duration: 15s; animation-delay: -4s; }
+  .particle.p3 { left: 48%; background: #39ff14; box-shadow: 0 0 8px #39ff14; animation-duration: 13s; animation-delay: -7s; }
+  .particle.p4 { left: 64%; background: #f9f871; box-shadow: 0 0 8px #f9f871; animation-duration: 17s; animation-delay: -2s; }
+  .particle.p5 { left: 84%; background: #00f0ff; box-shadow: 0 0 8px #00f0ff; animation-duration: 14s; animation-delay: -9s; }
+  .particle.p6 { left: 38%; background: #ff2a6d; box-shadow: 0 0 8px #ff2a6d; animation-duration: 19s; animation-delay: -12s; }
+  .particle.p7 { left: 72%; background: #39ff14; box-shadow: 0 0 8px #39ff14; animation-duration: 12s; animation-delay: -6s; }
+
+  /* ━━━━━━━━━━━━━━━━━━ THEME BANNER ━━━━━━━━━━━━━━━━━━ */
+  .theme-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: #0a0014; border-bottom: 1px solid #ff2a6d; color: #ff2a6d; text-align: center; padding: 8px 0; font-size: 12px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; text-shadow: 0 0 8px #ff2a6d; }
+  .theme-banner span { color: #00f0ff; opacity: 0.85; font-weight: 400; margin-left: 8px; letter-spacing: 0.3px; text-transform: none; text-shadow: 0 0 6px #00f0ff; }
+
+  /* ━━━━━━━━━━━━━━━━━━ DATA TICKER ━━━━━━━━━━━━━━━━━━ */
+  .ticker { position: fixed; top: 32px; left: 0; right: 0; z-index: 99; height: 24px; background: rgba(0, 240, 255, 0.04); border-bottom: 1px solid rgba(0, 240, 255, 0.2); overflow: hidden; display: flex; align-items: center; }
+  .ticker-label { background: #00f0ff; color: #0a0014; padding: 0 12px; height: 100%; display: flex; align-items: center; font-size: 10px; font-weight: 900; letter-spacing: 2px; flex-shrink: 0; text-shadow: none; }
+  .ticker-track { flex: 1; overflow: hidden; position: relative; height: 100%; }
+  .ticker-content { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; gap: 32px; font-size: 11px; color: #00f0ff; white-space: nowrap; animation: ticker-scroll 60s linear infinite; padding-left: 16px; }
+  .ticker-content span { letter-spacing: 1px; }
+  .ticker-content span.alert { color: #ff2a6d; text-shadow: 0 0 6px #ff2a6d; }
+  .ticker-content span.ok { color: #39ff14; text-shadow: 0 0 6px #39ff14; }
+  .ticker-content span.warn { color: #f9f871; }
+  .ticker-content .sep { color: #50506a; }
+
+  /* ━━━━━━━━━━━━━━━━━━ SIDEBAR ━━━━━━━━━━━━━━━━━━ */
+  .sidebar { width: 244px; background: #0a0014; border-right: 1px solid rgba(255, 42, 109, 0.3); display: flex; flex-direction: column; padding-top: 64px; flex-shrink: 0; position: relative; z-index: 10; }
+  .sidebar::after { content: ''; position: absolute; top: 64px; right: 0; bottom: 0; width: 1px;
+    background: linear-gradient(180deg, transparent, #ff2a6d 30%, #00f0ff 70%, transparent);
+    opacity: 0.6;
+  }
+  .sidebar-logo { padding: 20px 22px 24px; font-size: 16px; font-weight: 700; letter-spacing: 3px; color: #00f0ff; text-shadow: 0 0 12px #00f0ff; display: flex; align-items: center; gap: 12px; text-transform: uppercase; border-bottom: 1px solid rgba(0, 240, 255, 0.2); position: relative; }
+  .sidebar-logo .icon { width: 36px; height: 36px; background: transparent; border: 1px solid #ff2a6d; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 900; color: #ff2a6d; box-shadow: 0 0 16px rgba(255, 42, 109, 0.5), inset 0 0 8px rgba(255, 42, 109, 0.3); text-shadow: 0 0 8px #ff2a6d; animation: pulse-glow 3s ease-in-out infinite; }
+  .sidebar-logo::after { content: '◉ LIVE'; position: absolute; bottom: 8px; right: 20px; font-size: 9px; color: #39ff14; text-shadow: 0 0 6px #39ff14; letter-spacing: 1.5px; animation: blink 1.5s step-end infinite; }
+  .nav-items { flex: 1; display: flex; flex-direction: column; padding: 16px 12px; gap: 4px; }
+  .nav-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px; font-size: 13px; color: #8080a0; cursor: pointer; transition: all 0.15s; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; border-left: 2px solid transparent; position: relative; overflow: hidden; }
+  .nav-item::before { content: ''; position: absolute; left: -100%; top: 0; bottom: 0; right: 0; background: linear-gradient(90deg, transparent, rgba(0, 240, 255, 0.1), transparent); transition: left 0.4s; }
+  .nav-item:hover::before { left: 100%; }
+  .nav-item:hover { color: #00f0ff; background: rgba(0, 240, 255, 0.05); border-left-color: #00f0ff; text-shadow: 0 0 8px #00f0ff; }
+  .nav-item.active { color: #ff2a6d; background: rgba(255, 42, 109, 0.08); border-left-color: #ff2a6d; text-shadow: 0 0 8px #ff2a6d; }
+  .nav-item.active::after { content: ' ▸'; margin-left: auto; animation: blink 1s step-end infinite; }
+  .nav-item .nav-icon { width: 18px; text-align: center; font-size: 13px; }
+
+  /* Sidebar mini terminal — adds dynamic feel */
+  .sidebar-term { margin: 8px 14px; padding: 10px 12px; border: 1px solid rgba(57, 255, 20, 0.25); background: rgba(57, 255, 20, 0.03); font-size: 10px; color: #39ff14; line-height: 1.6; letter-spacing: 0.3px; }
+  .sidebar-term .ln { display: block; opacity: 0.85; }
+  .sidebar-term .ln::before { content: '$ '; color: #ff2a6d; }
+  .sidebar-term .cursor::after { content: '█'; animation: blink 0.9s step-end infinite; color: #39ff14; margin-left: 2px; }
+
+  .sidebar-user { padding: 14px 22px; border-top: 1px solid rgba(255, 42, 109, 0.2); display: flex; align-items: center; gap: 12px; }
+  .avatar { width: 36px; height: 36px; background: transparent; border: 1px solid #39ff14; color: #39ff14; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; box-shadow: 0 0 14px rgba(57, 255, 20, 0.4); text-shadow: 0 0 6px #39ff14; animation: pulse-glow 4s ease-in-out infinite; }
+  .sidebar-user .user-name { color: #e0e0ff; font-weight: 600; font-size: 13px; letter-spacing: 0.5px; }
+  .sidebar-user .user-role { color: #39ff14; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; text-shadow: 0 0 4px #39ff14; }
+
+  /* ━━━━━━━━━━━━━━━━━━ MAIN ━━━━━━━━━━━━━━━━━━ */
+  .main { flex: 1; padding-top: 64px; overflow-y: auto; position: relative; z-index: 10; }
+
+  /* Radar sweep widget — floating top-right */
+  .radar { position: fixed; top: 80px; right: 36px; width: 72px; height: 72px; border-radius: 50%; border: 1px solid rgba(0, 240, 255, 0.4); background: radial-gradient(circle at center, rgba(0, 240, 255, 0.05) 0%, transparent 70%); z-index: 60; pointer-events: none; }
+  .radar::before { content: ''; position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(from 0deg, transparent 0deg, rgba(0, 240, 255, 0.4) 30deg, transparent 60deg); animation: radar-sweep 4s linear infinite; }
+  .radar::after { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 1px solid rgba(0, 240, 255, 0.2); box-shadow: inset 0 0 0 18px rgba(0, 240, 255, 0.05), inset 0 0 0 36px rgba(0, 240, 255, 0.03); }
+  .radar-blip { position: absolute; width: 4px; height: 4px; border-radius: 50%; background: #ff2a6d; box-shadow: 0 0 8px #ff2a6d; animation: radar-blip 4s linear infinite; }
+  .radar-blip.b1 { top: 22%; left: 60%; animation-delay: -1.2s; }
+  .radar-blip.b2 { top: 70%; left: 30%; animation-delay: -2.6s; }
+  .radar-blip.b3 { top: 45%; left: 75%; animation-delay: -3.4s; background: #39ff14; box-shadow: 0 0 8px #39ff14; }
+
+  .main-header { display: flex; align-items: center; justify-content: space-between; padding: 28px 36px 4px; border-bottom: 1px solid rgba(0, 240, 255, 0.2); margin: 0 36px; padding-left: 0; padding-right: 0; }
+
+  /* Glitching title */
+  .glitch-title { position: relative; font-size: 32px; font-weight: 700; letter-spacing: 4px; color: #00f0ff; text-transform: uppercase; text-shadow: 0 0 16px #00f0ff, 0 0 32px rgba(0, 240, 255, 0.4); animation: glitch-1 4s infinite; }
+  .glitch-title::before, .glitch-title::after { content: attr(data-text); position: absolute; top: 0; left: 0; width: 100%; }
+  .glitch-title::before { color: #ff2a6d; text-shadow: 0 0 8px #ff2a6d; animation: glitch-2 4s infinite; mix-blend-mode: screen; }
+  .glitch-title::after { color: #39ff14; text-shadow: 0 0 8px #39ff14; animation: glitch-2 4s infinite reverse; mix-blend-mode: screen; }
+  .glitch-title .prompt { color: #ff2a6d; text-shadow: 0 0 8px #ff2a6d; }
+  .glitch-title .cursor { color: #00f0ff; animation: blink 1s step-end infinite; }
+
+  .notification-bell { position: relative; cursor: pointer; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; background: transparent; border: 1px solid #ff2a6d; transition: all 0.15s; box-shadow: 0 0 12px rgba(255, 42, 109, 0.3), inset 0 0 8px rgba(255, 42, 109, 0.15); color: #ff2a6d; animation: pulse-glow 2.5s ease-in-out infinite; }
+  .notification-bell:hover { box-shadow: 0 0 20px rgba(255, 42, 109, 0.6), inset 0 0 12px rgba(255, 42, 109, 0.3); }
+  .notification-bell .bell-icon { font-size: 16px; }
+  .notification-bell .badge { position: absolute; top: -8px; right: -8px; background: #ff2a6d; color: #0a0014; font-size: 10px; font-weight: 900; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 12px #ff2a6d; animation: pulse-shockwave 1.4s ease-out infinite; }
+
+  /* ━━━━━━━━━━━━━━━━━━ REQUEST INPUT ━━━━━━━━━━━━━━━━━━ */
+  .request-input { margin: 28px 36px 0; padding: 22px; background: rgba(255, 42, 109, 0.03); border: 1px solid rgba(255, 42, 109, 0.4); position: relative; }
+  .request-input::before { content: '> NEW_REQUEST.INIT'; position: absolute; top: -10px; left: 16px; background: #0a0014; padding: 0 12px; font-size: 11px; font-weight: 700; color: #ff2a6d; letter-spacing: 2px; text-shadow: 0 0 8px #ff2a6d; }
+  .request-input::after { content: '▮'; position: absolute; top: -10px; left: 180px; background: #0a0014; padding: 0 4px; color: #39ff14; text-shadow: 0 0 8px #39ff14; animation: blink 0.9s step-end infinite; }
+  .request-input textarea { width: 100%; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(0, 240, 255, 0.3); color: #e0e0ff; padding: 14px 16px; font-size: 14px; font-family: inherit; resize: none; height: 80px; outline: none; transition: all 0.2s; }
+  .request-input textarea::placeholder { color: #50506a; }
+  .request-input textarea:focus { border-color: #00f0ff; box-shadow: 0 0 16px rgba(0, 240, 255, 0.25), inset 0 0 8px rgba(0, 240, 255, 0.05); }
+  .input-controls { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+  .type-select { background: transparent; border: 1px solid rgba(0, 240, 255, 0.4); color: #00f0ff; padding: 8px 14px; font-size: 11px; font-family: inherit; outline: none; cursor: pointer; letter-spacing: 1.5px; text-transform: uppercase; font-weight: 600; }
+  .priority-pills { display: flex; gap: 6px; }
+  .priority-pill { padding: 7px 14px; font-size: 10px; font-weight: 700; border: 1px solid rgba(255,255,255,0.15); background: transparent; color: #8080a0; cursor: pointer; transition: all 0.15s; letter-spacing: 2px; text-transform: uppercase; font-family: inherit; }
+  .priority-pill:hover { border-color: #00f0ff; color: #00f0ff; text-shadow: 0 0 6px #00f0ff; }
+  .priority-pill.selected { border-color: #ff2a6d; background: rgba(255, 42, 109, 0.1); color: #ff2a6d; text-shadow: 0 0 8px #ff2a6d; box-shadow: 0 0 12px rgba(255, 42, 109, 0.3); animation: pulse-glow 2s ease-in-out infinite; }
+  .submit-btn { margin-left: auto; background: transparent; color: #39ff14; border: 1px solid #39ff14; padding: 9px 22px; font-size: 11px; font-weight: 700; cursor: pointer; transition: all 0.15s; font-family: inherit; letter-spacing: 2px; text-transform: uppercase; text-shadow: 0 0 6px #39ff14; box-shadow: 0 0 12px rgba(57, 255, 20, 0.2), inset 0 0 8px rgba(57, 255, 20, 0.05); position: relative; overflow: hidden; }
+  .submit-btn::before { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(57, 255, 20, 0.3), transparent); transform: translateX(-100%); transition: transform 0.5s; }
+  .submit-btn:hover::before { transform: translateX(100%); }
+  .submit-btn:hover { background: rgba(57, 255, 20, 0.1); box-shadow: 0 0 20px rgba(57, 255, 20, 0.5), inset 0 0 12px rgba(57, 255, 20, 0.15); }
+  .submit-btn::after { content: ' [↵]'; opacity: 0.6; }
+  .submit-btn-text::before { content: '> EXEC '; }
+
+  /* ━━━━━━━━━━━━━━━━━━ SECTIONS ━━━━━━━━━━━━━━━━━━ */
+  .section { margin: 28px 36px 0; }
+  .section-title { font-size: 11px; font-weight: 700; color: #00f0ff; text-transform: uppercase; letter-spacing: 3px; margin-bottom: 14px; text-shadow: 0 0 6px #00f0ff; display: flex; align-items: center; gap: 12px; }
+  .section-title::before { content: attr(data-idx); color: #ff2a6d; text-shadow: 0 0 6px #ff2a6d; padding: 2px 6px; border: 1px solid #ff2a6d; font-size: 9px; }
+  .section-title::after { content: ''; flex: 1; height: 1px;
+    background: linear-gradient(90deg, rgba(0,240,255,0.4), transparent);
+    background-size: 200% 100%;
+    animation: border-trace 3s linear infinite;
+  }
+  .section-meta { font-size: 9px; color: #50506a; letter-spacing: 1.5px; margin-left: 8px; }
+  .section-meta .live { color: #39ff14; text-shadow: 0 0 4px #39ff14; }
+
+  /* ━━━━━━━━━━━━━━━━━━ REQUEST CARDS ━━━━━━━━━━━━━━━━━━ */
+  .request-card { background: rgba(0, 240, 255, 0.02); border: 1px solid rgba(0, 240, 255, 0.2); padding: 14px 18px 0; margin-bottom: 8px; transition: all 0.15s; position: relative; overflow: hidden; }
+  .request-card::before { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.3s;
+    background: linear-gradient(90deg, transparent, rgba(0, 240, 255, 0.15), transparent);
+    background-size: 200% 100%;
+    animation: border-trace 2.5s linear infinite;
+  }
+  .request-card:hover::before { opacity: 1; }
+  .request-card:hover { border-color: #00f0ff; background: rgba(0, 240, 255, 0.05); box-shadow: 0 0 16px rgba(0, 240, 255, 0.2); }
+  .card-row { display: flex; align-items: center; gap: 14px; padding-bottom: 10px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; position: relative; }
+  .status-dot.in-progress { background: #ff2a6d; color: #ff2a6d; animation: pulse-shockwave 1.6s ease-out infinite; }
+  .status-dot.analyzing { background: #00f0ff; color: #00f0ff; animation: pulse-shockwave 2s ease-out infinite; }
+  .status-dot.completed { background: #39ff14; box-shadow: 0 0 10px #39ff14; }
+  .card-content { flex: 1; min-width: 0; }
+  .card-top { display: flex; align-items: center; gap: 10px; margin-bottom: 3px; }
+  .request-id { font-family: inherit; font-size: 11px; color: #f9f871; letter-spacing: 1px; text-shadow: 0 0 4px rgba(249, 248, 113, 0.5); }
+  .request-id::before { content: '[ '; opacity: 0.5; }
+  .request-id::after { content: ' ]'; opacity: 0.5; }
+  .card-eta { font-size: 9px; color: #50506a; letter-spacing: 1.5px; }
+  .card-eta .live { color: #39ff14; animation: blink 1.4s step-end infinite; }
+  .card-title { font-size: 13px; color: #e0e0ff; font-weight: 400; letter-spacing: 0.3px; }
+  .card-meta { display: flex; gap: 6px; flex-shrink: 0; }
+  .pill { padding: 3px 9px; font-size: 9px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; border: 1px solid; }
+  .pill-status { border-color: #ff2a6d; color: #ff2a6d; background: rgba(255, 42, 109, 0.05); text-shadow: 0 0 4px #ff2a6d; }
+  .pill-status.analyzing { border-color: #00f0ff; color: #00f0ff; background: rgba(0, 240, 255, 0.05); text-shadow: 0 0 4px #00f0ff; }
+  .pill-status.completed { border-color: #39ff14; color: #39ff14; background: rgba(57, 255, 20, 0.05); text-shadow: 0 0 4px #39ff14; }
+  .pill-type { border-color: rgba(255,255,255,0.2); color: #8080a0; }
+  .pill-priority-high { border-color: #ff2a6d; color: #ff2a6d; text-shadow: 0 0 4px #ff2a6d; }
+  .pill-priority-medium { border-color: #f9f871; color: #f9f871; text-shadow: 0 0 4px rgba(249, 248, 113, 0.5); }
+
+  /* Animated progress bar */
+  .progress { height: 2px; background: rgba(255,255,255,0.05); position: relative; overflow: hidden; }
+  .progress-bar { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, currentColor, transparent); box-shadow: 0 0 8px currentColor; animation: progress-fill 2.5s ease-out forwards, hue-rotate 4s ease-in-out infinite; }
+  .progress-bar.pink { color: #ff2a6d; --p: 67%; }
+  .progress-bar.cyan { color: #00f0ff; --p: 34%; }
+
+  /* ━━━━━━━━━━━━━━━━━━ COMPLETED ━━━━━━━━━━━━━━━━━━ */
+  .completed-list { background: rgba(57, 255, 20, 0.02); border: 1px solid rgba(57, 255, 20, 0.15); }
+  .completed-row { display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-bottom: 1px solid rgba(57, 255, 20, 0.08); transition: all 0.15s; position: relative; }
+  .completed-row:last-child { border-bottom: none; }
+  .completed-row::before { content: '✓'; color: #39ff14; text-shadow: 0 0 6px #39ff14; font-size: 12px; }
+  .completed-row:hover { background: rgba(57, 255, 20, 0.04); padding-left: 24px; }
+  .completed-row .card-title { font-size: 12px; color: #c0c0d8; }
+</style>
+</head>
+<body>
+
+<!-- Scrolling scanline beam -->
+<div class="scan-beam"></div>
+
+<!-- Matrix rain columns -->
+<div class="matrix-col">01101001アエカサナハマ01101001カケコサシスセソ10110011</div>
+<div class="matrix-col">ハマヤラワセソタ11010110チツテトナニヌネ01010101</div>
+<div class="matrix-col">10110011アエカサ01101001ヤラワセソタチツ10110011</div>
+<div class="matrix-col">サナハマヤラワ01010101テトナニヌネハマヤラ10110011</div>
+<div class="matrix-col">11010110チツテト01101001アエカサナハマ11010110</div>
+<div class="matrix-col">01101001ヤラ10110011セソタチツテト01101001カケコサシ</div>
+<div class="matrix-col">アエカサナ01010101ナニヌネハマヤラ01101001ワセソ</div>
+<div class="matrix-col">11010110チ10110011ツテトナニヌネ01101001カケコ</div>
+
+<!-- Floating particles -->
+<div class="particle p1"></div>
+<div class="particle p2"></div>
+<div class="particle p3"></div>
+<div class="particle p4"></div>
+<div class="particle p5"></div>
+<div class="particle p6"></div>
+<div class="particle p7"></div>
+
+<!-- Theme Banner -->
+<div class="theme-banner">Theme 27: Cyberpunk Hyperdrive<span>— Cyberpunk Neon with matrix rain, glitch, radar sweep, ticker, scanline sweep, animated borders</span></div>
+
+<!-- Data Ticker -->
+<div class="ticker">
+  <div class="ticker-label">▮ FEED</div>
+  <div class="ticker-track">
+    <div class="ticker-content">
+      <span class="ok">[SYS]</span><span>uplink stable</span><span class="sep">·</span>
+      <span class="ok">[NET]</span><span>9 agents online</span><span class="sep">·</span>
+      <span class="alert">[WARN]</span><span>REQ-A1B2C3 entering review cycle</span><span class="sep">·</span>
+      <span>CPU 34%</span><span class="sep">·</span><span>MEM 2.1GB</span><span class="sep">·</span>
+      <span class="ok">[OK]</span><span>github push origin/main +3 commits</span><span class="sep">·</span>
+      <span class="warn">[INFO]</span><span>supervisor heartbeat 200ms</span><span class="sep">·</span>
+      <span class="ok">[OK]</span><span>token budget 18% used today</span><span class="sep">·</span>
+      <span class="alert">[CRIT]</span><span>connection 0xDEADBEEF re-established</span><span class="sep">·</span>
+      <span class="ok">[SYS]</span><span>claude-opus-4-7 ready</span><span class="sep">·</span>
+    </div>
+  </div>
+</div>
+
+<!-- Radar -->
+<div class="radar">
+  <div class="radar-blip b1"></div>
+  <div class="radar-blip b2"></div>
+  <div class="radar-blip b3"></div>
+</div>
+
+<!-- Sidebar -->
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="icon">A</div>
+    AGENT/TEAM
+  </div>
+  <div class="nav-items">
+    <div class="nav-item active"><span class="nav-icon">&#9678;</span> Command</div>
+    <div class="nav-item"><span class="nav-icon">&#8634;</span> History</div>
+    <div class="nav-item"><span class="nav-icon">&#9881;</span> Releases</div>
+    <div class="nav-item"><span class="nav-icon">&#9823;</span> Team</div>
+    <div class="nav-item"><span class="nav-icon">&#36;</span> Cost</div>
+  </div>
+
+  <div class="sidebar-term">
+    <span class="ln">connect --grid mainframe</span>
+    <span class="ln">auth: ok · latency 12ms</span>
+    <span class="ln">agents: 9 online</span>
+    <span class="ln cursor">await req_</span>
+  </div>
+
+  <div class="sidebar-user">
+    <div class="avatar">CL</div>
+    <div class="user-info">
+      <div class="user-name">Claude</div>
+      <div class="user-role">[ROOT]</div>
+    </div>
+  </div>
+</nav>
+
+<!-- Main -->
+<main class="main">
+  <div class="main-header">
+    <h1 class="glitch-title" data-text="> Command_Center_"><span class="prompt">&gt; </span>Command_Center<span class="cursor">_</span></h1>
+    <div class="notification-bell">
+      <span class="bell-icon">&#128276;</span>
+      <span class="badge">3</span>
+    </div>
+  </div>
+
+  <div class="request-input">
+    <textarea placeholder="// describe the task to dispatch to the agent grid…"></textarea>
+    <div class="input-controls">
+      <select class="type-select">
+        <option>Feature</option>
+        <option>Bug Fix</option>
+        <option>Refactor</option>
+        <option>Docs</option>
+      </select>
+      <div class="priority-pills">
+        <button class="priority-pill">Low</button>
+        <button class="priority-pill selected">Medium</button>
+        <button class="priority-pill">High</button>
+        <button class="priority-pill">Critical</button>
+      </div>
+      <button class="submit-btn"><span class="submit-btn-text">Dispatch</span></button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title" data-idx="01">Active_Stream <span class="section-meta">· <span class="live">●</span> LIVE · 2 procs</span></div>
+    <div class="request-card">
+      <div class="card-row">
+        <div class="status-dot in-progress"></div>
+        <div class="card-content">
+          <div class="card-top">
+            <span class="request-id">REQ-A1B2C3</span>
+            <span class="card-eta">eta 04:21 · <span class="live">●</span> running</span>
+          </div>
+          <div class="card-title">Build login page with JWT authentication</div>
+        </div>
+        <div class="card-meta">
+          <span class="pill pill-status">in_progress</span>
+          <span class="pill pill-type">feature</span>
+          <span class="pill pill-priority-high">high</span>
+        </div>
+      </div>
+      <div class="progress"><div class="progress-bar pink"></div></div>
+    </div>
+    <div class="request-card">
+      <div class="card-row">
+        <div class="status-dot analyzing"></div>
+        <div class="card-content">
+          <div class="card-top">
+            <span class="request-id">REQ-D4E5F6</span>
+            <span class="card-eta">eta 08:46 · <span class="live">●</span> analyzing</span>
+          </div>
+          <div class="card-title">Add dark mode support</div>
+        </div>
+        <div class="card-meta">
+          <span class="pill pill-status analyzing">analyzing</span>
+          <span class="pill pill-type">feature</span>
+          <span class="pill pill-priority-medium">medium</span>
+        </div>
+      </div>
+      <div class="progress"><div class="progress-bar cyan"></div></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title" data-idx="02">Archive <span class="section-meta">· 3 of 42 today</span></div>
+    <div class="completed-list">
+      <div class="completed-row">
+        <span class="request-id">REQ-001</span>
+        <span class="card-title">Fix image upload timeout</span>
+        <span class="pill pill-status completed" style="margin-left:auto;">completed</span>
+      </div>
+      <div class="completed-row">
+        <span class="request-id">REQ-002</span>
+        <span class="card-title">Update API docs</span>
+        <span class="pill pill-status completed" style="margin-left:auto;">completed</span>
+      </div>
+      <div class="completed-row">
+        <span class="request-id">REQ-003</span>
+        <span class="card-title">Setup CI/CD pipeline</span>
+        <span class="pill pill-status completed" style="margin-left:auto;">completed</span>
+      </div>
+    </div>
+  </div>
+</main>
+
+</body>
+</html>

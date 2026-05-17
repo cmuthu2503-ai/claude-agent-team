@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team Command Center — Aurora Mesh Theme</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #ffffff; display: flex; height: 100vh; overflow: hidden; position: relative; -webkit-font-smoothing: antialiased;
+    background: #0a0420;
+  }
+  /* Mesh aurora background */
+  body::before { content: ''; position: fixed; inset: 0; z-index: -2;
+    background:
+      radial-gradient(ellipse 80% 60% at 15% 20%, rgba(255, 0, 110, 0.55), transparent 60%),
+      radial-gradient(ellipse 70% 50% at 85% 10%, rgba(131, 56, 236, 0.65), transparent 60%),
+      radial-gradient(ellipse 90% 70% at 50% 80%, rgba(58, 134, 255, 0.5), transparent 60%),
+      radial-gradient(ellipse 60% 50% at 90% 90%, rgba(6, 255, 165, 0.35), transparent 60%),
+      linear-gradient(135deg, #0a0420, #1a0633);
+    filter: saturate(1.1);
+  }
+  body::after { content: ''; position: fixed; inset: 0; z-index: -1; backdrop-filter: blur(60px); background: rgba(10, 4, 32, 0.15); }
+
+  /* Theme Banner */
+  .theme-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: rgba(255,255,255,0.08); backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255,255,255,0.1); color: #fff; text-align: center; padding: 8px 0; font-size: 13px; font-weight: 500; letter-spacing: 0.2px; }
+  .theme-banner span { opacity: 0.7; font-weight: 400; margin-left: 8px; }
+
+  /* Glass utility */
+  .glass { background: rgba(255,255,255,0.07); backdrop-filter: blur(24px) saturate(1.4); -webkit-backdrop-filter: blur(24px) saturate(1.4); border: 1px solid rgba(255,255,255,0.12); }
+
+  /* Sidebar */
+  .sidebar { width: 240px; padding: 50px 12px 12px; display: flex; flex-direction: column; flex-shrink: 0; }
+  .sidebar-inner { flex: 1; display: flex; flex-direction: column; padding: 16px 8px; border-radius: 24px; background: rgba(255,255,255,0.06); backdrop-filter: blur(24px); border: 1px solid rgba(255,255,255,0.1); }
+  .sidebar-logo { padding: 12px 14px 24px; font-size: 16px; font-weight: 600; letter-spacing: -0.3px; display: flex; align-items: center; gap: 12px; }
+  .sidebar-logo .icon { width: 32px; height: 32px; background: linear-gradient(135deg, #ff006e, #8338ec); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; box-shadow: 0 4px 20px rgba(255, 0, 110, 0.4); }
+  .nav-items { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+  .nav-item { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: 14px; font-size: 14px; color: rgba(255,255,255,0.6); cursor: pointer; transition: all 0.2s; font-weight: 500; }
+  .nav-item:hover { background: rgba(255,255,255,0.06); color: #fff; }
+  .nav-item.active { background: rgba(255,255,255,0.15); color: #fff; box-shadow: 0 4px 20px rgba(255, 0, 110, 0.2); }
+  .nav-item .nav-icon { width: 18px; text-align: center; font-size: 15px; }
+  .sidebar-user { padding: 14px; margin-top: 8px; display: flex; align-items: center; gap: 12px; background: rgba(255,255,255,0.08); border-radius: 14px; border: 1px solid rgba(255,255,255,0.08); }
+  .avatar { width: 34px; height: 34px; background: linear-gradient(135deg, #06ffa5, #3a86ff); border-radius: 11px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; }
+  .sidebar-user .user-name { color: #fff; font-weight: 600; font-size: 13px; }
+  .sidebar-user .user-role { color: rgba(255,255,255,0.5); font-size: 11px; }
+
+  /* Main */
+  .main { flex: 1; padding: 50px 24px 24px; overflow-y: auto; }
+  .main-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 8px 28px; }
+  .main-header h1 { font-size: 32px; font-weight: 700; letter-spacing: -1px; background: linear-gradient(90deg, #fff, rgba(255,255,255,0.7)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+  .notification-bell { position: relative; cursor: pointer; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: 14px; background: rgba(255,255,255,0.08); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.12); transition: all 0.15s; }
+  .notification-bell:hover { background: rgba(255,255,255,0.14); }
+  .notification-bell .bell-icon { font-size: 17px; }
+  .notification-bell .badge { position: absolute; top: -4px; right: -4px; background: linear-gradient(135deg, #ff006e, #ff4090); color: #fff; font-size: 10px; font-weight: 700; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 12px rgba(255, 0, 110, 0.5); }
+
+  /* Request Input */
+  .request-input { margin: 0 8px 24px; padding: 22px; border-radius: 20px; background: rgba(255,255,255,0.07); backdrop-filter: blur(24px) saturate(1.4); border: 1px solid rgba(255,255,255,0.12); }
+  .request-input textarea { width: 100%; background: rgba(0,0,0,0.15); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; color: #fff; padding: 14px 16px; font-size: 15px; font-family: inherit; resize: none; height: 80px; outline: none; transition: border-color 0.2s; }
+  .request-input textarea::placeholder { color: rgba(255,255,255,0.4); }
+  .request-input textarea:focus { border-color: rgba(255, 0, 110, 0.5); box-shadow: 0 0 0 3px rgba(255, 0, 110, 0.1); }
+  .input-controls { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+  .type-select { background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; color: rgba(255,255,255,0.8); padding: 8px 14px; font-size: 13px; font-family: inherit; outline: none; cursor: pointer; }
+  .priority-pills { display: flex; gap: 6px; }
+  .priority-pill { padding: 7px 16px; border-radius: 10px; font-size: 12px; font-weight: 500; border: 1px solid rgba(255,255,255,0.12); background: transparent; color: rgba(255,255,255,0.6); cursor: pointer; transition: all 0.15s; }
+  .priority-pill:hover { background: rgba(255,255,255,0.06); color: #fff; }
+  .priority-pill.selected { background: linear-gradient(135deg, #ff006e, #8338ec); border-color: transparent; color: #fff; box-shadow: 0 4px 20px rgba(255, 0, 110, 0.3); }
+  .submit-btn { margin-left: auto; background: linear-gradient(135deg, #ff006e, #8338ec); color: #fff; border: none; padding: 10px 26px; border-radius: 12px; font-size: 14px; font-weight: 600; cursor: pointer; transition: transform 0.15s; font-family: inherit; box-shadow: 0 4px 24px rgba(255, 0, 110, 0.4); }
+  .submit-btn:hover { transform: translateY(-1px); }
+
+  /* Section */
+  .section { margin: 0 8px 24px; }
+  .section-title { font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 14px; padding: 0 4px; }
+
+  /* Request Cards */
+  .request-card { background: rgba(255,255,255,0.07); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 16px 20px; margin-bottom: 10px; display: flex; align-items: center; gap: 14px; transition: all 0.15s; }
+  .request-card:hover { background: rgba(255,255,255,0.12); transform: translateX(2px); }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .status-dot.in-progress { background: #ff006e; box-shadow: 0 0 12px #ff006e; animation: pulse 2s ease-in-out infinite; }
+  .status-dot.analyzing { background: #8338ec; box-shadow: 0 0 12px #8338ec; animation: pulse 2.5s ease-in-out infinite; }
+  .status-dot.completed { background: #06ffa5; box-shadow: 0 0 10px #06ffa5; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .card-content { flex: 1; min-width: 0; }
+  .card-top { display: flex; align-items: center; gap: 10px; margin-bottom: 3px; }
+  .request-id { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; color: rgba(255,255,255,0.5); }
+  .card-title { font-size: 14px; color: #fff; font-weight: 500; }
+  .card-meta { display: flex; gap: 6px; flex-shrink: 0; }
+  .pill { padding: 4px 12px; border-radius: 8px; font-size: 11px; font-weight: 600; }
+  .pill-status { background: rgba(255, 0, 110, 0.2); color: #ff6ea3; border: 1px solid rgba(255, 0, 110, 0.3); }
+  .pill-status.analyzing { background: rgba(131, 56, 236, 0.2); color: #b18aff; border: 1px solid rgba(131, 56, 236, 0.3); }
+  .pill-status.completed { background: rgba(6, 255, 165, 0.15); color: #06ffa5; border: 1px solid rgba(6, 255, 165, 0.3); }
+  .pill-type { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.7); }
+  .pill-priority-high { background: rgba(255, 0, 110, 0.15); color: #ff6ea3; }
+  .pill-priority-medium { background: rgba(58, 134, 255, 0.15); color: #6ea7ff; }
+
+  /* Completed */
+  .completed-list { background: rgba(255,255,255,0.05); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; overflow: hidden; }
+  .completed-row { display: flex; align-items: center; gap: 14px; padding: 13px 20px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .completed-row:last-child { border-bottom: none; }
+  .completed-row:hover { background: rgba(255,255,255,0.04); }
+  .completed-row .card-title { font-size: 13px; color: rgba(255,255,255,0.75); }
+  .completed-row .request-id { font-size: 11px; }
+</style>
+</head>
+<body>
+
+<div class="theme-banner">Theme 18: Aurora Mesh<span>— Vibrant mesh gradients, frosted glass cards, glowing accents (2026 trend)</span></div>
+
+<nav class="sidebar">
+  <div class="sidebar-inner">
+    <div class="sidebar-logo">
+      <div class="icon">A</div>
+      Agent Team
+    </div>
+    <div class="nav-items">
+      <div class="nav-item active"><span class="nav-icon">&#9678;</span> Command Center</div>
+      <div class="nav-item"><span class="nav-icon">&#8634;</span> History</div>
+      <div class="nav-item"><span class="nav-icon">&#9881;</span> Releases</div>
+      <div class="nav-item"><span class="nav-icon">&#9823;</span> Team</div>
+      <div class="nav-item"><span class="nav-icon">&#36;</span> Cost</div>
+    </div>
+    <div class="sidebar-user">
+      <div class="avatar">CL</div>
+      <div class="user-info">
+        <div class="user-name">Claude</div>
+        <div class="user-role">Admin</div>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<main class="main">
+  <div class="main-header">
+    <h1>Command Center</h1>
+    <div class="notification-bell">
+      <span class="bell-icon">&#128276;</span>
+      <span class="badge">3</span>
+    </div>
+  </div>
+
+  <div class="request-input">
+    <textarea placeholder="Describe what you want the agent team to build…"></textarea>
+    <div class="input-controls">
+      <select class="type-select">
+        <option>Feature</option>
+        <option>Bug Fix</option>
+        <option>Refactor</option>
+        <option>Docs</option>
+      </select>
+      <div class="priority-pills">
+        <button class="priority-pill">Low</button>
+        <button class="priority-pill selected">Medium</button>
+        <button class="priority-pill">High</button>
+        <button class="priority-pill">Critical</button>
+      </div>
+      <button class="submit-btn">Submit Request</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Active Requests</div>
+    <div class="request-card">
+      <div class="status-dot in-progress"></div>
+      <div class="card-content">
+        <div class="card-top"><span class="request-id">REQ-A1B2C3</span></div>
+        <div class="card-title">Build login page with JWT authentication</div>
+      </div>
+      <div class="card-meta">
+        <span class="pill pill-status">in_progress</span>
+        <span class="pill pill-type">feature</span>
+        <span class="pill pill-priority-high">high</span>
+      </div>
+    </div>
+    <div class="request-card">
+      <div class="status-dot analyzing"></div>
+      <div class="card-content">
+        <div class="card-top"><span class="request-id">REQ-D4E5F6</span></div>
+        <div class="card-title">Add dark mode support</div>
+      </div>
+      <div class="card-meta">
+        <span class="pill pill-status analyzing">analyzing</span>
+        <span class="pill pill-type">feature</span>
+        <span class="pill pill-priority-medium">medium</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Completed</div>
+    <div class="completed-list">
+      <div class="completed-row">
+        <div class="status-dot completed"></div>
+        <span class="request-id">REQ-001</span>
+        <span class="card-title">Fix image upload timeout</span>
+        <span class="pill pill-status completed" style="margin-left:auto;">completed</span>
+      </div>
+      <div class="completed-row">
+        <div class="status-dot completed"></div>
+        <span class="request-id">REQ-002</span>
+        <span class="card-title">Update API docs</span>
+        <span class="pill pill-status completed" style="margin-left:auto;">completed</span>
+      </div>
+      <div class="completed-row">
+        <div class="status-dot completed"></div>
+        <span class="request-id">REQ-003</span>
+        <span class="card-title">Setup CI/CD pipeline</span>
+        <span class="pill pill-status completed" style="margin-left:auto;">completed</span>
+      </div>
+    </div>
+  </div>
+</main>
+
+</body>
+</html>

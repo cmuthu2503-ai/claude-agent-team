@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team Command Center — Calm Tech Theme</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', 'Söhne', -apple-system, BlinkMacSystemFont, sans-serif; background: #faf6f1; color: #2d2a26; display: flex; height: 100vh; overflow: hidden; -webkit-font-smoothing: antialiased; }
+
+  /* Theme Banner */
+  .theme-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: #2d2a26; color: #faf6f1; text-align: center; padding: 8px 0; font-size: 13px; font-weight: 500; letter-spacing: 0.3px; }
+  .theme-banner span { opacity: 0.65; font-weight: 400; margin-left: 8px; font-style: italic; }
+
+  /* Sidebar */
+  .sidebar { width: 244px; background: #f4ede2; border-right: 1px solid #e8dfd0; display: flex; flex-direction: column; padding-top: 50px; flex-shrink: 0; }
+  .sidebar-logo { padding: 24px 22px 32px; font-family: 'Fraunces', 'Playfair Display', Georgia, serif; font-size: 22px; font-weight: 600; letter-spacing: -0.6px; color: #2d2a26; display: flex; align-items: center; gap: 12px; }
+  .sidebar-logo .icon { width: 34px; height: 34px; background: #c4756d; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; color: #faf6f1; font-family: 'Inter', sans-serif; }
+  .nav-items { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 0 14px; }
+  .nav-item { display: flex; align-items: center; gap: 14px; padding: 11px 14px; border-radius: 4px; font-size: 14px; color: #8a857e; cursor: pointer; transition: color 0.2s, background 0.2s; font-weight: 500; }
+  .nav-item:hover { color: #2d2a26; background: #ede4d3; }
+  .nav-item.active { color: #2d2a26; background: #e8dfd0; }
+  .nav-item.active::before { content: '— '; color: #c4756d; font-weight: 700; }
+  .nav-item .nav-icon { width: 18px; text-align: center; font-size: 15px; opacity: 0.7; }
+  .sidebar-user { padding: 18px 22px; border-top: 1px solid #e8dfd0; display: flex; align-items: center; gap: 12px; }
+  .avatar { width: 36px; height: 36px; background: #7d9b76; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; color: #faf6f1; }
+  .sidebar-user .user-name { color: #2d2a26; font-weight: 600; font-size: 13px; }
+  .sidebar-user .user-role { color: #8a857e; font-size: 11px; font-style: italic; }
+
+  /* Main */
+  .main { flex: 1; background: #faf6f1; padding-top: 50px; overflow-y: auto; }
+  .main-header { display: flex; align-items: baseline; justify-content: space-between; padding: 36px 44px 8px; border-bottom: 1px solid #ede4d3; margin: 0 44px 0 44px; padding-left: 0; padding-right: 0; }
+  .main-header h1 { font-family: 'Fraunces', 'Playfair Display', Georgia, serif; font-size: 38px; font-weight: 500; letter-spacing: -1.2px; color: #2d2a26; }
+  .main-header h1 em { font-style: italic; color: #c4756d; font-weight: 400; }
+  .notification-bell { position: relative; cursor: pointer; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: #f4ede2; border: 1px solid #e8dfd0; transition: all 0.15s; align-self: center; }
+  .notification-bell:hover { background: #ede4d3; }
+  .notification-bell .bell-icon { font-size: 16px; }
+  .notification-bell .badge { position: absolute; top: -2px; right: -2px; background: #c4756d; color: #faf6f1; font-size: 10px; font-weight: 600; width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid #faf6f1; }
+
+  /* Request Input */
+  .request-input { margin: 28px 44px 0; padding: 26px 28px; background: #ffffff; border: 1px solid #e8dfd0; border-radius: 6px; box-shadow: 0 1px 2px rgba(45, 42, 38, 0.04); }
+  .request-input .label { font-family: 'Fraunces', serif; font-size: 14px; font-style: italic; color: #8a857e; margin-bottom: 14px; letter-spacing: 0.2px; }
+  .request-input textarea { width: 100%; background: #faf6f1; border: 1px solid #ede4d3; border-radius: 4px; color: #2d2a26; padding: 14px 16px; font-size: 15px; font-family: inherit; resize: none; height: 80px; outline: none; transition: border-color 0.2s; line-height: 1.5; }
+  .request-input textarea::placeholder { color: #b0a99e; font-style: italic; }
+  .request-input textarea:focus { border-color: #c4756d; }
+  .input-controls { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
+  .type-select { background: #faf6f1; border: 1px solid #ede4d3; border-radius: 4px; color: #5a544c; padding: 8px 14px; font-size: 13px; font-family: inherit; outline: none; cursor: pointer; font-weight: 500; }
+  .priority-pills { display: flex; gap: 4px; }
+  .priority-pill { padding: 7px 16px; border-radius: 4px; font-size: 12px; font-weight: 500; border: 1px solid #ede4d3; background: transparent; color: #8a857e; cursor: pointer; transition: all 0.15s; letter-spacing: 0.2px; }
+  .priority-pill:hover { border-color: #c4756d; color: #c4756d; }
+  .priority-pill.selected { border-color: #c4756d; background: #c4756d; color: #faf6f1; }
+  .submit-btn { margin-left: auto; background: #2d2a26; color: #faf6f1; border: none; padding: 10px 26px; border-radius: 4px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s; font-family: inherit; letter-spacing: 0.3px; }
+  .submit-btn:hover { background: #c4756d; }
+
+  /* Section */
+  .section { margin: 36px 44px 0; }
+  .section-title { font-family: 'Fraunces', serif; font-size: 13px; font-weight: 500; color: #8a857e; font-style: italic; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid #ede4d3; letter-spacing: 0.2px; }
+  .section-title::before { content: '§ '; color: #c4756d; font-style: normal; font-weight: 700; }
+
+  /* Request Cards */
+  .request-card { background: #ffffff; border: 1px solid #e8dfd0; border-radius: 6px; padding: 18px 22px; margin-bottom: 10px; display: flex; align-items: center; gap: 16px; transition: border-color 0.15s; box-shadow: 0 1px 2px rgba(45, 42, 38, 0.03); }
+  .request-card:hover { border-color: #d4a574; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .status-dot.in-progress { background: #c4756d; animation: pulse 2.5s ease-in-out infinite; }
+  .status-dot.analyzing { background: #d4a574; animation: pulse 3s ease-in-out infinite; }
+  .status-dot.completed { background: #7d9b76; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+  .card-content { flex: 1; min-width: 0; }
+  .card-top { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+  .request-id { font-family: 'JetBrains Mono', 'Courier New', monospace; font-size: 11px; color: #b0a99e; letter-spacing: 0.5px; }
+  .card-title { font-size: 14px; color: #2d2a26; font-weight: 500; line-height: 1.4; }
+  .card-meta { display: flex; gap: 6px; flex-shrink: 0; }
+  .pill { padding: 4px 12px; border-radius: 3px; font-size: 11px; font-weight: 500; letter-spacing: 0.3px; }
+  .pill-status { background: #f3e0dd; color: #c4756d; }
+  .pill-status.analyzing { background: #f4e8d4; color: #b88847; }
+  .pill-status.completed { background: #e6ede2; color: #7d9b76; }
+  .pill-type { background: #f4ede2; color: #8a857e; font-style: italic; }
+  .pill-priority-high { background: #f3e0dd; color: #c4756d; }
+  .pill-priority-medium { background: #f4e8d4; color: #b88847; }
+
+  /* Completed */
+  .completed-list { background: #ffffff; border: 1px solid #e8dfd0; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 2px rgba(45, 42, 38, 0.03); }
+  .completed-row { display: flex; align-items: center; gap: 16px; padding: 14px 22px; border-bottom: 1px solid #f4ede2; }
+  .completed-row:last-child { border-bottom: none; }
+  .completed-row:hover { background: #faf6f1; }
+  .completed-row .card-title { font-size: 13px; color: #5a544c; }
+</style>
+</head>
+<body>
+
+<div class="theme-banner">Theme 21: Calm Tech<span>— Warm cream palette, serif headers, soft sage/clay accents (post-burnout aesthetic, 2026 trend)</span></div>
+
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="icon">A</div>
+    Agent Team
+  </div>
+  <div class="nav-items">
+    <div class="nav-item active"><span class="nav-icon">&#9678;</span> Command Center</div>
+    <div class="nav-item"><span class="nav-icon">&#8634;</span> History</div>
+    <div class="nav-item"><span class="nav-icon">&#9881;</span> Releases</div>
+    <div class="nav-item"><span class="nav-icon">&#9823;</span> Team</div>
+    <div class="nav-item"><span class="nav-icon">&#36;</span> Cost</div>
+  </div>
+  <div class="sidebar-user">
+    <div class="avatar">CL</div>
+    <div class="user-info">
+      <div class="user-name">Claude</div>
+      <div class="user-role">Admin</div>
+    </div>
+  </div>
+</nav>
+
+<main class="main">
+  <div class="main-header">
+    <h1>Command <em>Center</em></h1>
+    <div class="notification-bell">
+      <span class="bell-icon">&#128276;</span>
+      <span class="badge">3</span>
+    </div>
+  </div>
+
+  <div class="request-input">
+    <div class="label">A new request, considered carefully</div>
+    <textarea placeholder="Describe what you want the agent team to build…"></textarea>
+    <div class="input-controls">
+      <select class="type-select">
+        <option>Feature</option>
+        <option>Bug Fix</option>
+        <option>Refactor</option>
+        <option>Docs</option>
+      </select>
+      <div class="priority-pills">
+        <button class="priority-pill">Low</button>
+        <button class="priority-pill selected">Medium</button>
+        <button class="priority-pill">High</button>
+        <button class="priority-pill">Critical</button>
+      </div>
+      <button class="submit-btn">Submit Request</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Active Requests</div>
+    <div class="request-card">
+      <div class="status-dot in-progress"></div>
+      <div class="card-content">
+        <div class="card-top"><span class="request-id">REQ-A1B2C3</span></div>
+        <div class="card-title">Build login page with JWT authentication</div>
+      </div>
+      <div class="card-meta">
+        <span class="pill pill-status">in_progress</span>
+        <span class="pill pill-type">feature</span>
+        <span class="pill pill-priority-high">high</span>
+      </div>
+    </div>
+    <div class="request-card">
+      <div class="status-dot analyzing"></div>
+      <div class="card-content">
+        <div class="card-top"><span class="request-id">REQ-D4E5F6</span></div>
+        <div class="card-title">Add dark mode support</div>
+      </div>
+      <div class="card-meta">
+        <span class="pill pill-status analyzing">analyzing</span>
+        <span class="pill pill-type">feature</span>
+        <span class="pill pill-priority-medium">medium</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Completed</div>
+    <div class="completed-list">
+      <div class="completed-row">
+        <div class="status-dot completed"></div>
+        <span class="request-id">REQ-001</span>
+        <span class="card-title">Fix image upload timeout</span>
+        <span class="pill pill-status completed" style="margin-left:auto;">completed</span>
+      </div>
+      <div class="completed-row">
+        <div class="status-dot completed"></div>
+        <span class="request-id">REQ-002</span>
+        <span class="card-title">Update API docs</span>
+        <span class="pill pill-status completed" style="margin-left:auto;">completed</span>
+      </div>
+      <div class="completed-row">
+        <div class="status-dot completed"></div>
+        <span class="request-id">REQ-003</span>
+        <span class="card-title">Setup CI/CD pipeline</span>
+        <span class="pill pill-status completed" style="margin-left:auto;">completed</span>
+      </div>
+    </div>
+  </div>
+</main>
+
+</body>
+</html>

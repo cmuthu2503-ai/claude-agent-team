@@ -1557,5 +1557,5 @@ class WeeklyReportGenerator:
 - `C:/ai-projects/claude-agent-team/docs/architecture.md` - Core architecture defining agent hierarchy, workflow DAGs, tool permissions, and state management that all three feature areas must integrate with
 - `C:/ai-projects/claude-agent-team/docs/agent-invocation-design.md` - Defines the orchestrator execution model, agent tool-use loop, artifact passing, and failure handling that GitHub integration and notifications hook into
 - `C:/ai-projects/claude-agent-team/docs/ui-design.md` - Defines the 5-screen UI, WebSocket events, component library, color system, and API surface that notifications/error UX must extend
-- `C:/ai-projects/claude-agent-team/docs/prd-template.md` - Contains the GitHub integration requirements (GH-001 through IT-005), deployment task stages, demo requirements, and weekly report format that these designs implement
+- `C:/ai-projects/claude-agent-team/docs/prd.md` - Contains the GitHub integration requirements (GH-001 through IT-005), deployment task stages, demo requirements, and weekly report format that these designs implement
 - `C:/ai-projects/claude-agent-team/docs/ui-mockups.md` - Contains the three UI design versions (Chat/Dashboard/Terminal) whose patterns the notification bell, toast, and error states must match for visual consistency

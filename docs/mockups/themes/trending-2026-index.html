@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>10 Trending Theme Designs — 2026</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f12; color: #e8e8ed; min-height: 100vh; -webkit-font-smoothing: antialiased; }
+
+  .hero { padding: 80px 60px 56px; max-width: 1320px; margin: 0 auto; }
+  .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 2px; color: #ff7849; text-transform: uppercase; margin-bottom: 16px; }
+  .hero h1 { font-size: 56px; font-weight: 700; letter-spacing: -1.8px; line-height: 1.05; margin-bottom: 20px; background: linear-gradient(135deg, #fff 0%, #b0b0c0 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; max-width: 900px; }
+  .hero p { font-size: 18px; color: #8a8aa0; max-width: 740px; line-height: 1.55; }
+  .hero p code { background: #1a1a22; padding: 2px 8px; border-radius: 4px; color: #ffb088; font-size: 14px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; padding: 0 60px 80px; max-width: 1320px; margin: 0 auto; }
+
+  .card { background: #16161c; border: 1px solid #25252e; border-radius: 16px; padding: 26px; transition: all 0.25s ease; text-decoration: none; color: inherit; display: flex; flex-direction: column; position: relative; overflow: hidden; }
+  .card:hover { transform: translateY(-3px); border-color: #3a3a48; }
+
+  .card .preview { height: 170px; margin: -26px -26px 22px; position: relative; overflow: hidden; }
+
+  /* Preview 1 — Bento */
+  .preview-bento { background: #f5f5f7; display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: 1fr 1fr; gap: 8px; padding: 14px; }
+  .preview-bento > div { background: #fff; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+  .preview-bento .pb-wide { grid-column: span 4; background: linear-gradient(135deg, #1d1d1f, #2d2d30); }
+  .preview-bento .pb-stat:nth-child(2) { background: linear-gradient(135deg, #e3f2ff, #fff); }
+  .preview-bento .pb-stat:nth-child(3) { background: linear-gradient(135deg, #fff3e6, #fff); }
+  .preview-bento .pb-stat:nth-child(4) { background: linear-gradient(135deg, #e8f9f0, #fff); }
+  .preview-bento .pb-stat:nth-child(5) { background: linear-gradient(135deg, #f3e8ff, #fff); }
+
+  /* Preview 2 — Aurora */
+  .preview-aurora { background:
+    radial-gradient(ellipse 80% 60% at 15% 20%, rgba(255, 0, 110, 0.7), transparent 60%),
+    radial-gradient(ellipse 70% 50% at 85% 10%, rgba(131, 56, 236, 0.8), transparent 60%),
+    radial-gradient(ellipse 90% 70% at 50% 80%, rgba(58, 134, 255, 0.6), transparent 60%),
+    radial-gradient(ellipse 60% 50% at 90% 90%, rgba(6, 255, 165, 0.4), transparent 60%),
+    linear-gradient(135deg, #0a0420, #1a0633);
+    position: relative; }
+  .preview-aurora::after { content: ''; position: absolute; inset: 28px 36px; border-radius: 12px; background: rgba(255,255,255,0.1); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.15); }
+
+  /* Preview 3 — Claymorphism */
+  .preview-clay { background: #eaeefe; display: flex; align-items: center; justify-content: center; gap: 12px; }
+  .preview-clay > div { border-radius: 18px; }
+  .preview-clay .pc-1 { width: 56px; height: 56px; background: linear-gradient(135deg, #6e7bff, #8b95ff); box-shadow: -3px -3px 8px rgba(255,255,255,0.4) inset, 5px 5px 14px rgba(78, 90, 200, 0.4); }
+  .preview-clay .pc-2 { width: 86px; height: 86px; background: linear-gradient(135deg, #ff7eb6, #ffaa64); box-shadow: -3px -3px 8px rgba(255,255,255,0.4) inset, 5px 5px 14px rgba(200, 100, 130, 0.4); }
+  .preview-clay .pc-3 { width: 56px; height: 56px; background: linear-gradient(135deg, #6bd6a4, #4cc486); box-shadow: -3px -3px 8px rgba(255,255,255,0.4) inset, 5px 5px 14px rgba(60, 180, 120, 0.4); }
+
+  /* Preview 4 — AI Spatial */
+  .preview-ai { background: #0a0a0f; position: relative; overflow: hidden; }
+  .preview-ai::before { content: ''; position: absolute; inset: 0;
+    background:
+      radial-gradient(circle at 20% 30%, rgba(255, 120, 73, 0.3), transparent 50%),
+      radial-gradient(circle at 80% 80%, rgba(99, 102, 241, 0.2), transparent 50%); }
+  .preview-ai::after { content: ''; position: absolute; inset: 0; opacity: 0.5;
+    background-image: radial-gradient(circle, rgba(255,255,255,0.08) 1px, transparent 1px);
+    background-size: 18px 18px; }
+  .preview-ai-orb { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 76px; height: 76px; border-radius: 50%; background: radial-gradient(circle, #ff7849, #ec4899); box-shadow: 0 0 60px rgba(255, 120, 73, 0.6), 0 0 120px rgba(236, 72, 153, 0.3); z-index: 1; }
+
+  /* Preview 5 — Calm Tech */
+  .preview-calm { background: #faf6f1; display: flex; flex-direction: column; padding: 20px 26px; justify-content: center; gap: 8px; }
+  .preview-calm .pcal-head { font-family: 'Fraunces', Georgia, serif; font-size: 24px; font-weight: 500; color: #2d2a26; letter-spacing: -0.6px; }
+  .preview-calm .pcal-head em { color: #c4756d; font-style: italic; font-weight: 400; }
+  .preview-calm .pcal-card { background: #fff; border: 1px solid #e8dfd0; border-radius: 4px; padding: 9px 12px; font-size: 10px; color: #5a544c; display: flex; align-items: center; gap: 10px; }
+  .preview-calm .pcal-dot { width: 7px; height: 7px; background: #c4756d; border-radius: 50%; flex-shrink: 0; }
+
+  /* Preview 6 — Liquid Glass */
+  .preview-glass { position: relative;
+    background:
+      radial-gradient(ellipse 70% 50% at 20% 30%, rgba(255, 182, 193, 0.9), transparent 60%),
+      radial-gradient(ellipse 60% 70% at 80% 20%, rgba(173, 216, 255, 0.9), transparent 60%),
+      radial-gradient(ellipse 80% 60% at 60% 80%, rgba(216, 191, 255, 0.8), transparent 60%),
+      linear-gradient(135deg, #fef7f0, #f0f4ff);
+  }
+  .preview-glass::before { content: ''; position: absolute; inset: 22px 36px 60px; border-radius: 16px; background: rgba(255,255,255,0.5); backdrop-filter: blur(30px) saturate(1.8); border: 1px solid rgba(255,255,255,0.6); box-shadow: inset 0 1px 0 rgba(255,255,255,0.8), 0 8px 24px rgba(31,38,135,0.1); }
+  .preview-glass::after { content: ''; position: absolute; left: 30%; right: 30%; bottom: 22px; height: 28px; border-radius: 10px; background: rgba(255,255,255,0.4); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.5); }
+
+  /* Preview 7 — Editorial */
+  .preview-editorial { background: #f9f6f0; display: flex; flex-direction: column; padding: 22px 28px; justify-content: center; gap: 4px; position: relative; }
+  .preview-editorial::before { content: 'EST. MMXXVI'; font-family: 'Inter', sans-serif; font-size: 9px; letter-spacing: 3px; color: #c8200a; font-weight: 700; }
+  .preview-editorial .ped-h { font-family: 'Playfair Display', 'Didot', Georgia, serif; font-size: 32px; font-weight: 900; color: #1a1a1a; letter-spacing: -1.5px; line-height: 0.9; margin-top: 2px; }
+  .preview-editorial .ped-h em { font-style: italic; font-weight: 400; color: #c8200a; }
+  .preview-editorial .ped-rule { height: 3px; background: #1a1a1a; margin: 6px 0; border-bottom: 1px solid #1a1a1a; border-top: 1px solid #1a1a1a; padding: 1px 0; }
+  .preview-editorial .ped-sub { font-family: Georgia, serif; font-size: 11px; font-style: italic; color: #6b5d4f; }
+
+  /* Preview 8 — Memphis */
+  .preview-memphis { background: #f5f1e8; position: relative; display: flex; align-items: center; justify-content: center; }
+  .preview-memphis .pm-square { width: 50px; height: 50px; background: #ffd93d; border: 3px solid #0a0a0a; box-shadow: 5px 5px 0 #0a0a0a; transform: rotate(-5deg); }
+  .preview-memphis .pm-circle { width: 50px; height: 50px; background: #ff4d4d; border: 3px solid #0a0a0a; border-radius: 50%; box-shadow: 5px 5px 0 #0a0a0a; margin: 0 14px; }
+  .preview-memphis .pm-triangle { width: 0; height: 0; border-left: 26px solid transparent; border-right: 26px solid transparent; border-bottom: 46px solid #4a9eff; filter: drop-shadow(5px 5px 0 #0a0a0a); }
+  .preview-memphis::before { content: ''; position: absolute; top: 18px; right: 24px; width: 14px; height: 14px; background: #ff85a1; border: 2px solid #0a0a0a; border-radius: 50%; }
+  .preview-memphis::after { content: ''; position: absolute; bottom: 18px; left: 24px; width: 10px; height: 10px; background: #0a0a0a; transform: rotate(45deg); }
+
+  /* Preview 9 — Anthropic */
+  .preview-anthropic { background: #f0eee5; display: flex; flex-direction: column; padding: 22px 28px; justify-content: center; gap: 8px; }
+  .preview-anthropic .pa-h { font-family: 'Fraunces', Georgia, serif; font-size: 28px; font-weight: 400; color: #1a1a1a; letter-spacing: -1px; }
+  .preview-anthropic .pa-h strong { font-weight: 600; }
+  .preview-anthropic .pa-card { background: #fff; border: 1px solid #ddd9c7; border-radius: 8px; padding: 9px 12px; font-size: 10px; color: #4a4540; display: flex; align-items: center; gap: 10px; }
+  .preview-anthropic .pa-dot { width: 7px; height: 7px; background: #cc785c; border-radius: 50%; flex-shrink: 0; }
+
+  /* Preview 10 — Cyberpunk */
+  .preview-cyber { background: #0a0014; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .preview-cyber::before { content: ''; position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg, transparent 0, transparent 2px, rgba(0, 240, 255, 0.04) 2px, rgba(0, 240, 255, 0.04) 3px); }
+  .preview-cyber .pcy-text { font-family: 'JetBrains Mono', monospace; font-size: 24px; font-weight: 700; color: #00f0ff; text-shadow: 0 0 16px #00f0ff, 0 0 32px rgba(0,240,255,0.4); letter-spacing: 3px; }
+  .preview-cyber .pcy-text span { color: #ff2a6d; text-shadow: 0 0 16px #ff2a6d; }
+  .preview-cyber::after { content: 'REQ-OK'; position: absolute; bottom: 18px; right: 24px; font-family: 'JetBrains Mono', monospace; font-size: 9px; color: #39ff14; text-shadow: 0 0 6px #39ff14; padding: 3px 8px; border: 1px solid #39ff14; letter-spacing: 1.5px; }
+
+  .card-tag { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; letter-spacing: 0.4px; background: #25252e; color: #b0b0c0; margin-bottom: 14px; align-self: flex-start; text-transform: uppercase; }
+  .card-tag.t1 { background: rgba(0, 122, 255, 0.15); color: #6ea7ff; }
+  .card-tag.t2 { background: rgba(255, 0, 110, 0.15); color: #ff6ea3; }
+  .card-tag.t3 { background: rgba(110, 123, 255, 0.15); color: #8b95ff; }
+  .card-tag.t4 { background: rgba(255, 120, 73, 0.15); color: #ff7849; }
+  .card-tag.t5 { background: rgba(196, 117, 109, 0.18); color: #d49a93; }
+  .card-tag.t6 { background: rgba(91, 58, 255, 0.15); color: #9b8aff; }
+  .card-tag.t7 { background: rgba(200, 32, 10, 0.18); color: #ff7060; }
+  .card-tag.t8 { background: rgba(255, 217, 61, 0.18); color: #ffd93d; }
+  .card-tag.t9 { background: rgba(204, 120, 92, 0.2); color: #d89887; }
+  .card-tag.t10 { background: rgba(0, 240, 255, 0.12); color: #00f0ff; }
+
+  .card h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 10px; color: #fff; }
+  .card p { font-size: 13.5px; color: #8a8aa0; line-height: 1.55; margin-bottom: 18px; flex: 1; }
+  .card .meta { display: flex; gap: 14px; font-size: 11.5px; color: #6b6b80; padding-top: 14px; border-top: 1px solid #25252e; flex-wrap: wrap; }
+  .card .meta span { display: flex; align-items: center; gap: 6px; }
+  .card .meta .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  .card .open { position: absolute; top: 26px; right: 26px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: #fff; padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 600; opacity: 0; transition: opacity 0.2s; }
+  .card:hover .open { opacity: 1; }
+
+  .section-divider { padding: 4px 60px 24px; max-width: 1320px; margin: 0 auto; display: flex; align-items: center; gap: 20px; }
+  .section-divider .label { font-size: 11px; font-weight: 700; color: #ff7849; text-transform: uppercase; letter-spacing: 2px; flex-shrink: 0; }
+  .section-divider .rule { flex: 1; height: 1px; background: linear-gradient(90deg, #ff7849, transparent); }
+  .section-divider .count { font-size: 12px; color: #6b6b80; font-family: 'SF Mono', monospace; }
+
+  .footer { padding: 40px 60px 60px; text-align: center; color: #5a5a70; font-size: 13px; border-top: 1px solid #25252e; max-width: 1320px; margin: 0 auto; line-height: 2; }
+  .footer a { color: #ff7849; text-decoration: none; margin: 0 4px; }
+  .footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<section class="hero">
+  <div class="eyebrow">UI Mockup Showcase · 2026</div>
+  <h1>10 design directions trending right now</h1>
+  <p>Each theme uses the same Command Center content so visual contrast comes from styling alone. Click any card to open the full-screen mockup. These live under <code>docs/mockups/themes/</code> alongside the original 16 theme variants.</p>
+</section>
+
+<div class="section-divider">
+  <div class="label">Wave 1 · Themes 17–21</div>
+  <div class="rule"></div>
+  <div class="count">5 themes</div>
+</div>
+
+<section class="grid">
+
+  <a class="card" href="theme-17-bento-grid.html">
+    <div class="preview preview-bento">
+      <div class="pb-wide"></div>
+      <div class="pb-stat"></div>
+      <div class="pb-stat"></div>
+      <div class="pb-stat"></div>
+      <div class="pb-stat"></div>
+    </div>
+    <span class="open">Open ↗</span>
+    <span class="card-tag t1">Apple · visionOS</span>
+    <h2>17 · Bento Grid</h2>
+    <p>Modular cards in varying sizes, soft layered shadows, generous radii. Popularized by Apple Vision Pro and now everywhere from Stripe dashboards to startup landing pages.</p>
+    <div class="meta">
+      <span><span class="dot" style="background:#007aff;"></span>Apple Blue</span>
+      <span>SF Pro Display</span>
+      <span>22px radius</span>
+    </div>
+  </a>
+
+  <a class="card" href="theme-18-aurora-mesh.html">
+    <div class="preview preview-aurora"></div>
+    <span class="open">Open ↗</span>
+    <span class="card-tag t2">Glass · Gradient</span>
+    <h2>18 · Aurora Mesh</h2>
+    <p>Vibrant overlapping mesh gradients with frosted glass cards floating over them. High-saturation backgrounds paired with translucent surfaces.</p>
+    <div class="meta">
+      <span><span class="dot" style="background:#ff006e;"></span>Magenta/Indigo</span>
+      <span>Inter</span>
+      <span>backdrop-blur</span>
+    </div>
+  </a>
+
+  <a class="card" href="theme-19-claymorphism.html">
+    <div class="preview preview-clay">
+      <div class="pc-1"></div>
+      <div class="pc-2"></div>
+      <div class="pc-3"></div>
+    </div>
+    <span class="open">Open ↗</span>
+    <span class="card-tag t3">Pastel · 3D</span>
+    <h2>19 · Claymorphism</h2>
+    <p>Soft 3D puffy elements with double shadows (outer + inset highlight) on pastel backgrounds. Playful, tactile — fintech onboarding, kids' products, design tools.</p>
+    <div class="meta">
+      <span><span class="dot" style="background:#6e7bff;"></span>Lavender</span>
+      <span>Nunito</span>
+      <span>28px radius</span>
+    </div>
+  </a>
+
+  <a class="card" href="theme-20-ai-spatial.html">
+    <div class="preview preview-ai">
+      <div class="preview-ai-orb"></div>
+    </div>
+    <span class="open">Open ↗</span>
+    <span class="card-tag t4">AI · Dark</span>
+    <h2>20 · AI Spatial</h2>
+    <p>Deep dark backgrounds with glowing radial accents, dot-grid surfaces, and uppercase utility labels. The visual language of most AI-native products.</p>
+    <div class="meta">
+      <span><span class="dot" style="background:#ff7849;"></span>Claude Orange</span>
+      <span>JetBrains Mono</span>
+      <span>Glow + grid</span>
+    </div>
+  </a>
+
+  <a class="card" href="theme-21-calm-tech.html">
+    <div class="preview preview-calm">
+      <div class="pcal-head">Command <em>Center</em></div>
+      <div class="pcal-card"><span class="pcal-dot"></span>REQ-A1B2C3 — Build login page</div>
+      <div class="pcal-card"><span class="pcal-dot" style="background:#d4a574;"></span>REQ-D4E5F6 — Add dark mode</div>
+    </div>
+    <span class="open">Open ↗</span>
+    <span class="card-tag t5">Editorial · Calm</span>
+    <h2>21 · Calm Tech</h2>
+    <p>Warm cream backgrounds, serif headers, muted sage/clay accents. The post-burnout aesthetic — quiet SaaS products that reject neon.</p>
+    <div class="meta">
+      <span><span class="dot" style="background:#c4756d;"></span>Clay/Sage/Sand</span>
+      <span>Fraunces + Inter</span>
+      <span>Tight whitespace</span>
+    </div>
+  </a>
+
+</section>
+
+<div class="section-divider">
+  <div class="label">Wave 2 · Themes 22–26</div>
+  <div class="rule"></div>
+  <div class="count">5 themes</div>
+</div>
+
+<section class="grid">
+
+  <a class="card" href="theme-22-liquid-glass.html">
+    <div class="preview preview-glass"></div>
+    <span class="open">Open ↗</span>
+    <span class="card-tag t6">iOS 26 · Apple</span>
+    <h2>22 · Liquid Glass</h2>
+    <p>Apple's new iOS 26 design language. Layered translucent surfaces over pastel mesh, edge highlights, refraction. Multiple glass planes stacked at different depths.</p>
+    <div class="meta">
+      <span><span class="dot" style="background:#5b3aff;"></span>Pastel Mesh</span>
+      <span>SF Pro Display</span>
+      <span>blur(40px)</span>
+    </div>
+  </a>
+
+  <a class="card" href="theme-23-editorial.html">
+    <div class="preview preview-editorial">
+      <div class="ped-h">The <em>Center</em></div>
+      <div class="ped-rule"></div>
+      <div class="ped-sub">— A periodical of orchestrated intelligence</div>
+    </div>
+    <span class="open">Open ↗</span>
+    <span class="card-tag t7">Print · Editorial</span>
+    <h2>23 · Editorial Magazine</h2>
+    <p>Newsprint cream, Playfair Display mastheads, double rules, drop caps, bylines. Looks like The New Yorker or The NYT redesigned a SaaS product.</p>
+    <div class="meta">
+      <span><span class="dot" style="background:#c8200a;"></span>Newspaper Red</span>
+      <span>Playfair + Georgia</span>
+      <span>Drop caps</span>
+    </div>
+  </a>
+
+  <a class="card" href="theme-24-memphis.html">
+    <div class="preview preview-memphis">
+      <div class="pm-square"></div>
+      <div class="pm-circle"></div>
+      <div class="pm-triangle"></div>
+    </div>
+    <span class="open">Open ↗</span>
+    <span class="card-tag t8">Postmodern · 80s</span>
+    <h2>24 · Memphis Revival</h2>
+    <p>Bold geometric shapes scattered like confetti, primary colors, sharp drop shadows. The 80s Memphis Group aesthetic revived — playful anti-minimalism.</p>
+    <div class="meta">
+      <span><span class="dot" style="background:#ffd93d;"></span>Primary palette</span>
+      <span>Space Grotesk</span>
+      <span>Hard shadows</span>
+    </div>
+  </a>
+
+  <a class="card" href="theme-25-anthropic.html">
+    <div class="preview preview-anthropic">
+      <div class="pa-h">Command <strong>Center</strong></div>
+      <div class="pa-card"><span class="pa-dot"></span>REQ-A1B2C3 — Build login page</div>
+      <div class="pa-card"><span class="pa-dot" style="background:#b8924c;"></span>REQ-D4E5F6 — Add dark mode</div>
+    </div>
+    <span class="open">Open ↗</span>
+    <span class="card-tag t9">Brand · Claude</span>
+    <h2>25 · Anthropic Brand</h2>
+    <p>The Anthropic/Claude house style: warm cream, terracotta orange accent, Fraunces serif headers, considered minimalism. The on-brand option for this agent platform.</p>
+    <div class="meta">
+      <span><span class="dot" style="background:#cc785c;"></span>Claude Orange</span>
+      <span>Fraunces + Inter</span>
+      <span>Warm + minimal</span>
+    </div>
+  </a>
+
+  <a class="card" href="theme-26-cyberpunk.html">
+    <div class="preview preview-cyber">
+      <div class="pcy-text"><span>&gt;</span>HACK</div>
+    </div>
+    <span class="open">Open ↗</span>
+    <span class="card-tag t10">Neon · Retro</span>
+    <h2>26 · Cyberpunk Neon</h2>
+    <p>Black background, electric pink/cyan/lime, scanlines, CRT vignette, monospace everything. Blade Runner / Matrix / Mr. Robot terminal aesthetic.</p>
+    <div class="meta">
+      <span><span class="dot" style="background:#ff2a6d;"></span>Pink + Cyan</span>
+      <span>JetBrains Mono</span>
+      <span>Glow + scanlines</span>
+    </div>
+  </a>
+
+</section>
+
+<div class="footer">
+  <strong style="color:#fff;">Wave 1:</strong>
+  <a href="theme-17-bento-grid.html">17 · Bento</a> ·
+  <a href="theme-18-aurora-mesh.html">18 · Aurora</a> ·
+  <a href="theme-19-claymorphism.html">19 · Clay</a> ·
+  <a href="theme-20-ai-spatial.html">20 · AI Spatial</a> ·
+  <a href="theme-21-calm-tech.html">21 · Calm Tech</a>
+  <br>
+  <strong style="color:#fff;">Wave 2:</strong>
+  <a href="theme-22-liquid-glass.html">22 · Liquid Glass</a> ·
+  <a href="theme-23-editorial.html">23 · Editorial</a> ·
+  <a href="theme-24-memphis.html">24 · Memphis</a> ·
+  <a href="theme-25-anthropic.html">25 · Anthropic</a> ·
+  <a href="theme-26-cyberpunk.html">26 · Cyberpunk</a>
+</div>
+
+</body>
+</html>

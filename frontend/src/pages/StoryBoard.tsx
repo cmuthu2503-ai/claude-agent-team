@@ -2,35 +2,40 @@ import { useState, useEffect } from "react"
 import { useParams, Link } from "react-router-dom"
 import { api } from "../lib/api"
 
-/* ── Exact color tokens from mockup ─────────────────── */
+/* ── Color tokens — mapped to theme CSS variables so the Story Board
+   picks up whatever theme is active (was hardcoded light-mode colors
+   that ignored the theme). Layout/Kanban structure unchanged (frozen
+   per project convention). Subtle bg variants use color-mix() with
+   transparent so they're correctly tinted regardless of the theme's
+   accent/success/danger hue. */
 const C = {
-  bg: "#f3f4f6",
-  white: "#fff",
-  border: "#e5e7eb",
-  borderHover: "#d1d5db",
-  text1: "#111827",
-  text2: "#374151",
-  text3: "#6b7280",
-  text4: "#9ca3af",
-  text5: "#4b5563",
-  accent: "#2563eb",
-  accentBg: "#eff6ff",
-  green: "#16a34a",
-  greenBg: "#f0fdf4",
-  greenAgent: "#059669",
-  greenAgentBg: "#ecfdf5",
-  purple: "#8b5cf6",
-  amber: "#f59e0b",
-  amberBg: "#fffbeb",
-  amberAgent: "#d97706",
-  pink: "#db2777",
-  pinkBg: "#fdf2f8",
-  red: "#dc2626",
-  redBg: "#fef2f2",
-  dimBorder: "#d1d5db",
-  cardSep: "#f3f4f6",
-  colBg: "#f9fafb",
-  pendingBg: "#f3f4f6",
+  bg: "var(--bg-secondary)",
+  white: "var(--bg-card)",
+  border: "var(--border)",
+  borderHover: "var(--border)",
+  text1: "var(--text-primary)",
+  text2: "var(--text-primary)",
+  text3: "var(--text-secondary)",
+  text4: "var(--text-muted)",
+  text5: "var(--text-primary)",
+  accent: "var(--accent)",
+  accentBg: "color-mix(in srgb, var(--accent) 12%, transparent)",
+  green: "var(--success)",
+  greenBg: "color-mix(in srgb, var(--success) 12%, transparent)",
+  greenAgent: "var(--success)",
+  greenAgentBg: "color-mix(in srgb, var(--success) 14%, transparent)",
+  purple: "var(--info)",
+  amber: "var(--warning)",
+  amberBg: "color-mix(in srgb, var(--warning) 12%, transparent)",
+  amberAgent: "var(--warning)",
+  pink: "var(--accent)",
+  pinkBg: "color-mix(in srgb, var(--accent) 12%, transparent)",
+  red: "var(--danger)",
+  redBg: "color-mix(in srgb, var(--danger) 12%, transparent)",
+  dimBorder: "var(--border)",
+  cardSep: "var(--bg-secondary)",
+  colBg: "var(--bg-hover)",
+  pendingBg: "var(--bg-hover)",
 }
 
 const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
@@ -135,12 +140,6 @@ export function StoryBoardPage() {
       const res = await api.get(`/requests/${requestId}`)
       setData(res.data)
       setStories(res.data.stories || [])
-      // Auto-pick the sensible default tab the first time data arrives —
-      // unless the user has clicked a tab already (then we respect their choice).
-      if (!userPickedTab && res.data?.workflow) {
-        const producesStories = !!res.data.workflow.produces_stories
-        setActiveTab(producesStories ? "board" : "timeline")
-      }
     } catch {}
   }
 
@@ -149,6 +148,18 @@ export function StoryBoardPage() {
     const interval = setInterval(loadData, 3000)
     return () => clearInterval(interval)
   }, [requestId])
+
+  // Auto-pick the sensible default tab the first time workflow info
+  // arrives. Lives in its own effect (NOT inside loadData) so that the
+  // 3s polling interval can't keep resetting the user's tab choice via
+  // a stale `userPickedTab` closure — that was the root cause of the
+  // Agent Timeline / Outputs tabs snapping back to Story Board every
+  // few seconds.
+  useEffect(() => {
+    if (userPickedTab) return
+    if (!data?.workflow) return
+    setActiveTab(data.workflow.produces_stories ? "board" : "timeline")
+  }, [data?.workflow?.produces_stories, userPickedTab])
 
   if (!data) return null
 
@@ -283,12 +294,16 @@ export function StoryBoardPage() {
   return (
     <div style={{ fontFamily: FONT, background: C.bg, color: C.text2, minHeight: "calc(100vh - 52px)" }}>
 
-      {/* ── Breadcrumb ──────────────────────────────── */}
+      {/* ── Breadcrumb ────────────────────────────────
+          Just shows the location (Command Center > REQ-ID). The full
+          description used to be repeated here too, which then appeared
+          a second time in the request header below — confusing and
+          visually noisy. Trimmed to just the ID. */}
       <div style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "12px 24px", display: "flex", alignItems: "center", gap: 8 }}>
         <Link to="/" style={{ fontSize: 13, color: C.accent, textDecoration: "none" }}>Command Center</Link>
         <span style={{ color: C.dimBorder, fontSize: 12 }}>▸</span>
         <span style={{ fontSize: 13, color: C.text2, fontWeight: 600 }}>
-          {data.request_id}: {data.description}
+          {data.request_id}
         </span>
       </div>
 
@@ -325,13 +340,17 @@ export function StoryBoardPage() {
             // "failed" gets a red dot with an X — distinct from waiting (gray)
             // and done (green) so the user can see at a glance WHERE the
             // pipeline died.
+            // "done" uses var(--info) (cyan in cyberpunk, blue/teal in
+            // other themes) instead of the bright matrix-green --success
+            // token so completed stages match the page's primary accent
+            // hierarchy rather than competing with it.
             const dotBg = state === "failed" ? "#dc2626"
-                        : state === "done" ? C.green
+                        : state === "done" ? "var(--info)"
                         : state === "active" ? C.accent
                         : C.border
             const dotColor = state === "waiting" ? C.text4 : "#fff"
             const labelColor = state === "failed" ? "#dc2626"
-                             : state === "done" ? C.green
+                             : state === "done" ? "var(--info)"
                              : state === "active" ? C.accent
                              : C.text3
             const labelWeight = (state === "active" || state === "failed") ? 600 : 400
@@ -354,7 +373,7 @@ export function StoryBoardPage() {
                 {i < stages.length - 1 && (
                   <div style={{
                     width: 40, height: 2,
-                    background: connectorState(i) === "done" ? C.green : connectorState(i) === "active" ? C.accent : C.border,
+                    background: connectorState(i) === "done" ? "var(--info)" : connectorState(i) === "active" ? C.accent : C.border,
                   }} />
                 )}
               </div>
@@ -886,35 +905,38 @@ function StoryCard({ story: s, column }: { story: any; column: string }) {
         </div>
       )}
 
-      {/* PR badge */}
-      {isDone && (
+      {/* PR badge — uses the real GitHub issue/PR number from the story
+          record (s.github_issue_number, populated by the publisher when the
+          PR is opened). No fake numbers: if the story doesn't have a real
+          PR yet, show "No PR yet" instead of a synthesized one. */}
+      {isDone && s.github_issue_number && (
         <div style={{
           display: "inline-flex", alignItems: "center", gap: 4,
           padding: "3px 8px", borderRadius: 6, fontSize: 11, marginTop: 8,
           background: C.greenBg, color: C.green,
         }}>
-          ✓ PR #43 — Merged
+          ✓ PR #{s.github_issue_number} — Merged
         </div>
       )}
-      {isReview && (
+      {isReview && s.github_issue_number && (
         <div style={{
           display: "inline-flex", alignItems: "center", gap: 4,
           padding: "3px 8px", borderRadius: 6, fontSize: 11, marginTop: 8,
           background: C.accentBg, color: C.accent,
         }}>
-          🔗 PR #46 — Under Review
+          🔗 PR #{s.github_issue_number} — Under Review
         </div>
       )}
-      {isInProgress && s.coverage_pct != null && (
+      {isInProgress && s.github_issue_number && (
         <div style={{
           display: "inline-flex", alignItems: "center", gap: 4,
           padding: "3px 8px", borderRadius: 6, fontSize: 11, marginTop: 8,
           background: C.accentBg, color: C.accent,
         }}>
-          🔗 PR #{43 + stories_pr_offset(s.story_id)} — Open
+          🔗 PR #{s.github_issue_number} — Open
         </div>
       )}
-      {isInProgress && s.coverage_pct == null && (
+      {(isInProgress || isReview || isDone) && !s.github_issue_number && (
         <div style={{
           display: "inline-flex", alignItems: "center", gap: 4,
           padding: "3px 8px", borderRadius: 6, fontSize: 11, marginTop: 8,
@@ -924,12 +946,16 @@ function StoryCard({ story: s, column }: { story: any; column: string }) {
         </div>
       )}
 
-      {/* Reviewer comment (Review column only) */}
-      {isReview && (
+      {/* Reviewer comment — only render if the story actually carries a
+          review_comment from the backend. The placeholder string that
+          used to live here ("Clean implementation. Checking edge case
+          for token refresh...") was demo text shown on every review
+          story regardless of what the reviewer agent said. */}
+      {isReview && s.review_comment && (
         <>
           <div style={{ height: 1, background: C.cardSep, margin: "8px 0" }} />
           <div style={{ fontSize: 11, color: C.purple, marginTop: 4 }}>
-            🔍 Code Reviewer: "Clean implementation. Checking edge case for token refresh..."
+            🔍 Code Reviewer: "{s.review_comment}"
           </div>
         </>
       )}
@@ -957,8 +983,3 @@ function StoryCard({ story: s, column }: { story: any; column: string }) {
   )
 }
 
-/* Simple PR number offset based on story ID */
-function stories_pr_offset(storyId: string): number {
-  const match = storyId.match(/(\d+)$/)
-  return match ? parseInt(match[1], 10) : 1
-}

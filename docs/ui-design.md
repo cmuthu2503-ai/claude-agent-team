@@ -718,5 +718,5 @@ Theme selection persists to localStorage. The theme selector in the navbar shows
 |----------|-----------|
 | [architecture.md](architecture.md) | Team hierarchy, workflow DAGs, component design — UI must reflect these |
 | [agent-invocation-design.md](agent-invocation-design.md) | Task lifecycle states, WebSocket events, Orchestrator API — UI data source |
-| [prd-template.md](prd-template.md) | Task categories, quality thresholds, output formats |
+| [prd.md](prd.md) | Task categories, quality thresholds, output formats |
 | [expansion-playbook.md](expansion-playbook.md) | Team Status screen must dynamically render from config |

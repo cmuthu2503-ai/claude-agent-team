@@ -5,52 +5,6 @@
    component can reference var(--bg-primary), var(--accent), etc.
    ============================================================ */
 
-/* ---------- LINEAR (dark) ---------- */
-[data-theme="linear"][data-mode="dark"] {
-  --bg-primary: #08090a;
-  --bg-secondary: #0f1011;
-  --bg-card: #141516;
-  --bg-hover: #1c1d1f;
-  --border: #232427;
-  --text-primary: #f7f8f8;
-  --text-secondary: #8a8f98;
-  --text-muted: #62666d;
-  --accent: #5e6ad2;
-  --accent-hover: #7a85e0;
-  --success: #4cb782;
-  --danger: #eb5757;
-  --warning: #f2c94c;
-  --info: #5e6ad2;
-  --radius: 6px;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-glow: 0 0 0 1px rgba(94, 106, 210, 0.3);
-  --font: -apple-system, BlinkMacSystemFont, "Inter", sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
-}
-
-/* ---------- LINEAR (light) ---------- */
-[data-theme="linear"][data-mode="light"] {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f7f8f8;
-  --bg-card: #ffffff;
-  --bg-hover: #f0f1f2;
-  --border: #e6e7e9;
-  --text-primary: #08090a;
-  --text-secondary: #62666d;
-  --text-muted: #8a8f98;
-  --accent: #5e6ad2;
-  --accent-hover: #4a55b8;
-  --success: #2f9367;
-  --danger: #d23f3f;
-  --warning: #c89623;
-  --info: #5e6ad2;
-  --radius: 6px;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-  --shadow-glow: 0 0 0 1px rgba(94, 106, 210, 0.2);
-  --font: -apple-system, BlinkMacSystemFont, "Inter", sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
-}
-
 /* ---------- VERCEL (dark) ---------- */
 [data-theme="vercel"][data-mode="dark"] {
   --bg-primary: #000000;
@@ -99,8 +53,9 @@
 
 /* ---------- CYBERPUNK HYPERDRIVE (dark) ----------
    Source: docs/mockups/themes/theme-27-cyberpunk-hyperdrive.html
-   Neon pink (#ff2a6d) + cyan (#00f0ff) + matrix green (#39ff14)
-   on near-black (#0a0014). Sharp corners, glowing shadows.
+   Pink-removed palette: cyan (#00f0ff) + matrix green (#39ff14) +
+   yellow warning (#f9f871) + crimson red (#ff3b3b) on near-black.
+   Cyan is the universal accent; red replaces the original pink danger.
 */
 [data-theme="cyberpunk-hyperdrive"][data-mode="dark"] {
   --bg-primary: #0a0014;
@@ -109,24 +64,44 @@
   --bg-hover: #1c1040;
   --border: #2a1850;
   --text-primary: #e0e0ff;
-  --text-secondary: #8080a0;
-  --text-muted: #50506a;
-  --accent: #ff2a6d;
-  --accent-hover: #ff5c8f;
+  --text-secondary: #a0a0b8;
+  --text-muted: #7c7c8f;
+  --accent: #00f0ff;
+  --accent-hover: #5ce5ff;
   --success: #39ff14;
-  --danger: #ff2a6d;
+  --danger: #ff3b3b;
   --warning: #f9f871;
   --info: #00f0ff;
   --radius: 0px;
-  --shadow: 0 2px 12px rgba(255, 42, 109, 0.25);
+  --shadow: 0 2px 12px rgba(0, 240, 255, 0.25);
   --shadow-glow: 0 0 16px rgba(0, 240, 255, 0.5);
-  --font: "JetBrains Mono", "Fira Code", "Courier New", monospace;
+  --font: "Aptos", "Calibri", "Carlito", "Segoe UI", -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
 }
 
+/* Bump the base font-size +1 for this theme. Body-level rule cascades
+   to any element WITHOUT an explicit inline fontSize; combined with
+   the rules below it lifts the most common explicit sizes (12/13/14)
+   by 1 each so the bump shows up everywhere — not just on the few
+   elements that inherit. */
+html[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] body {
+  font-size: 15px;  /* was 14 inherited from browser default at the page level */
+}
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [style*="font-size: 11px"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [style*="fontSize: 11"] { font-size: 12px !important; }
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [style*="font-size: 12px"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [style*="fontSize: 12"] { font-size: 13px !important; }
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [style*="font-size: 13px"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [style*="fontSize: 13"] { font-size: 14px !important; }
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [style*="font-size: 14px"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [style*="fontSize: 14"] { font-size: 15px !important; }
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [style*="font-size: 18px"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [style*="fontSize: 18"] { font-size: 19px !important; }
+
 /* ---------- CYBERPUNK HYPERDRIVE (light) ----------
-   Light-mode variant: pale lavender background, deep magenta
-   accents, still neon-feeling but legible in daylight.
+   Light-mode variant: pale lavender background, deep teal accents,
+   still neon-feeling but legible in daylight. Pink-removed (was deep
+   magenta) — teal is the universal accent.
 */
 [data-theme="cyberpunk-hyperdrive"][data-mode="light"] {
   --bg-primary: #f8f4ff;
@@ -137,69 +112,1016 @@
   --text-primary: #1a0030;
   --text-secondary: #4a3060;
   --text-muted: #806a96;
-  --accent: #d6005c;
-  --accent-hover: #b00048;
+  --accent: #007a9a;
+  --accent-hover: #005d75;
   --success: #1aa800;
-  --danger: #d6005c;
+  --danger: #c0392b;
   --warning: #c89a00;
   --info: #007a9a;
   --radius: 0px;
-  --shadow: 0 2px 8px rgba(214, 0, 92, 0.15);
+  --shadow: 0 2px 8px rgba(0, 122, 154, 0.15);
   --shadow-glow: 0 0 12px rgba(0, 122, 154, 0.3);
   --font: "JetBrains Mono", "Fira Code", "Courier New", monospace;
   --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
 }
 
 /* ============================================================
-   NEON THEME — Green Palette
-   Dark: classic neon-green-on-near-black cyber aesthetic.
-   Light: soft mint-cream + jade-green for daytime use.
-   All variable keys preserved from previous Neon definition;
-   only values changed (per US-004).
+   CYBERPUNK HYPERDRIVE — Effects Layer
+   Source: docs/mockups/themes/theme-27-cyberpunk-hyperdrive.html
+
+   The color variables above set the palette. These rules add the
+   animations, overlays, and glow effects that make the theme feel
+   like a Blade Runner terminal — without changing layout or
+   touching any React component. Every selector is scoped to
+   [data-theme="cyberpunk-hyperdrive"] so other themes are unaffected.
    ============================================================ */
 
-/* ---------- NEON (dark) ---------- */
-[data-theme="neon"][data-mode="dark"] {
-  --bg-primary: #0a0f0a;
-  --bg-secondary: #0f1a0f;
-  --bg-card: #142414;
-  --bg-hover: #1c321c;
-  --border: #1f3a1f;
-  --text-primary: #d4ffd4;
-  --text-secondary: #8fd9a0;
-  --text-muted: #4a6b4a;
-  --accent: #39ff14;
-  --accent-hover: #5cff3d;
-  --success: #39ff14;
-  --danger: #ff3b3b;
-  --warning: #ffd60a;
-  --info: #00ff85;
-  --radius: 4px;
-  --shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
-  --shadow-glow: 0 0 12px rgba(57, 255, 20, 0.6);
-  --font: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
-  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+/* ---------- Keyframes (only invoked under cyberpunk-hyperdrive) ---------- */
+@keyframes ch-flicker {
+  0%, 100%, 78%, 80%, 84% { opacity: 1; }
+  79%, 82% { opacity: 0.97; }
+  81% { opacity: 0.94; }
+}
+@keyframes ch-scan-sweep {
+  0% { transform: translateY(-12vh); opacity: 0; }
+  5%, 95% { opacity: 0.5; }
+  100% { transform: translateY(112vh); opacity: 0; }
+}
+@keyframes ch-pulse-glow {
+  0%, 100% {
+    box-shadow:
+      0 0 8px rgba(0, 240, 255, 0.5),
+      inset 0 0 6px rgba(0, 240, 255, 0.15);
+  }
+  50% {
+    box-shadow:
+      0 0 18px rgba(0, 240, 255, 0.85),
+      inset 0 0 10px rgba(0, 240, 255, 0.3);
+  }
+}
+@keyframes ch-pulse-cyan {
+  0%, 100% { box-shadow: 0 0 6px rgba(0, 240, 255, 0.4); }
+  50%      { box-shadow: 0 0 16px rgba(0, 240, 255, 0.8); }
+}
+@keyframes ch-text-pulse {
+  0%, 100% { text-shadow: 0 0 6px currentColor; }
+  50%      { text-shadow: 0 0 14px currentColor, 0 0 24px currentColor; }
+}
+@keyframes ch-blink {
+  0%, 50%   { opacity: 1; }
+  51%, 100% { opacity: 0.35; }
+}
+@keyframes ch-border-trace {
+  0%   { background-position: -200% 50%; }
+  100% { background-position:  200% 50%; }
+}
+/* Proper glitch jitter matching the reference (2px shifts, not subtle) */
+@keyframes ch-glitch-shift {
+  0%, 90%, 100% { transform: translate(0); }
+  91% { transform: translate(-2px, 1px); }
+  92% { transform: translate(2px, -1px); }
+  93% { transform: translate(-1px, -2px); }
+  94% { transform: translate(1px, 2px); }
 }
 
-/* ---------- NEON (light) ---------- */
-[data-theme="neon"][data-mode="light"] {
-  --bg-primary: #f0fff4;
-  --bg-secondary: #e2f9ea;
-  --bg-card: #ffffff;
-  --bg-hover: #d4f3e0;
-  --border: #a7f3d0;
-  --text-primary: #0a2818;
-  --text-secondary: #2d5a3d;
-  --text-muted: #86c8a8;
-  --accent: #00a86b;
-  --accent-hover: #008a58;
-  --success: #10b981;
-  --danger: #c0392b;
-  --warning: #b8860b;
-  --info: #0891b2;
-  --radius: 4px;
-  --shadow: 0 2px 8px rgba(0, 168, 107, 0.12);
-  --shadow-glow: 0 0 8px rgba(0, 168, 107, 0.4);
-  --font: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
-  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+/* RGB-split text-shadow that pulses during the glitch frames.
+   Fakes the reference's ::before/::after color-channel split using
+   layered text-shadows in pink/cyan/green, normally invisible
+   (1px offset, near-transparent), exploding to visible during glitch. */
+@keyframes ch-rgb-split {
+  0%, 90%, 100% {
+    text-shadow:
+      0 0 8px currentColor,
+      0 0 16px rgba(0, 240, 255, 0.4);
+  }
+  91% {
+    text-shadow:
+      -3px 0 #f9f871, 3px 0 #00f0ff,
+      0 0 8px currentColor;
+  }
+  93% {
+    text-shadow:
+      3px 0 #f9f871, -3px 0 #00f0ff, 0 2px #39ff14,
+      0 0 8px currentColor;
+  }
+  95% {
+    text-shadow:
+      -2px 1px #39ff14, 2px -1px #f9f871,
+      0 0 8px currentColor;
+  }
+}
+@keyframes ch-shockwave {
+  0%   { box-shadow: 0 0 0 0 currentColor, 0 0 12px currentColor; }
+  100% { box-shadow: 0 0 0 14px transparent, 0 0 12px currentColor; }
+}
+@keyframes ch-hue-drift {
+  0%, 100% { filter: hue-rotate(0deg); }
+  50%      { filter: hue-rotate(15deg); }
+}
+
+/* ---------- Body-level atmosphere (dark) ---------- */
+
+/* Whole-screen CRT flicker — rare and brief so it reads as a quirk,
+   not a strobe. One short dip every ~18s. */
+html[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] body {
+  animation: ch-flicker 18s infinite;
+}
+
+@keyframes ch-flicker {
+  0%, 100%, 92%, 94%, 98% { opacity: 1; }
+  93%, 97% { opacity: 0.92; }
+  95%      { opacity: 0.82; }
+}
+
+/* Horizontal scanlines — fine, low-contrast cyan grid over everything */
+html[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0,
+    transparent 2px,
+    rgba(0, 240, 255, 0.03) 2px,
+    rgba(0, 240, 255, 0.03) 3px
+  );
+}
+
+/* CRT vignette — corners darken, center stays bright */
+html[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9997;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 35%,
+    rgba(10, 0, 20, 0.65) 100%
+  );
+}
+
+/* Scrolling scan beam — cyan band sweeping vertically, infinite loop */
+html[data-theme="cyberpunk-hyperdrive"][data-mode="dark"]::after {
+  content: '';
+  position: fixed;
+  left: 0;
+  right: 0;
+  height: 90px;
+  z-index: 9999;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(0, 240, 255, 0.04) 35%,
+    rgba(0, 240, 255, 0.1) 50%,
+    rgba(0, 240, 255, 0.04) 65%,
+    transparent 100%
+  );
+  animation: ch-scan-sweep 7s linear infinite;
+}
+
+/* ---------- Typography glow ---------- */
+
+/* Headings get the full reference treatment: glitch jitter + RGB split
+   + blinking cursor + prompt prefix. text-shadow is driven by the
+   ch-rgb-split keyframe so it can hold the colored split mid-glitch. */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] h1,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] h2,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] h3 {
+  position: relative;
+  color: #00f0ff !important;
+  text-transform: uppercase;
+  letter-spacing: 4px;
+  animation: ch-glitch-shift 4s infinite, ch-rgb-split 4s infinite;
+}
+
+/* Cyan `>` prompt prefix before every heading */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] h1::before,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] h2::before,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] h3::before {
+  content: '> ';
+  color: #00f0ff;
+  text-shadow: 0 0 8px #00f0ff;
+  font-weight: 700;
+  margin-right: 4px;
+}
+
+/* Blinking `_` cursor after every heading */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] h1::after,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] h2::after,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] h3::after {
+  content: '_';
+  color: #00f0ff;
+  text-shadow: 0 0 8px #00f0ff;
+  margin-left: 4px;
+  animation: ch-blink 1s step-end infinite;
+}
+
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] h1 {
+  letter-spacing: 6px;
+  font-size: 1.5em;
+}
+
+/* Navbar logo (first link in header) gets the glitch treatment too —
+   this is the "Agent Team" wordmark, the equivalent of the reference's
+   AGENT/TEAM sidebar logo. Forced cyan to match the section headers
+   ("RECENTLY COMPLETED", "NEW REQUEST") for a consistent neon hierarchy. */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] header a:first-of-type,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] header a:first-of-type span {
+  color: #00f0ff !important;
+}
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] header a:first-of-type {
+  animation: ch-glitch-shift 5s infinite, ch-rgb-split 5s infinite;
+  letter-spacing: 3px !important;
+  text-transform: uppercase;
+  position: relative;
+}
+
+/* Navbar nav links: subtle hover glitch on the active item */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] header a:hover {
+  animation: ch-glitch-shift 1.5s infinite;
+}
+
+/* All header nav links: uniform cyan (logo + active page + inactive items
+   all share the same color). Active-state distinction is conveyed by the
+   pulse/glow animation below, not by hue. */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] header a,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] header a span {
+  color: #00f0ff !important;
+}
+
+/* Swap the active link's pink-tinted background for cyan-tinted to match */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] header a[style*="accent-subtle"] {
+  background: rgba(0, 240, 255, 0.08) !important;
+}
+
+/* ---------- Left sidebar (.app-sidebar) — same neon treatment as the
+   navbar links got: uniform cyan text, cyan-tinted bg + pulse on the
+   active item, hover glitch. Scoped to .app-sidebar so other themes and
+   other nav elements are unaffected. */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .app-sidebar {
+  background: var(--bg-secondary) !important;
+  border-right-color: rgba(0, 240, 255, 0.15) !important;
+}
+
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .app-sidebar a,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .app-sidebar a span {
+  color: #00f0ff !important;
+  letter-spacing: 0.5px;
+  transition: text-shadow 0.15s, background 0.15s;
+}
+
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .app-sidebar a:hover {
+  background: rgba(0, 240, 255, 0.05) !important;
+  text-shadow: 0 0 8px #00f0ff;
+  animation: ch-glitch-shift 1.5s infinite;
+}
+
+/* Active page — cyan-tinted background (works whether the inline style
+   resolves --accent-subtle or not) + continuous text pulse glow */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .app-sidebar a[aria-current="page"] {
+  background: rgba(0, 240, 255, 0.1) !important;
+  text-shadow: 0 0 10px #00f0ff, 0 0 18px rgba(0, 240, 255, 0.5) !important;
+  animation: ch-text-pulse 2s ease-in-out infinite;
+}
+
+/* The active nav link (background: accent-subtle inline) gets continuous
+   pulsing text-shadow so "Command Center" (the page you're on) feels alive. */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] header a[style*="accent-subtle"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] header a[aria-current="page"] {
+  animation: ch-text-pulse 2s ease-in-out infinite;
+  text-shadow: 0 0 10px currentColor, 0 0 20px currentColor !important;
+}
+
+/* "Live"/status text — Matrix green with subtle blink */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [class*="text-green"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .text-emerald-400,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [class*="text-success"] {
+  text-shadow: 0 0 8px #39ff14;
+}
+
+/* ---------- Buttons: neon edge + hover sweep ---------- */
+
+[data-theme="cyberpunk-hyperdrive"] button {
+  text-shadow: 0 0 6px currentColor;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  position: relative;
+  overflow: hidden;
+  transition: text-shadow 0.2s, box-shadow 0.2s;
+}
+
+/* Hover sweep — cyan light slides across the button */
+[data-theme="cyberpunk-hyperdrive"] button::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(0, 240, 255, 0.22),
+    transparent
+  );
+  transform: translateX(-100%);
+  transition: transform 0.5s ease;
+}
+[data-theme="cyberpunk-hyperdrive"] button:hover::after {
+  transform: translateX(100%);
+}
+[data-theme="cyberpunk-hyperdrive"] button:hover {
+  text-shadow: 0 0 10px currentColor, 0 0 18px currentColor;
+  box-shadow: 0 0 18px rgba(0, 240, 255, 0.45);
+}
+
+/* Pink accent / primary / submit buttons — continuous pulse */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] button[type="submit"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] button[class*="bg-pink"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] button[class*="bg-accent"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] button[class*="primary"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [class*="bg-pink"][role="button"] {
+  animation: ch-pulse-glow 2.6s ease-in-out infinite;
+}
+
+/* ---------- Team selector (Engineering / Research / Content) ----------
+   Restyle the segmented team-group as priority-style pills to match the
+   priority pills below them. Selector targets the wrapper div by its
+   distinctive inline-style combination (overflow:hidden + border-radius)
+   so no React component needs to change. */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"]
+  div[style*="overflow: hidden"][style*="border-radius"] {
+  border: none !important;
+  overflow: visible !important;
+  gap: 6px !important;
+  border-radius: 0 !important;
+}
+
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"]
+  div[style*="overflow: hidden"][style*="border-radius"] > button {
+  padding: 7px 14px !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  letter-spacing: 2px !important;
+  text-transform: uppercase !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.15) !important;
+  background: transparent !important;
+  color: #8080a0 !important;
+  border-radius: 0 !important;
+  transition: border-color 0.15s, color 0.15s, text-shadow 0.15s, box-shadow 0.15s;
+}
+
+/* Hover — cyan border + glow */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"]
+  div[style*="overflow: hidden"][style*="border-radius"] > button:hover {
+  border-color: #00f0ff !important;
+  color: #00f0ff !important;
+  text-shadow: 0 0 6px #00f0ff !important;
+}
+
+/* Selected team — identified by inline `background: var(--accent);`
+   (substring `var(--accent);` is unique to the selected button; the
+   priority "subtle" variants serialize as `var(--accent-subtle)` and
+   don't match). Pink fill + border + glow + pulse, matching the
+   selected priority pill style exactly. */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"]
+  div[style*="overflow: hidden"][style*="border-radius"] > button[style*="var(--accent);"] {
+  border-color: #00f0ff !important;
+  background: rgba(0, 240, 255, 0.1) !important;
+  color: #00f0ff !important;
+  text-shadow: 0 0 8px #00f0ff !important;
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.3) !important;
+  animation: ch-pulse-glow 2s ease-in-out infinite !important;
+}
+
+/* ---------- Inputs / textareas: focus glow ---------- */
+
+[data-theme="cyberpunk-hyperdrive"] input:focus,
+[data-theme="cyberpunk-hyperdrive"] textarea:focus,
+[data-theme="cyberpunk-hyperdrive"] select:focus {
+  box-shadow:
+    0 0 16px rgba(0, 240, 255, 0.45),
+    inset 0 0 8px rgba(0, 240, 255, 0.06);
+  outline: none;
+}
+
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] textarea::placeholder,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] input::placeholder {
+  color: #50506a;
+  letter-spacing: 0.5px;
+}
+
+/* ---------- Cards / panels: cyan edge on hover ---------- */
+
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [class*="rounded"]:hover,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [class*="border"]:hover {
+  box-shadow: 0 0 14px rgba(0, 240, 255, 0.22);
+}
+
+/* Animated border-trace on top of bordered containers (uses bg gradient) */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [class*="border-t"]::before,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [class*="divide-y"] > *:not(:first-child)::before {
+  /* reserved hook for future per-component border trace; no-op here */
+}
+
+/* ---------- Status indicators (Tailwind class shapes used by app) ---------- */
+
+/* Green completed dots — hard neon glow */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [class*="bg-green-"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [class*="bg-emerald-"] {
+  box-shadow: 0 0 8px #39ff14;
+}
+
+/* In-progress dots — pulsing shockwave (yellow now, was pink) */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [class*="bg-pink-"][class*="rounded-full"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [class*="bg-red-"][class*="rounded-full"] {
+  color: #f9f871;
+  animation: ch-shockwave 1.8s ease-out infinite;
+}
+
+/* animate-pulse — repurpose Tailwind's class with our blink timing */
+[data-theme="cyberpunk-hyperdrive"] .animate-pulse {
+  animation: ch-blink 1.4s step-end infinite;
+}
+
+/* ---------- Navigation / sidebar / topbar accents ---------- */
+
+[data-theme="cyberpunk-hyperdrive"] nav a,
+[data-theme="cyberpunk-hyperdrive"] nav button,
+[data-theme="cyberpunk-hyperdrive"] header a,
+[data-theme="cyberpunk-hyperdrive"] header button {
+  letter-spacing: 1.5px;
+  transition: text-shadow 0.15s, color 0.15s;
+}
+
+[data-theme="cyberpunk-hyperdrive"] nav a:hover,
+[data-theme="cyberpunk-hyperdrive"] nav button:hover,
+[data-theme="cyberpunk-hyperdrive"] header a:hover,
+[data-theme="cyberpunk-hyperdrive"] header button:hover {
+  text-shadow: 0 0 8px currentColor, 0 0 14px currentColor;
+}
+
+/* Active nav item — cyan glow (was pink) */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] nav [aria-current="page"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] nav a[class*="active"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] nav [class*="border-l"][class*="pink"] {
+  text-shadow: 0 0 10px #00f0ff;
+}
+
+/* Logo / brand text — strong text pulse */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [class*="logo"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] [class*="brand"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] header [class*="text-pink"] {
+  animation: ch-text-pulse 3s ease-in-out infinite;
+  letter-spacing: 3px;
+}
+
+/* ---------- Links ---------- */
+
+[data-theme="cyberpunk-hyperdrive"] a {
+  transition: text-shadow 0.15s;
+}
+[data-theme="cyberpunk-hyperdrive"] a:hover {
+  text-shadow: 0 0 8px currentColor, 0 0 14px currentColor;
+}
+
+/* ---------- Subtle hue drift on accent buttons ---------- */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] button[class*="bg-pink"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] button[class*="bg-accent"] {
+  animation: ch-pulse-glow 2.6s ease-in-out infinite, ch-hue-drift 6s ease-in-out infinite;
+}
+
+/* ---------- Light mode: gentler treatment ---------- */
+
+/* No flicker or CRT effects — they're harsh on light backgrounds.
+   Still keep the scanline texture (much subtler) and the glow on
+   accents so the theme stays recognizable. */
+
+html[data-theme="cyberpunk-hyperdrive"][data-mode="light"] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0,
+    transparent 4px,
+    rgba(214, 0, 92, 0.015) 4px,
+    rgba(214, 0, 92, 0.015) 5px
+  );
+}
+
+[data-theme="cyberpunk-hyperdrive"][data-mode="light"] h1,
+[data-theme="cyberpunk-hyperdrive"][data-mode="light"] h2 {
+  text-shadow: 0 0 6px rgba(214, 0, 92, 0.5);
+  animation: none;
+}
+
+[data-theme="cyberpunk-hyperdrive"][data-mode="light"] button[type="submit"],
+[data-theme="cyberpunk-hyperdrive"][data-mode="light"] button[class*="primary"] {
+  box-shadow: 0 0 10px rgba(214, 0, 92, 0.4);
+}
+
+/* ============================================================
+   CYBERPUNK HYPERDRIVE — Overlay DOM elements (CyberpunkOverlay.tsx)
+
+   These classes style the React overlay component that adds the
+   reference's signature elements: matrix rain, ticker, radar,
+   particles, banner. The overlay component renders nothing for
+   other themes, so these rules only activate when needed.
+   ============================================================ */
+
+/* Keyframes for the overlay's animations */
+@keyframes ch-matrix-fall {
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(112vh); }
+}
+@keyframes ch-ticker-scroll {
+  0%   { transform: translateX(0%); }
+  100% { transform: translateX(-50%); }
+}
+@keyframes ch-radar-sweep {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+@keyframes ch-radar-blip {
+  0%, 100%  { opacity: 0; }
+  10%, 30%  { opacity: 1; }
+}
+@keyframes ch-float-up {
+  0%   { transform: translateY(100vh) translateX(0); opacity: 0; }
+  10%  { opacity: 0.65; }
+  90%  { opacity: 0.65; }
+  100% { transform: translateY(-10vh) translateX(20px); opacity: 0; }
+}
+
+/* Push body content down to make room for the ticker bar at top */
+html[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] body {
+  padding-top: 26px;
+}
+
+/* ---------- Top banner ---------- */
+.ch-banner {
+  position: fixed; top: 0; left: 0; right: 0;
+  z-index: 10000;
+  background: #0a0014;
+  border-bottom: 1px solid #00f0ff;
+  color: #00f0ff;
+  text-align: center;
+  padding: 8px 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  text-shadow: 0 0 8px #00f0ff;
+  pointer-events: none;
+}
+.ch-banner span {
+  color: #00f0ff;
+  opacity: 0.85;
+  font-weight: 400;
+  margin-left: 10px;
+  letter-spacing: 0.4px;
+  text-transform: none;
+  text-shadow: 0 0 6px #00f0ff;
+}
+
+/* ---------- Data ticker ---------- */
+.ch-ticker {
+  position: fixed; top: 0; left: 0; right: 0;
+  z-index: 10000;
+  height: 24px;
+  background: #0a0014;
+  border-bottom: 1px solid rgba(0, 240, 255, 0.4);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  pointer-events: none;
+}
+.ch-ticker-label {
+  background: #00f0ff;
+  color: #0a0014;
+  padding: 0 14px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 2.5px;
+  flex-shrink: 0;
+}
+.ch-ticker-track {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  height: 100%;
+}
+.ch-ticker-content {
+  position: absolute;
+  top: 0; bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  font-size: 11px;
+  color: #00f0ff;
+  white-space: nowrap;
+  padding-left: 16px;
+  animation: ch-ticker-scroll 60s linear infinite;
+  letter-spacing: 0.8px;
+}
+.ch-ticker-content .ch-sep    { color: #50506a; }
+.ch-ticker-content .ch-ok     { color: #39ff14; text-shadow: 0 0 6px #39ff14; }
+.ch-ticker-content .ch-alert  { color: #ff3b3b; text-shadow: 0 0 6px #ff3b3b; }
+.ch-ticker-content .ch-warn   { color: #f9f871; }
+
+/* ---------- Matrix rain columns ---------- */
+.ch-matrix-col {
+  position: fixed;
+  top: 0;
+  width: 18px;
+  z-index: 1;
+  pointer-events: none;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 14px;
+  line-height: 1.4;
+  color: #39ff14;
+  opacity: 0.18;
+  text-shadow: 0 0 8px #39ff14;
+  white-space: pre;
+  writing-mode: vertical-rl;
+  animation: ch-matrix-fall linear infinite;
+}
+.ch-mc-1 { left:  6%; animation-duration: 14s; animation-delay:   0s; }
+.ch-mc-2 { left: 18%; animation-duration: 18s; animation-delay:  -3s; }
+.ch-mc-3 { left: 32%; animation-duration: 12s; animation-delay:  -7s;
+           color: #00f0ff; text-shadow: 0 0 8px #00f0ff; }
+.ch-mc-4 { left: 44%; animation-duration: 20s; animation-delay:  -2s; }
+.ch-mc-5 { left: 56%; animation-duration: 16s; animation-delay: -10s; }
+.ch-mc-6 { left: 68%; animation-duration: 13s; animation-delay:  -5s;
+           color: #f9f871; text-shadow: 0 0 8px #f9f871; opacity: 0.14; }
+.ch-mc-7 { left: 80%; animation-duration: 17s; animation-delay:  -8s; }
+.ch-mc-8 { left: 92%; animation-duration: 15s; animation-delay:  -1s; }
+
+/* ---------- Floating data particles ---------- */
+.ch-particle {
+  position: fixed;
+  width: 3px; height: 3px;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 2;
+  animation: ch-float-up linear infinite;
+}
+.ch-p-1 { left: 12%; background: #00f0ff; box-shadow: 0 0 8px #00f0ff;
+          animation-duration: 11s; animation-delay:   0s; }
+.ch-p-2 { left: 28%; background: #f9f871; box-shadow: 0 0 8px #f9f871;
+          animation-duration: 15s; animation-delay:  -4s; }
+.ch-p-3 { left: 48%; background: #39ff14; box-shadow: 0 0 8px #39ff14;
+          animation-duration: 13s; animation-delay:  -7s; }
+.ch-p-4 { left: 64%; background: #f9f871; box-shadow: 0 0 8px #f9f871;
+          animation-duration: 17s; animation-delay:  -2s; }
+.ch-p-5 { left: 84%; background: #00f0ff; box-shadow: 0 0 8px #00f0ff;
+          animation-duration: 14s; animation-delay:  -9s; }
+.ch-p-6 { left: 38%; background: #f9f871; box-shadow: 0 0 8px #f9f871;
+          animation-duration: 19s; animation-delay: -12s; }
+.ch-p-7 { left: 72%; background: #39ff14; box-shadow: 0 0 8px #39ff14;
+          animation-duration: 12s; animation-delay:  -6s; }
+
+/* ---------- Radar sweep widget ---------- */
+.ch-radar {
+  position: fixed;
+  top: 78px; right: 24px;
+  width: 72px; height: 72px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 240, 255, 0.4);
+  background: radial-gradient(
+    circle at center,
+    rgba(0, 240, 255, 0.05) 0%,
+    transparent 70%
+  );
+  z-index: 60;
+  pointer-events: none;
+}
+.ch-radar::before {
+  content: '';
+  position: absolute; inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    rgba(0, 240, 255, 0.45) 30deg,
+    transparent 60deg
+  );
+  animation: ch-radar-sweep 4s linear infinite;
+}
+.ch-radar::after {
+  content: '';
+  position: absolute; inset: 0;
+  border-radius: 50%;
+  box-shadow:
+    inset 0 0 0 18px rgba(0, 240, 255, 0.05),
+    inset 0 0 0 36px rgba(0, 240, 255, 0.03);
+}
+.ch-radar-blip {
+  position: absolute;
+  width: 4px; height: 4px;
+  border-radius: 50%;
+  background: #00f0ff;
+  box-shadow: 0 0 8px #00f0ff;
+  animation: ch-radar-blip 4s linear infinite;
+}
+.ch-blip-1 { top: 22%; left: 60%; animation-delay: -1.2s; }
+.ch-blip-2 { top: 70%; left: 30%; animation-delay: -2.6s; }
+.ch-blip-3 { top: 45%; left: 75%; animation-delay: -3.4s;
+             background: #39ff14; box-shadow: 0 0 8px #39ff14; }
+
+/* ============================================================
+   CYBERPUNK HYPERDRIVE — Section / Card decorations
+   Powers the cyberpunk look on Active Requests and Recently
+   Completed: numbered section badges, animated underline, status
+   dots, request-id brackets, animated progress bars, neon pills.
+
+   Default state for all `.ch-*` decoration classes is
+   `display: none` so the JSX additions are invisible under other
+   themes. They only render when [data-theme=cyberpunk-hyperdrive]
+   is active.
+   ============================================================ */
+
+.ch-section-idx,
+.ch-section-meta,
+.ch-section-underline,
+.ch-card-dot,
+.ch-card-eta,
+.ch-progress {
+  display: none;
+}
+
+/* Numbered section badge "01" / "02" */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-section-idx {
+  display: inline-block;
+  padding: 2px 7px;
+  margin-right: 12px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: #00f0ff;
+  border: 1px solid #00f0ff;
+  background: transparent;
+  text-shadow: 0 0 6px #00f0ff;
+  vertical-align: middle;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  text-transform: none;
+}
+
+/* "LIVE · N procs" meta after section title */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-section-meta {
+  display: inline;
+  margin-left: 12px;
+  font-size: 10px;
+  font-weight: 500;
+  color: #50506a;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  vertical-align: middle;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  /* Don't inherit h2's letter-spacing/glitch from the parent */
+  animation: none !important;
+}
+
+/* Blinking green "● LIVE" indicator */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-live {
+  color: #39ff14;
+  text-shadow: 0 0 6px #39ff14;
+  animation: ch-blink 1.4s step-end infinite;
+  margin-right: 3px;
+}
+
+/* Animated cyan gradient underline below section headers */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-section-underline {
+  display: block;
+  height: 1px;
+  margin-top: -4px;
+  margin-bottom: 18px;
+  background-image: linear-gradient(
+    90deg,
+    rgba(0, 240, 255, 0.5) 0%,
+    rgba(0, 240, 255, 0.05) 55%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: ch-border-trace 3s linear infinite;
+}
+
+/* Pulsing status dot on the left of each active card */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-card-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #50506a;
+}
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-card-dot-in_progress,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-card-dot-delegated,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-card-dot-received {
+  background: #f9f871;
+  color: #f9f871;
+  animation: ch-shockwave 1.6s ease-out infinite;
+}
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-card-dot-analyzing,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-card-dot-review {
+  background: #00f0ff;
+  color: #00f0ff;
+  animation: ch-shockwave 2s ease-out infinite;
+}
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-card-dot-testing {
+  background: #f9f871;
+  color: #f9f871;
+  animation: ch-shockwave 1.8s ease-out infinite;
+}
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-card-dot-completed,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-card-dot-done {
+  background: #39ff14;
+  box-shadow: 0 0 10px #39ff14;
+}
+
+/* ETA / status text next to request_id in the card header */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-card-eta {
+  display: inline-block;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: #50506a;
+  margin-left: 4px;
+  white-space: nowrap;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* Request ID — yellow with [ ] brackets */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-request-id {
+  color: #f9f871 !important;
+  text-shadow: 0 0 4px rgba(249, 248, 113, 0.5);
+  letter-spacing: 1px;
+}
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-request-id::before {
+  content: '[ ';
+  opacity: 0.5;
+}
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-request-id::after {
+  content: ' ]';
+  opacity: 0.5;
+}
+
+/* Animated progress bar across the bottom of every active card.
+   Color + final width follow the request's status. */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-progress {
+  display: block;
+  height: 2px;
+  margin-top: -2px;
+  background: rgba(255, 255, 255, 0.04);
+  position: relative;
+  overflow: hidden;
+}
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-progress-bar {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 0;
+  animation: ch-progress-fill 2.5s ease-out forwards, ch-hue-drift 4s ease-in-out infinite;
+}
+@keyframes ch-progress-fill {
+  0%   { width: 0; }
+  100% { width: var(--p, 60%); }
+}
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-progress-in_progress .ch-progress-bar,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-progress-delegated .ch-progress-bar,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-progress-received .ch-progress-bar {
+  background: linear-gradient(90deg, #f9f871, transparent);
+  box-shadow: 0 0 8px #f9f871;
+  --p: 67%;
+}
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-progress-analyzing .ch-progress-bar,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-progress-review .ch-progress-bar {
+  background: linear-gradient(90deg, #00f0ff, transparent);
+  box-shadow: 0 0 8px #00f0ff;
+  --p: 34%;
+}
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-progress-testing .ch-progress-bar {
+  background: linear-gradient(90deg, #f9f871, transparent);
+  box-shadow: 0 0 8px #f9f871;
+  --p: 50%;
+}
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-progress-completed .ch-progress-bar,
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-progress-done .ch-progress-bar {
+  background: linear-gradient(90deg, #39ff14, transparent);
+  box-shadow: 0 0 8px #39ff14;
+  --p: 100%;
+}
+
+/* Restyle StatusBadge from rounded fill-pill to sharp neon-bordered
+   pill. StatusBadge serializes as <span style="border-radius: 9999px;
+   ... display: inline-flex; ...">. Targeting both attribute substrings
+   avoids matching unrelated 9999px-rounded spans elsewhere. */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"]
+  span[style*="border-radius: 9999px"][style*="inline-flex"] {
+  border-radius: 0 !important;
+  padding: 3px 9px !important;
+  font-size: 9px !important;
+  font-weight: 700 !important;
+  letter-spacing: 1.5px !important;
+  text-transform: uppercase !important;
+  border: 1px solid currentColor !important;
+  text-shadow: 0 0 4px currentColor;
+  background: transparent !important;
+}
+
+/* ---------- Submit (Dispatch) button — matrix-green exec terminal ----------
+   Overrides the page-default pink fill with a green-outlined sharp pill.
+   The button text gets "> EXEC " prefixed and " [↵]" suffixed via pseudos
+   on the inner span (the button's own ::after is taken by the hover sweep). */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-submit-btn {
+  background: transparent !important;
+  color: #39ff14 !important;
+  border: 1px solid #39ff14 !important;
+  border-radius: 0 !important;
+  padding: 7px 12px !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  letter-spacing: 1.2px !important;
+  text-transform: uppercase !important;
+  text-shadow: 0 0 6px #39ff14 !important;
+  box-shadow:
+    0 0 12px rgba(57, 255, 20, 0.25),
+    inset 0 0 8px rgba(57, 255, 20, 0.06) !important;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace !important;
+  animation: none !important; /* override generic accent-button pulse */
+  gap: 4px !important;
+}
+
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-submit-btn:hover {
+  background: rgba(57, 255, 20, 0.1) !important;
+  box-shadow:
+    0 0 20px rgba(57, 255, 20, 0.55),
+    inset 0 0 12px rgba(57, 255, 20, 0.15) !important;
+  text-shadow: 0 0 10px #39ff14, 0 0 18px #39ff14 !important;
+}
+
+/* The hover-sweep on .ch-submit-btn should glow green instead of cyan
+   (default for all buttons). Repaints the gradient just for this button. */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-submit-btn::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(57, 255, 20, 0.28),
+    transparent
+  );
+}
+
+/* Hide the lucide Send icon inside the button — reference uses pure text */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-submit-btn svg {
+  display: none !important;
+}
+
+/* Prefix "> EXEC " before the dynamic label */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-submit-btn-text::before {
+  content: '> EXEC ';
+}
+
+/* Suffix " [↵]" after the dynamic label */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-submit-btn-text::after {
+  content: ' [↵]';
+  opacity: 0.6;
+  margin-left: 4px;
+}
+
+/* ---------- Sign In button — muted outlined cyan ----------
+   The solid cyan fill (var(--accent)) was visually overpowering on the
+   otherwise dark login card. Switch to an outlined style with a subtle
+   tinted background — same family as the Dispatch button but cyan so the
+   button still reads as the primary action without screaming. */
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-signin-btn {
+  background: rgba(0, 240, 255, 0.08) !important;
+  color: #00f0ff !important;
+  border: 1px solid rgba(0, 240, 255, 0.6) !important;
+  border-radius: 0 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 2px !important;
+  font-weight: 700 !important;
+  text-shadow: 0 0 4px rgba(0, 240, 255, 0.5) !important;
+  box-shadow:
+    0 0 8px rgba(0, 240, 255, 0.15),
+    inset 0 0 6px rgba(0, 240, 255, 0.04) !important;
+}
+
+[data-theme="cyberpunk-hyperdrive"][data-mode="dark"] .ch-signin-btn:hover {
+  background: rgba(0, 240, 255, 0.14) !important;
+  border-color: #00f0ff !important;
+  box-shadow:
+    0 0 14px rgba(0, 240, 255, 0.35),
+    inset 0 0 8px rgba(0, 240, 255, 0.08) !important;
+  text-shadow: 0 0 8px #00f0ff !important;
 }

@@ -2,10 +2,8 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 export type ThemeId =
-  | 'linear'
   | 'vercel'
-  | 'cyberpunk-hyperdrive'
-  | 'neon';
+  | 'cyberpunk-hyperdrive';
 
 export type ThemeMode = 'light' | 'dark';
 
@@ -19,12 +17,6 @@ export interface ThemeMeta {
 
 export const THEMES: ThemeMeta[] = [
   {
-    id: 'linear',
-    label: 'Linear',
-    description: 'Clean, minimal, productivity-focused.',
-    swatch: ['#0F1115', '#5E6AD2', '#8B92F0', '#5E6AD2'],
-  },
-  {
     id: 'vercel',
     label: 'Vercel',
     description: 'Monochrome black-and-white precision.',
@@ -33,14 +25,8 @@ export const THEMES: ThemeMeta[] = [
   {
     id: 'cyberpunk-hyperdrive',
     label: 'Cyberpunk Hyperdrive',
-    description: 'Neon pink/cyan grid with glowing accents.',
-    swatch: ['#0A0014', '#FF2A6D', '#00F0FF', '#39FF14'],
-  },
-  {
-    id: 'neon',
-    label: 'Neon',
-    description: 'Cyberpunk/synthwave with glowing accents.',
-    swatch: ['#0A0014', '#FF00FF', '#00FFFF', '#B026FF'],
+    description: 'Cyan / matrix-green neon grid with scanlines and glow.',
+    swatch: ['#0A0014', '#00F0FF', '#39FF14', '#F9F871'],
   },
 ];
 

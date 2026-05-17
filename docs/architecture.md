@@ -844,7 +844,7 @@ class BaseAgent(ABC):
 C:\ai-projects\claude-agent-team\
 │
 ├── docs/
-│   ├── prd-template.md              # Product Requirements Document
+│   ├── prd.md                       # Product Requirements Document
 │   ├── architecture.md              # This document — system architecture
 │   └── expansion-playbook.md        # How to add agents and teams
 │

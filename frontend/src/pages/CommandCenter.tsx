@@ -168,7 +168,7 @@ export function CommandCenterPage() {
   const completed = requests.filter((r) => isTerminal(r.status)).slice(0, 5)
 
   return (
-    <div style={{ maxWidth: 1280, margin: "0 auto", padding: 24, display: "flex", flexDirection: "column", gap: 32 }}>
+    <div style={{ maxWidth: 1800, margin: "0 auto", padding: "24px 36px", display: "flex", flexDirection: "column", gap: 32 }}>
       {/* Input Form */}
       <div
         style={{
@@ -179,7 +179,7 @@ export function CommandCenterPage() {
         }}
       >
         <h2 style={{ color: "var(--text-primary)", fontSize: 18, fontWeight: 600, marginBottom: 16 }}>
-          New Request
+          New_Request.init
         </h2>
 
         <RichTextInput
@@ -326,6 +326,7 @@ export function CommandCenterPage() {
             type="button"
             onClick={handleSubmit}
             disabled={submitting}
+            className="ch-submit-btn"
             style={{
               display: "flex",
               alignItems: "center",
@@ -342,7 +343,9 @@ export function CommandCenterPage() {
             }}
           >
             <Send size={14} />
-            {submitting ? "Submitting..." : "Submit"}
+            <span className="ch-submit-btn-text">
+              {submitting ? "Dispatching..." : "Dispatch"}
+            </span>
           </button>
         </div>
       </div>
@@ -351,8 +354,13 @@ export function CommandCenterPage() {
       {active.length > 0 && (
         <section>
           <h2 style={{ color: "var(--text-primary)", fontSize: 18, fontWeight: 600, marginBottom: 12 }}>
+            <span className="ch-section-idx" aria-hidden="true">01</span>
             Active Requests
+            <span className="ch-section-meta" aria-hidden="true">
+              · <span className="ch-live">●</span> LIVE · {active.length} {active.length === 1 ? "proc" : "procs"}
+            </span>
           </h2>
+          <div className="ch-section-underline" aria-hidden="true" />
           <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
             {active.map((r) => (
               <div
@@ -385,17 +393,24 @@ export function CommandCenterPage() {
                     padding: "12px 16px 0",
                   }}
                 >
-                  <Link
-                    to={`/request/${r.request_id}`}
-                    style={{
-                      fontSize: 12,
-                      fontFamily: "var(--font-mono)",
-                      color: "var(--text-muted)",
-                      textDecoration: "none",
-                    }}
-                  >
-                    {r.request_id}
-                  </Link>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                    <span className={`ch-card-dot ch-card-dot-${r.status}`} aria-hidden="true" />
+                    <Link
+                      to={`/request/${r.request_id}`}
+                      className="ch-request-id"
+                      style={{
+                        fontSize: 12,
+                        fontFamily: "var(--font-mono)",
+                        color: "var(--text-muted)",
+                        textDecoration: "none",
+                      }}
+                    >
+                      {r.request_id}
+                    </Link>
+                    <span className="ch-card-eta" aria-hidden="true">
+                      · <span className="ch-live">●</span> {r.status.replace(/_/g, " ")}
+                    </span>
+                  </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                     <StatusBadge status={r.status} />
                     {canMutate(r) && (
@@ -459,6 +474,9 @@ export function CommandCenterPage() {
                     <span style={{ textTransform: "capitalize" }}>{r.priority}</span>
                   </div>
                 </Link>
+                <div className={`ch-progress ch-progress-${r.status}`} aria-hidden="true">
+                  <div className="ch-progress-bar" />
+                </div>
               </div>
             ))}
           </div>
@@ -469,8 +487,13 @@ export function CommandCenterPage() {
       {completed.length > 0 && (
         <section>
           <h2 style={{ color: "var(--text-primary)", fontSize: 18, fontWeight: 600, marginBottom: 12 }}>
+            <span className="ch-section-idx" aria-hidden="true">02</span>
             Recently Completed
+            <span className="ch-section-meta" aria-hidden="true">
+              · {completed.length} of {requests.length} today
+            </span>
           </h2>
+          <div className="ch-section-underline" aria-hidden="true" />
           <div
             style={{
               background: "var(--bg-card)",

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team Command Center — Anthropic Brand Theme</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', 'Söhne', -apple-system, BlinkMacSystemFont, sans-serif; background: #f0eee5; color: #1a1a1a; display: flex; height: 100vh; overflow: hidden; -webkit-font-smoothing: antialiased; }
+
+  /* Theme Banner */
+  .theme-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: #1a1a1a; color: #f0eee5; text-align: center; padding: 8px 0; font-size: 13px; font-weight: 500; letter-spacing: 0.2px; }
+  .theme-banner span { opacity: 0.55; font-weight: 400; margin-left: 8px; }
+
+  /* Sidebar */
+  .sidebar { width: 240px; background: #ebe8db; border-right: 1px solid #ddd9c7; display: flex; flex-direction: column; padding-top: 50px; flex-shrink: 0; }
+  .sidebar-logo { padding: 24px 22px 28px; font-family: 'Fraunces', 'Tiempos Headline', Georgia, serif; font-size: 22px; font-weight: 500; letter-spacing: -0.8px; color: #1a1a1a; display: flex; align-items: center; gap: 12px; }
+  .sidebar-logo .icon { width: 36px; height: 36px; background: #cc785c; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 600; color: #f0eee5; font-family: 'Inter', sans-serif; }
+  .nav-items { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 0 12px; }
+  .nav-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px; font-size: 14px; color: #4a4540; cursor: pointer; transition: all 0.2s; font-weight: 500; }
+  .nav-item:hover { background: rgba(204, 120, 92, 0.08); color: #1a1a1a; }
+  .nav-item.active { background: #1a1a1a; color: #f0eee5; }
+  .nav-item .nav-icon { width: 18px; text-align: center; font-size: 15px; opacity: 0.8; }
+  .sidebar-user { padding: 18px 22px; border-top: 1px solid #ddd9c7; display: flex; align-items: center; gap: 12px; }
+  .avatar { width: 36px; height: 36px; background: #cc785c; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; color: #f0eee5; }
+  .sidebar-user .user-name { color: #1a1a1a; font-weight: 600; font-size: 13px; }
+  .sidebar-user .user-role { color: #6e6855; font-size: 11px; }
+
+  /* Main */
+  .main { flex: 1; background: #f0eee5; padding-top: 50px; overflow-y: auto; }
+  .main-header { display: flex; align-items: baseline; justify-content: space-between; padding: 40px 48px 32px; }
+  .main-header h1 { font-family: 'Fraunces', 'Tiempos Headline', Georgia, serif; font-size: 44px; font-weight: 400; letter-spacing: -1.4px; color: #1a1a1a; line-height: 1; }
+  .main-header h1 strong { font-weight: 600; }
+  .notification-bell { position: relative; cursor: pointer; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 8px; background: #ebe8db; border: 1px solid #ddd9c7; transition: all 0.15s; align-self: center; }
+  .notification-bell:hover { background: #e2dec9; }
+  .notification-bell .bell-icon { font-size: 16px; }
+  .notification-bell .badge { position: absolute; top: -4px; right: -4px; background: #cc785c; color: #f0eee5; font-size: 10px; font-weight: 600; width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid #f0eee5; }
+
+  /* Request Input */
+  .request-input { margin: 0 48px 32px; padding: 28px; background: #ffffff; border: 1px solid #ddd9c7; border-radius: 12px; }
+  .request-input .label { font-family: 'Fraunces', serif; font-size: 16px; font-weight: 400; color: #1a1a1a; margin-bottom: 16px; letter-spacing: -0.2px; }
+  .request-input .label::before { content: '※ '; color: #cc785c; }
+  .request-input textarea { width: 100%; background: #f9f7f0; border: 1px solid #e8e4d3; border-radius: 8px; color: #1a1a1a; padding: 14px 16px; font-size: 15px; font-family: inherit; resize: none; height: 84px; outline: none; transition: border-color 0.2s; line-height: 1.5; }
+  .request-input textarea::placeholder { color: #a09a85; }
+  .request-input textarea:focus { border-color: #cc785c; background: #fff; }
+  .input-controls { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
+  .type-select { background: transparent; border: 1px solid #ddd9c7; border-radius: 8px; color: #4a4540; padding: 8px 14px; font-size: 13px; font-family: inherit; outline: none; cursor: pointer; font-weight: 500; }
+  .priority-pills { display: flex; gap: 6px; }
+  .priority-pill { padding: 7px 16px; border-radius: 8px; font-size: 12px; font-weight: 500; border: 1px solid #ddd9c7; background: transparent; color: #6e6855; cursor: pointer; transition: all 0.15s; }
+  .priority-pill:hover { border-color: #cc785c; color: #cc785c; }
+  .priority-pill.selected { border-color: #cc785c; background: #cc785c; color: #f0eee5; }
+  .submit-btn { margin-left: auto; background: #1a1a1a; color: #f0eee5; border: none; padding: 10px 24px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; transition: background 0.15s; font-family: inherit; }
+  .submit-btn:hover { background: #cc785c; }
+
+  /* Section */
+  .section { margin: 0 48px 32px; }
+  .section-title { font-family: 'Fraunces', serif; font-size: 14px; font-weight: 500; color: #1a1a1a; margin-bottom: 16px; padding-bottom: 10px; border-bottom: 1px solid #ddd9c7; letter-spacing: -0.1px; }
+  .section-title::before { content: '— '; color: #cc785c; }
+
+  /* Request Cards */
+  .request-card { background: #ffffff; border: 1px solid #ddd9c7; border-radius: 10px; padding: 18px 22px; margin-bottom: 8px; display: flex; align-items: center; gap: 16px; transition: all 0.15s; }
+  .request-card:hover { border-color: #cc785c; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .status-dot.in-progress { background: #cc785c; animation: pulse 2s ease-in-out infinite; }
+  .status-dot.analyzing { background: #b8924c; animation: pulse 2.5s ease-in-out infinite; }
+  .status-dot.completed { background: #6b8e5a; }
+  @keyframes pulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(204, 120, 92, 0.3); } 50% { opacity: 0.7; box-shadow: 0 0 0 6px rgba(204, 120, 92, 0); } }
+  .card-content { flex: 1; min-width: 0; }
+  .card-top { display: flex; align-items: center; gap: 12px; margin-bottom: 3px; }
+  .request-id { font-family: 'JetBrains Mono', 'Söhne Mono', monospace; font-size: 11px; color: #a09a85; letter-spacing: 0.3px; }
+  .card-title { font-size: 14px; color: #1a1a1a; font-weight: 500; line-height: 1.4; }
+  .card-meta { display: flex; gap: 6px; flex-shrink: 0; }
+  .pill { padding: 4px 11px; border-radius: 6px; font-size: 11px; font-weight: 500; letter-spacing: 0.2px; }
+  .pill-status { background: rgba(204, 120, 92, 0.12); color: #cc785c; }
+  .pill-status.analyzing { background: rgba(184, 146, 76, 0.15); color: #8c6e3a; }
+  .pill-status.completed { background: rgba(107, 142, 90, 0.15); color: #4f6e42; }
+  .pill-type { background: #ebe8db; color: #6e6855; }
+  .pill-priority-high { background: rgba(204, 120, 92, 0.12); color: #cc785c; }
+  .pill-priority-medium { background: rgba(184, 146, 76, 0.15); color: #8c6e3a; }
+
+  /* Completed */
+  .completed-list { background: #ffffff; border: 1px solid #ddd9c7; border-radius: 10px; overflow: hidden; }
+  .completed-row { display: flex; align-items: center; gap: 16px; padding: 14px 22px; border-bottom: 1px solid #f0ecd9; }
+  .completed-row:last-child { border-bottom: none; }
+  .completed-row:hover { background: #faf7ee; }
+  .completed-row .card-title { font-size: 13px; color: #4a4540; }
+</style>
+</head>
+<body>
+
+<div class="theme-banner">Theme 25: Anthropic Brand<span>— Cream + Claude orange, Fraunces serif headers, considered minimalism (on-brand for the agent platform)</span></div>
+
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="icon">A</div>
+    Agent Team
+  </div>
+  <div class="nav-items">
+    <div class="nav-item active"><span class="nav-icon">&#9678;</span> Command Center</div>
+    <div class="nav-item"><span class="nav-icon">&#8634;</span> History</div>
+    <div class="nav-item"><span class="nav-icon">&#9881;</span> Releases</div>
+    <div class="nav-item"><span class="nav-icon">&#9823;</span> Team</div>
+    <div class="nav-item"><span class="nav-icon">&#36;</span> Cost</div>
+  </div>
+  <div class="sidebar-user">
+    <div class="avatar">CL</div>
+    <div class="user-info">
+      <div class="user-name">Claude</div>
+      <div class="user-role">Admin</div>
+    </div>
+  </div>
+</nav>
+
+<main class="main">
+  <div class="main-header">
+    <h1>Command <strong>Center</strong></h1>
+    <div class="notification-bell">
+      <span class="bell-icon">&#128276;</span>
+      <span class="badge">3</span>
+    </div>
+  </div>
+
+  <div class="request-input">
+    <div class="label">New Request</div>
+    <textarea placeholder="Describe what you want the agent team to build…"></textarea>
+    <div class="input-controls">
+      <select class="type-select">
+        <option>Feature</option>
+        <option>Bug Fix</option>
+        <option>Refactor</option>
+        <option>Docs</option>
+      </select>
+      <div class="priority-pills">
+        <button class="priority-pill">Low</button>
+        <button class="priority-pill selected">Medium</button>
+        <button class="priority-pill">High</button>
+        <button class="priority-pill">Critical</button>
+      </div>
+      <button class="submit-btn">Submit Request</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Active Requests</div>
+    <div class="request-card">
+      <div class="status-dot in-progress"></div>
+      <div class="card-content">
+        <div class="card-top"><span class="request-id">REQ-A1B2C3</span></div>
+        <div class="card-title">Build login page with JWT authentication</div>
+      </div>
+      <div class="card-meta">
+        <span class="pill pill-status">in_progress</span>
+        <span class="pill pill-type">feature</span>
+        <span class="pill pill-priority-high">high</span>
+      </div>
+    </div>
+    <div class="request-card">
+      <div class="status-dot analyzing"></div>
+      <div class="card-content">
+        <div class="card-top"><span class="request-id">REQ-D4E5F6</span></div>
+        <div class="card-title">Add dark mode support</div>
+      </div>
+      <div class="card-meta">
+        <span class="pill pill-status analyzing">analyzing</span>
+        <span class="pill pill-type">feature</span>
+        <span class="pill pill-priority-medium">medium</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Completed</div>
+    <div class="completed-list">
+      <div class="completed-row">
+        <div class="status-dot completed"></div>
+        <span class="request-id">REQ-001</span>
+        <span class="card-title">Fix image upload timeout</span>
+        <span class="pill pill-status completed" style="margin-left:auto;">completed</span>
+      </div>
+      <div class="completed-row">
+        <div class="status-dot completed"></div>
+        <span class="request-id">REQ-002</span>
+        <span class="card-title">Update API docs</span>
+        <span class="pill pill-status completed" style="margin-left:auto;">completed</span>
+      </div>
+      <div class="completed-row">
+        <div class="status-dot completed"></div>
+        <span class="request-id">REQ-003</span>
+        <span class="card-title">Setup CI/CD pipeline</span>
+        <span class="pill pill-status completed" style="margin-left:auto;">completed</span>
+      </div>
+    </div>
+  </div>
+</main>
+
+</body>
+</html>

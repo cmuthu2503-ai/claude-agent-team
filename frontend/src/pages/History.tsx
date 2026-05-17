@@ -56,14 +56,18 @@ export function HistoryPage() {
     }
   }
 
+  // All `gray-XXX` / `bg-white` / `text-blue-600` hardcoded Tailwind colors
+  // replaced with arbitrary-value classes that resolve to theme CSS variables,
+  // so this page picks up whatever theme is active (was locked to light-mode
+  // grays regardless of theme). Layout/structure unchanged.
   return (
-    <div className="mx-auto max-w-5xl space-y-4 p-6">
+    <div className="mx-auto max-w-[1800px] space-y-4 px-9 py-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-gray-900">History</h1>
+        <h1 className="text-xl font-bold text-[var(--text-primary)]">History</h1>
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          className="rounded-md border border-gray-300 px-3 py-1.5 text-sm"
+          className="rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] px-3 py-1.5 text-sm"
         >
           <option value="">All Statuses</option>
           <option value="completed">Completed</option>
@@ -72,9 +76,9 @@ export function HistoryPage() {
           <option value="in_progress">In Progress</option>
         </select>
       </div>
-      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+      <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-card)]">
         <table className="w-full text-sm">
-          <thead className="border-b bg-gray-50 text-left text-xs font-medium text-gray-500">
+          <thead className="border-b border-[var(--border)] bg-[var(--bg-secondary)] text-left text-xs font-medium text-[var(--text-muted)]">
             <tr>
               <th className="px-4 py-3">ID</th>
               <th className="px-4 py-3">Description</th>
@@ -85,30 +89,30 @@ export function HistoryPage() {
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">
+          <tbody className="divide-y divide-[var(--border)]">
             {requests.map((r) => {
               const terminal = isTerminal(r.status)
               const allowed = canMutate(r)
               const busy = busyId === r.request_id
               return (
-                <tr key={r.request_id} className="hover:bg-gray-50">
+                <tr key={r.request_id} className="hover:bg-[var(--bg-hover)]">
                   <td className="px-4 py-3">
-                    <Link to={`/request/${r.request_id}`} className="font-mono text-blue-600 hover:underline">
+                    <Link to={`/request/${r.request_id}`} className="font-mono text-[var(--accent)] hover:underline">
                       {r.request_id}
                     </Link>
                   </td>
-                  <td className="max-w-xs truncate px-4 py-3 text-gray-700">{r.description}</td>
-                  <td className="px-4 py-3 capitalize text-gray-500">{r.task_type?.replace("_", " ")}</td>
-                  <td className="px-4 py-3 capitalize text-gray-500">{r.priority}</td>
+                  <td className="max-w-xs truncate px-4 py-3 text-[var(--text-primary)]">{r.description}</td>
+                  <td className="px-4 py-3 capitalize text-[var(--text-secondary)]">{r.task_type?.replace("_", " ")}</td>
+                  <td className="px-4 py-3 capitalize text-[var(--text-secondary)]">{r.priority}</td>
                   <td className="px-4 py-3"><StatusBadge status={r.status} /></td>
-                  <td className="px-4 py-3 text-gray-400">{new Date(r.created_at).toLocaleDateString()}</td>
+                  <td className="px-4 py-3 text-[var(--text-muted)]">{new Date(r.created_at).toLocaleDateString()}</td>
                   <td className="px-4 py-3 text-right">
                     {allowed && !terminal && (
                       <button
                         type="button"
                         disabled={busy}
                         onClick={() => handleCancel(r.request_id)}
-                        className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:border-red-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                        className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-transparent px-2 py-1 text-xs text-[var(--text-secondary)] hover:border-[var(--danger)] hover:text-[var(--danger)] disabled:opacity-50"
                         title="Cancel this in-flight request"
                       >
                         <X size={12} />
@@ -120,7 +124,7 @@ export function HistoryPage() {
                         type="button"
                         disabled={busy}
                         onClick={() => handleDelete(r.request_id)}
-                        className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:border-red-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                        className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-transparent px-2 py-1 text-xs text-[var(--text-secondary)] hover:border-[var(--danger)] hover:text-[var(--danger)] disabled:opacity-50"
                         title="Delete this request permanently"
                       >
                         <Trash2 size={12} />
@@ -134,7 +138,7 @@ export function HistoryPage() {
           </tbody>
         </table>
         {requests.length === 0 && (
-          <div className="py-12 text-center text-gray-400">No requests found</div>
+          <div className="py-12 text-center text-[var(--text-muted)]">No requests found</div>
         )}
       </div>
     </div>

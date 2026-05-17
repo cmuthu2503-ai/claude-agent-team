@@ -7,11 +7,55 @@
 
 | Field | Value |
 |-------|-------|
-| Document Version | 3.4 |
+| Document Version | 3.5 |
 | Created Date | 2026-04-04 |
-| Last Updated | 2026-04-06 |
+| Last Updated | 2026-05-17 |
 | Status | Draft |
 | Product Owner | Chandramouli |
+
+---
+
+## 0. Recent Changes (post-v3.4)
+
+The platform has evolved meaningfully since v3.4 (2026-04-06). The following
+high-impact deltas are reflected throughout the document but called out here
+so a reader doesn't get blindsided by stale paragraphs in later sections:
+
+- **Single LLM provider.** The multi-provider toggle (Anthropic direct /
+  Bedrock / OpenAI / Ollama) has been removed. All 9 agents now run on
+  **Claude Platform on AWS** (Anthropic-operated, AWS-authenticated) via
+  the `anthropic[aws]` SDK on `claude-opus-4-7`. Setup:
+  [docs/setup-claude-platform-on-aws.md](setup-claude-platform-on-aws.md).
+  Any reference below to an Anthropic-vs-Bedrock toggle is historical —
+  the toggle UI and the per-page provider state are gone.
+- **Theme system trimmed.** The 6-theme catalog (Linear, Vercel, Discord,
+  Flat, Brutalist, Y2K) is now 2 themes: **Vercel** and **Cyberpunk
+  Hyperdrive** (the new default). Cyberpunk Hyperdrive adds a CSS effects
+  layer (CRT scanlines, vignette, flicker, neon glow) plus a React overlay
+  component (matrix-rain columns, scrolling data ticker wired to live
+  agent/cost stats, radar widget, floating particles, glitch-shifted
+  section headers).
+- **Sidebar navigation.** Top-bar nav items moved into a left sidebar
+  (`Sidebar.tsx`). The top bar now only carries logo + theme controls +
+  user/role/logout. Active page is highlighted with cyan pulse-glow under
+  cyberpunk.
+- **Supervisor runs on the host, not in Docker.** The
+  containerized supervisor (`docker-compose.supervisor.yml`) is
+  deprecated. The supervisor process now runs on the developer's host
+  machine (`make supervisor` / `make supervisor-bg`) so its `docker
+  compose` invocations against the dev stack resolve bind-mount paths
+  correctly. Three Windows-portability fixes shipped alongside: argv-form
+  git checkout (cmd.exe doesn't strip single quotes), UTF-8 subprocess
+  decoding (cp1252 fails on docker progress output), urllib-based
+  healthchecks (curl `-o /dev/null` exits 23 on Windows).
+- **Story Board fixes.** Theme-aware color tokens, tab persistence (no
+  more "snap back to Story Board" every 3s on Agent Timeline / Outputs),
+  cyan pipeline-completion color (was matrix-green), de-duped breadcrumb
+  + header, removal of hardcoded `PR #43 — Merged` / `PR #46 — Under
+  Review` / fabricated reviewer comments.
+- **What did NOT change.** Agent roster (9 agents). Workflow DAGs. Story
+  Board Kanban layout. Cost dashboard. Auth model. GitHub Trees-API
+  publishing. Research/Content pipelines.
 
 ---
 
@@ -336,18 +380,27 @@ The system supports these expansions through YAML-only changes:
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | UI-001 | Sun/moon toggle icon in navbar switches between light and dark mode for the current theme | Critical |
-| UI-002 | All 6 themes (Linear, Vercel, Discord, Flat, Brutalist, Y2K) have both light and dark color palettes | Critical |
+| UI-002 | All 2 themes (Vercel, Cyberpunk Hyperdrive) have both light and dark color palettes | Critical |
 | UI-003 | Mode (light/dark) persists to localStorage independently of theme selection | Critical |
 | UI-004 | Theme selection persists to localStorage independently of mode | High |
-| UI-005 | CSS selectors use [data-theme="X"][data-mode="Y"] for 12 palette combinations | High |
+| UI-005 | CSS selectors use [data-theme="X"][data-mode="Y"] for 4 palette combinations | High |
 
 ### Theme System
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| UI-006 | 6 selectable themes available via dropdown in navbar | High |
+| UI-006 | 2 selectable themes (Vercel, Cyberpunk Hyperdrive) available via dropdown in navbar; Cyberpunk Hyperdrive is the default | High |
 | UI-007 | Each theme defines CSS custom properties (--bg-primary, --text-primary, --accent, etc.) | High |
 | UI-008 | All UI components use var(--xxx) for colors, not hardcoded values | High |
+| UI-008a | Cyberpunk Hyperdrive ships a CSS effects layer (CRT scanlines, vignette, flicker, neon glow on headers/buttons/links) scoped to `[data-theme="cyberpunk-hyperdrive"]` so other themes are untouched | High |
+| UI-008b | A React `<CyberpunkOverlay>` (only mounted when the cyberpunk theme is active) renders matrix-rain columns, a scrolling data ticker wired to live API stats (agents, requests, cost), a radar widget, and floating particles | High |
+
+### Sidebar Navigation
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| UI-008c | Primary navigation lives in a left sidebar (Command Center, Prompt Studio, Diagrams, History, Releases, Team, Cost, Users-admin-only). Top bar only carries logo + theme controls + user/role/logout | High |
+| UI-008d | Active sidebar item visually distinguished (subtle bg tint + accent text); under cyberpunk theme this becomes a continuous pulse-glow | High |
 
 ### Inline Screenshot Attachments
 
@@ -521,7 +574,7 @@ docs/research/
 - Open-source core (self-hostable if needed)
 - Predictable credit-based pricing
 
-**Provider compatibility**: tool use is part of Anthropic's Messages API, supported on both **direct Anthropic API and Amazon Bedrock**. So adding Firecrawl works for both sides of the Command Center provider toggle — no code paths diverge.
+**Provider compatibility**: tool use is part of Anthropic's Messages API, which the single supported provider (**Claude Platform on AWS**) implements natively. Firecrawl tool calls flow through the same `BaseAgent._call_llm()` loop with no provider-specific branching.
 
 **Two tools exposed to agents:**
 
@@ -542,7 +595,7 @@ docs/research/
 |----|-------------|----------|
 | WST-001 | All 9 agents have `web_search` and `web_scrape` available as tools | High |
 | WST-002 | Research Specialist system prompt MUST mandate `web_search` for any time-sensitive topic (market data, model versions, pricing, news) | High |
-| WST-003 | Tools work identically under both Anthropic and Bedrock provider modes | High |
+| WST-003 | Tools work identically across all 9 agents under the single Claude Platform on AWS provider | High |
 | WST-004 | `FIRECRAWL_API_KEY` configured via `.env` (no UI configuration) | High |
 | WST-005 | Soft-fail on Firecrawl errors — agent run continues, error visible in tool result | High |
 | WST-006 | Search results truncated to ~3000 chars per item to control token usage | Medium |
@@ -566,7 +619,7 @@ docs/research/
 
 **Solution:** A dedicated page where users enter their requirements via structured fields and receive 3 professionally-engineered prompt variants — each using a different approach — that they can copy, select, and iteratively refine.
 
-**This feature is NOT part of the agent pipeline.** It's a stateless one-shot LLM call (using the existing Anthropic or Bedrock client based on a per-page provider toggle) that returns 3 variants in a single API call. It does not touch the orchestrator, workflow runner, story board, or research publisher.
+**This feature is NOT part of the agent pipeline.** It's a stateless one-shot LLM call (using the shared Claude Platform on AWS client — no per-page provider toggle anymore) that returns 1 variant in a single API call. It does not touch the orchestrator, workflow runner, story board, or research publisher.
 
 **Key workflow:**
 
@@ -612,8 +665,8 @@ prompt_variants: variant_id, session_id, iteration, variant_index, approach,
 |----|-------------|----------|
 | PS-001 | Structured input: use case (required), audience, desired output, tone, constraints | High |
 | PS-002 | Advanced options collapsible: target LLM, output format, few-shot, CoT, length, category | High |
-| PS-003 | Per-page provider toggle (Claude/Bedrock), defaults from localStorage | High |
-| PS-004 | 3 variant generation in ONE LLM call, returned as parsed JSON | High |
+| PS-003 | Single provider (Claude Platform on AWS) — no per-page toggle (was Claude/Bedrock; removed when the provider consolidated) | High |
+| PS-004 | Single-variant generation in ONE LLM call, returned as parsed JSON (was "3 variants" — narrowed to 1 to reduce token spend) | High |
 | PS-005 | Each variant has: approach label, prompt text, techniques applied, copy button, select button | High |
 | PS-006 | Starting templates loaded from `config/prompt_templates.yaml` (6 defaults) | High |
 | PS-007 | Iterative refinement: feedback on selected variant generates 3 new variants in a new iteration | High |
@@ -645,7 +698,7 @@ prompt_variants: variant_id, session_id, iteration, variant_index, approach,
 2. Top section: a single textarea for the **System Prompt**, auto-filled from a Generator variant if the user clicked "Try in Execute" there
 3. Below: a chat conversation pane (initially empty), then a chat input + Send button
 4. User types a message → click Send (or Enter)
-5. Backend opens a Server-Sent Events stream, calls Anthropic/Bedrock with `messages.stream(...)`, and yields tokens as they arrive
+5. Backend opens a Server-Sent Events stream, calls Claude Platform on AWS with `messages.stream(...)`, and yields tokens as they arrive
 6. Frontend appends the assistant's response token-by-token into a new chat bubble
 7. If web tools are enabled and the model decides to call `web_search` or `web_scrape`, the backend executes the tool, sends a tool-call event to the frontend (rendered as a collapsible card in the chat), and continues the model's response from where it left off
 8. After the assistant turn completes, the chat input re-enables. User can send a follow-up — full conversation history is sent on each turn for multi-turn context
@@ -653,13 +706,13 @@ prompt_variants: variant_id, session_id, iteration, variant_index, approach,
 
 **Key technical details:**
 
-- **Streaming:** uses Anthropic Python SDK's `client.messages.stream()` (works on both direct Anthropic and Bedrock). Backend forwards events as SSE; frontend reads via `fetch` + `ReadableStream`.
+- **Streaming:** uses `anthropic[aws]` SDK's `client.messages.stream()` against Claude Platform on AWS. Backend forwards events as SSE; frontend reads via `fetch` + `ReadableStream`.
 - **Tool-use loop:** when tools are enabled and the model emits `tool_use` blocks, the backend pauses the stream, executes each tool, appends the result as a `tool_result` content block in the user role, and starts a new stream. Loops up to `MAX_ITERATIONS = 5` per user turn before giving up.
 - **Multi-turn:** the frontend keeps the full conversation in component state and sends the entire history on every turn. State is lost on tab change — no persistence (stateless playground).
 - **Tools available:** `web_search` and `web_scrape` (Firecrawl) only — opt-in via checkbox in Advanced Options. Other agent tools (file_read, code_exec, github_api, etc.) are deliberately NOT exposed because they belong in the agent pipeline, not a playground.
 - **Auto-prepended tool hint:** when the tool checkbox is enabled, the backend prepends a one-line instruction to the system prompt: *"You have web_search and web_scrape tools available — use them when you need current information you don't have in your training."* This nudges the model to actually use the tools when appropriate.
 - **Cost + token tracking:** displayed per-turn and as a running total for the conversation.
-- **Provider toggle:** Claude / Bedrock, defaults from localStorage (shared with Generator and Command Center).
+- **Provider:** Claude Platform on AWS (single provider — the per-page toggle was removed when the platform consolidated).
 
 **Key requirements:**
 
@@ -685,7 +738,7 @@ prompt_variants: variant_id, session_id, iteration, variant_index, approach,
 | FE-22 | Persist execution sessions in DB (linked to source prompt session) | Medium |
 | FE-23 | "Save as preset" — bookmark a (system prompt + first message) combo for reuse | Medium |
 | FE-24 | Download conversation as `.md` or `.json` | Low |
-| FE-25 | Side-by-side execute mode — run the same conversation on Claude AND Bedrock to compare | Low |
+| FE-25 | ~~Side-by-side execute mode — run the same conversation on Claude AND Bedrock to compare~~ — DROPPED (single-provider platform; no second provider to compare against) | Low |
 | FE-26 | Additional tool toggles (file_read for project context, code_exec sandbox) | Low |
 | FE-27 | Model parameter A/B test — run the same prompt 2-3 times with different temperatures and compare side by side | Low |
 
@@ -773,25 +826,64 @@ When both Code Review and Testing complete, a combined quality gate evaluates bo
 | DS-003 | On container restart, DevOps agent reads deployment_state and resumes from last step | Critical |
 | DS-004 | Step history stored as JSON array — full audit trail of every state transition | High |
 
-#### Sidecar Supervisor
+#### Deployment Supervisor (Host Process)
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| SS-001 | Supervisor process runs on host machine, outside Docker containers | Critical |
-| SS-002 | Supervisor watches deployment_state for 'code_committed' trigger | Critical |
-| SS-003 | Supervisor executes: docker compose build → staging deploy → health check → prod deploy → health check | Critical |
-| SS-004 | Supervisor updates deployment_state at every step transition | Critical |
-| SS-005 | On any failure: supervisor executes rollback (git revert + Docker retag + container restart) | Critical |
-| SS-006 | Supervisor rebuilds dev containers after successful deployment | High |
+| SS-001 | Supervisor runs as a Python process on the developer host (`make supervisor` / `make supervisor-bg`), NOT inside Docker. Host execution is required because Compose bind-mount paths in `docker-compose.yml` only resolve correctly when `docker compose` is invoked from the host filesystem. | Critical |
+| SS-002 | Supervisor polls `deployment_states` for rows with `current_step = 'code_committed'` and picks them up for processing. | Critical |
+| SS-003 | Deployment flow per row: sync files from origin/main → ask the deployment judge for a strategy → docker compose build → staging up + healthcheck → staging teardown → dev rebuild + healthcheck (with retry fallback). **Production deploy step removed** — was intermittently failing under back-to-back staging→prod builds and was not a priority. | Critical |
+| SS-004 | Supervisor records every step transition (`syncing`, `judging`, `building`, `staging_deploying`, `staging_healthy`, `dev_rebuilding`, `completed`, `failed`, `rolled_back`, etc.) in `deployment_states.step_history` as a JSON array — full audit trail. | Critical |
+| SS-005 | On staging or dev healthcheck failure: supervisor runs the rollback flow (git stash → `git revert HEAD --no-edit` on local main → `git push origin main`) and rebuilds dev from the reverted commit. | Critical |
+| SS-006 | Supervisor rebuilds dev containers after a successful deploy so the developer's local dev stack reflects the just-shipped code. | High |
+| SS-007 | Supervisor runs a **mirror loop** (independent of any specific deployment): continuous `git fetch origin main` + `git merge --ff-only origin/main` so the host working tree stays current as agents push commits via the GitHub Trees API. Failed ff-merges (dirty working tree) are logged but don't abort the loop. | High |
+| SS-008 | Supervisor performs a **surgical sync** per deployment: `git fetch origin main` + `git checkout origin/main -- <files_committed>` rather than `git pull` / `git reset --hard`, so uncommitted work on other paths is preserved. | High |
+| SS-009 | Supervisor's healthcheck window for dev rebuild is 120s + auto-restart fallback + final 80s pass before declaring failure (was 30s — too short for cold container starts, especially on Windows hosts). | High |
+| SS-010 | Supervisor process termination is idempotent: on restart, it `cleanup_stale_inflight_rows()` to flip any `deploying` / `building` rows back to `code_committed` so deployments resume cleanly after a supervisor crash or `Ctrl+C`. | Medium |
+
+#### Deployment Judge LLM
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| DJ-001 | Before docker work, supervisor calls a judge LLM with the commit's files + diff summary and gets a strategy decision: `deploy_full` / `deploy_staging_only` / `skip` / `hold`. | Critical |
+| DJ-002 | Judge's strategy, reasoning, and risk fields persist on the `deployment_states` row (`strategy`, `strategy_reasoning`, `risk`). | High |
+| DJ-003 | `skip` strategy: supervisor marks the deployment `completed` without docker work (files synced to host working tree already). Used for doc-only or research-only commits. | High |
+| DJ-004 | `hold` strategy: supervisor marks `on_hold` and stops. Manual unblock required — used when the judge sees a high-risk diff (schema migration, auth change, etc.). | High |
+| DJ-005 | `deploy_staging_only`: build + staging healthcheck only; skip dev rebuild. Used for risky commits that the judge wants staging-validated before touching dev. | Medium |
+| DJ-006 | `deploy_full`: the standard flow described in SS-003. | Critical |
 
 #### Rollback
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| RB-001 | Rollback reverts git commit (`git revert HEAD`) and pushes to GitHub | Critical |
-| RB-002 | Rollback retags previous Docker image and restarts containers | Critical |
-| RB-003 | Rollback updates deployment_state with 'rolled_back' status | High |
-| RB-004 | Both staging and production rolled back on production failure | High |
+| RB-001 | Rollback reverts the offending commit (`git revert HEAD --no-edit`) on local main and pushes to origin (`git push origin main`). The revert is a forward commit, not a force-push — history is preserved. | Critical |
+| RB-002 | Rollback brings dev back up from the reverted commit via `docker compose -f docker-compose.yml up -d` with a 180s timeout (was 60s — too short for cold container starts on Windows). | Critical |
+| RB-003 | Rollback updates `deployment_states` with `rolled_back` step + reason in `error_message`. | High |
+| RB-004 | Staging is torn down before rollback (validation environment, no traffic to drain). No prod rollback step — prod deploy was removed from the supervisor flow. | High |
+| RB-005 | If the rollback itself fails (e.g., dev rebuild times out post-revert), supervisor marks `Rollback aborted` in `error_message` so the user sees both the original failure AND the failed-rollback signal in one place. | High |
+
+#### Cross-Platform Reliability (Windows host support)
+
+The supervisor must work identically on Linux, macOS, and Windows developer
+hosts. Three Windows-specific bugs that bit production deployments and the
+guardrails added to prevent them recurring:
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| CP-001 | `subprocess.run` calls that interpolate dynamic data (file paths, user input) MUST use argv-list form (`shell=False`), not shell-string. Reason: cmd.exe does not strip single quotes the way /bin/sh does, so `git checkout origin/main -- 'path'` was 404'ing every file on Windows. The `run_cmd` helper accepts `str | list[str]` — list form is shell-free. | Critical |
+| CP-002 | All subprocess.run calls pin `encoding="utf-8", errors="replace"` to override the platform default. Reason: Windows defaults to cp1252, which can't decode UTF-8 progress spinners in `docker compose build` output — the reader thread crashed and left `result.stdout = None`, blowing up `result.stdout + result.stderr` with NoneType+str. | Critical |
+| CP-003 | Health checks use `urllib.request` (stdlib, no shell), not `curl -sf -o /dev/null`. Reason: `/dev/null` doesn't exist on Windows — curl returned exit code 23 (body-write failure) even when the HTTP response was 200, causing every staging healthcheck to be spuriously interpreted as a failure and triggering a rollback. | Critical |
+| CP-004 | Supervisor logs force UTF-8 stdout/stderr on `sys.platform == "win32"` so emoji glyphs in log lines (✅ ⚖ 🧹 📥) don't crash the process at the first log call. | High |
+| CP-005 | New `subprocess.run(shell=True)` calls require an inline comment explaining (a) why argv form won't work, (b) what the input is and where it came from, (c) what shell injection mitigations apply. PRs without this justification are blocked. | Medium |
+
+#### Stable Compose Project Naming
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| CN-001 | Every Compose file has an explicit top-level `name:` (`agent-team-dev`, `agent-team-staging`, `agent-team-prod`, `agent-team-demo`). Without this, Compose derives the project name from the working directory (e.g., `jolly-aryabhata-f0e6ad` for a worktree), which makes volume names ephemeral and breaks the supervisor's `external: true` volume binding (it has to know the volume name up front). | Critical |
+| CN-002 | The `data/` SQLite dir is a host bind-mount (`./data:/app/data`), NOT a named volume. Reason: supervisor reads SQLite directly from the host (per SS-001), and named-volume Docker gymnastics weren't a tractable way to share the DB between supervisor-on-host and backend-in-container. | Critical |
+| CN-003 | `reports` and `backups` stay as named volumes — they're write-only caches the host doesn't need to read. | Medium |
+| CN-004 | Override with `COMPOSE_PROJECT_NAME=foo` env var when an isolated dev environment is intentionally desired (env var wins over `name:` at the file level). | Low |
 
 #### Pipeline Gate: Zero Tolerance
 
@@ -1204,3 +1296,5 @@ All thresholds are configurable in `config/thresholds.yaml`. Default values:
 | 1.0 | 2026-04-04 | Chandramouli | Initial draft — 7 agents, linear workflow |
 | 2.0 | 2026-04-04 | Chandramouli | Scalable architecture — 8 agents, team hierarchy, DAG workflows, config-driven system |
 | 3.0 | 2026-04-06 | Chandramouli | Added Section 5 (UI Features & Enhancements) — light/dark theme toggle, 6 themes, screenshot attachments, live activity feed, agent output visibility, markdown rendering, cost dashboard. Renumbered sections 6-14. |
+| 3.5 | 2026-05-17 | Chandramouli | Refresh pass: added Section 0 (Recent Changes); trimmed theme catalog from 6 → 2 (Vercel + Cyberpunk Hyperdrive); added UI-008a/b/c/d for the cyberpunk effects layer, overlay component, and left sidebar; removed multi-provider toggle references (Anthropic/Bedrock) — single provider is Claude Platform on AWS; updated Prompt Studio reqs (1 variant, no provider toggle); marked FE-25 obsolete; documented supervisor host execution + Windows portability fixes. Filename renamed from `prd-template.md` → `prd.md`. |
+| 3.6 | 2026-05-17 | Chandramouli | Backfilled missing PRD entries for already-shipped supervisor work: rewrote stale Sidecar Supervisor section (renamed to "Deployment Supervisor (Host Process)") with current SS-001–010; added new sections for the Deployment Judge LLM (DJ-001–006), rewrote Rollback (RB-001–005) to drop image retagging + prod rollback, added Cross-Platform Reliability subsection (CP-001–005) covering the argv-form / UTF-8 / urllib / emoji fixes, and added Stable Compose Project Naming subsection (CN-001–004). |

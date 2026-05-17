@@ -130,6 +130,7 @@ export function LoginPage() {
             type="button"
             onClick={handleClick}
             disabled={loading}
+            className="ch-signin-btn"
             style={{
               width: "100%",
               borderRadius: "var(--radius)",

@@ -627,7 +627,7 @@ The audit touched 12 tracked files plus created 4 new ones (`.dockerignore`, `sr
 | `frontend/src/pages/CommandCenter.tsx` | modified — TS6133 fix |
 | `secrets/*.txt` | populated but `.gitignore`'d — must NOT be committed |
 
-Pre-existing uncommitted files from prior sessions (`docs/prd-template.md`, `docs/task-list.md`, `frontend/src/components/layout/Navbar.tsx`, `frontend/src/components/ui/ThemeSelector.tsx`) are intentionally left alone — they should be committed separately on their own review cycle.
+Pre-existing uncommitted files from prior sessions (`docs/prd.md`, `docs/task-list.md`, `frontend/src/components/layout/Navbar.tsx`, `frontend/src/components/ui/ThemeSelector.tsx`) are intentionally left alone — they should be committed separately on their own review cycle.
 
 ---
 

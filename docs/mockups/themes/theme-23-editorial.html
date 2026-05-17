@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Team Command Center — Editorial Magazine Theme</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Georgia', 'Times New Roman', serif; background: #f9f6f0; color: #1a1a1a; display: flex; height: 100vh; overflow: hidden; -webkit-font-smoothing: antialiased; }
+
+  /* Theme Banner */
+  .theme-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: #1a1a1a; color: #f9f6f0; text-align: center; padding: 8px 0; font-size: 12px; font-weight: 500; letter-spacing: 2px; text-transform: uppercase; font-family: 'Inter', sans-serif; }
+  .theme-banner span { opacity: 0.6; font-weight: 400; margin-left: 8px; text-transform: none; letter-spacing: 0.3px; font-style: italic; }
+
+  /* Sidebar — feels like a magazine masthead */
+  .sidebar { width: 260px; background: #f9f6f0; border-right: 2px solid #1a1a1a; display: flex; flex-direction: column; padding-top: 50px; flex-shrink: 0; }
+  .sidebar-logo { padding: 32px 28px 24px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid #d4cdb8; }
+  .sidebar-logo .eyebrow { font-family: 'Inter', sans-serif; font-size: 10px; letter-spacing: 3px; text-transform: uppercase; color: #c8200a; font-weight: 700; }
+  .sidebar-logo .masthead { font-family: 'Playfair Display', 'Didot', Georgia, serif; font-size: 30px; font-weight: 900; letter-spacing: -1.5px; line-height: 1; color: #1a1a1a; }
+  .sidebar-logo .tagline { font-family: 'Georgia', serif; font-size: 12px; font-style: italic; color: #6b5d4f; margin-top: 4px; }
+  .nav-section { padding: 20px 0 8px 28px; font-family: 'Inter', sans-serif; font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: #6b5d4f; font-weight: 600; }
+  .nav-items { display: flex; flex-direction: column; padding: 0 16px; }
+  .nav-item { display: flex; align-items: center; gap: 14px; padding: 11px 12px; font-family: 'Georgia', serif; font-size: 16px; color: #3a3a3a; cursor: pointer; transition: color 0.2s; border-bottom: 1px solid #ede5d3; }
+  .nav-item:last-child { border-bottom: none; }
+  .nav-item:hover { color: #c8200a; }
+  .nav-item.active { color: #c8200a; font-style: italic; font-weight: 700; }
+  .nav-item.active::after { content: ' →'; font-style: normal; }
+  .nav-item .nav-icon { width: 16px; text-align: center; font-size: 13px; opacity: 0.6; }
+  .sidebar-user { padding: 18px 28px; margin-top: auto; border-top: 2px solid #1a1a1a; display: flex; align-items: center; gap: 14px; }
+  .avatar { width: 42px; height: 42px; background: #1a1a1a; color: #f9f6f0; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; font-family: 'Inter', sans-serif; }
+  .sidebar-user .user-name { color: #1a1a1a; font-weight: 700; font-size: 14px; }
+  .sidebar-user .user-role { color: #6b5d4f; font-size: 11px; font-style: italic; }
+
+  /* Main */
+  .main { flex: 1; background: #f9f6f0; padding-top: 50px; overflow-y: auto; }
+  .main-header { padding: 40px 56px 24px; border-bottom: 3px double #1a1a1a; margin: 0 56px; padding-left: 0; padding-right: 0; }
+  .main-header .date-line { font-family: 'Inter', sans-serif; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: #6b5d4f; margin-bottom: 8px; display: flex; align-items: center; gap: 12px; }
+  .main-header .date-line::after { content: 'Vol. III · No. 42'; margin-left: auto; }
+  .main-header-row { display: flex; align-items: baseline; justify-content: space-between; }
+  .main-header h1 { font-family: 'Playfair Display', 'Didot', Georgia, serif; font-size: 56px; font-weight: 900; letter-spacing: -2.5px; line-height: 1; color: #1a1a1a; }
+  .main-header h1 em { font-style: italic; font-weight: 400; color: #c8200a; }
+  .notification-bell { position: relative; cursor: pointer; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; border: 2px solid #1a1a1a; background: #f9f6f0; transition: all 0.15s; }
+  .notification-bell:hover { background: #1a1a1a; color: #f9f6f0; }
+  .notification-bell .bell-icon { font-size: 16px; }
+  .notification-bell .badge { position: absolute; top: -8px; right: -8px; background: #c8200a; color: #f9f6f0; font-size: 11px; font-weight: 700; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: 'Inter', sans-serif; }
+
+  /* Request Input — like a "submit a letter" form */
+  .request-input { margin: 32px 56px 8px; padding: 0; }
+  .request-input .kicker { font-family: 'Inter', sans-serif; font-size: 11px; letter-spacing: 2.5px; text-transform: uppercase; color: #c8200a; font-weight: 700; margin-bottom: 8px; }
+  .request-input .lede { font-family: 'Playfair Display', Georgia, serif; font-size: 22px; font-weight: 400; font-style: italic; color: #3a3a3a; margin-bottom: 18px; line-height: 1.3; }
+  .request-input textarea { width: 100%; background: transparent; border: none; border-top: 1px solid #1a1a1a; border-bottom: 1px solid #1a1a1a; color: #1a1a1a; padding: 16px 0; font-size: 17px; font-family: 'Georgia', serif; resize: none; height: 80px; outline: none; line-height: 1.5; }
+  .request-input textarea::placeholder { color: #a8a08e; font-style: italic; }
+  .input-controls { display: flex; align-items: center; gap: 14px; margin-top: 18px; }
+  .type-select { background: transparent; border: 1px solid #1a1a1a; color: #1a1a1a; padding: 8px 14px; font-size: 12px; font-family: 'Inter', sans-serif; outline: none; cursor: pointer; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; }
+  .priority-pills { display: flex; gap: 0; border: 1px solid #1a1a1a; }
+  .priority-pill { padding: 8px 16px; font-size: 11px; font-weight: 600; border: none; background: transparent; color: #3a3a3a; cursor: pointer; transition: all 0.15s; font-family: 'Inter', sans-serif; letter-spacing: 1.5px; text-transform: uppercase; border-right: 1px solid #1a1a1a; }
+  .priority-pill:last-child { border-right: none; }
+  .priority-pill:hover { background: #ede5d3; }
+  .priority-pill.selected { background: #1a1a1a; color: #f9f6f0; }
+  .submit-btn { margin-left: auto; background: #c8200a; color: #f9f6f0; border: none; padding: 10px 26px; font-size: 12px; font-weight: 700; cursor: pointer; transition: background 0.15s; font-family: 'Inter', sans-serif; letter-spacing: 2px; text-transform: uppercase; }
+  .submit-btn:hover { background: #1a1a1a; }
+
+  /* Section — like article sections */
+  .section { margin: 36px 56px 0; }
+  .section-title { font-family: 'Playfair Display', Georgia, serif; font-size: 24px; font-weight: 900; color: #1a1a1a; margin-bottom: 4px; letter-spacing: -0.5px; }
+  .section-title em { font-style: italic; color: #c8200a; font-weight: 400; }
+  .section-rule { border-top: 1px solid #1a1a1a; margin-bottom: 18px; padding-top: 4px; font-family: 'Inter', sans-serif; font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: #6b5d4f; font-weight: 600; }
+
+  /* Request Cards — like article cards */
+  .request-card { padding: 18px 0; display: grid; grid-template-columns: 32px 1fr auto; align-items: start; gap: 16px; border-bottom: 1px solid #d4cdb8; }
+  .request-card:last-of-type { border-bottom: none; }
+  .request-card:hover { background: #f4ecd9; }
+  .drop-cap { font-family: 'Playfair Display', Georgia, serif; font-size: 38px; font-weight: 900; line-height: 0.85; color: #c8200a; font-style: italic; }
+  .card-content { display: flex; flex-direction: column; gap: 4px; }
+  .card-top { display: flex; align-items: center; gap: 12px; }
+  .request-id { font-family: 'Inter', sans-serif; font-size: 10px; color: #6b5d4f; letter-spacing: 1.5px; text-transform: uppercase; font-weight: 600; }
+  .byline { font-family: 'Georgia', serif; font-size: 12px; font-style: italic; color: #6b5d4f; }
+  .card-title { font-family: 'Playfair Display', Georgia, serif; font-size: 22px; color: #1a1a1a; font-weight: 700; line-height: 1.2; letter-spacing: -0.4px; }
+  .status-dot { display: none; } /* hidden in this theme */
+  .card-meta { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+  .pill { padding: 3px 10px; font-size: 10px; font-weight: 600; font-family: 'Inter', sans-serif; letter-spacing: 1.5px; text-transform: uppercase; }
+  .pill-status { background: #1a1a1a; color: #f9f6f0; }
+  .pill-status.analyzing { background: #c8200a; color: #f9f6f0; }
+  .pill-status.completed { background: #2e6b3e; color: #f9f6f0; }
+  .pill-type { background: transparent; border: 1px solid #1a1a1a; color: #1a1a1a; }
+  .pill-priority-high { color: #c8200a; background: transparent; border: 1px solid #c8200a; }
+  .pill-priority-medium { color: #b45309; background: transparent; border: 1px solid #b45309; }
+
+  /* Completed */
+  .completed-list { border-top: 1px solid #1a1a1a; }
+  .completed-row { display: grid; grid-template-columns: 32px 100px 1fr auto; align-items: center; gap: 16px; padding: 14px 0; border-bottom: 1px solid #d4cdb8; }
+  .completed-row .drop-cap { font-size: 22px; color: #2e6b3e; }
+  .completed-row .card-title { font-size: 14px; font-weight: 400; font-family: 'Georgia', serif; }
+  .completed-row .request-id { color: #6b5d4f; }
+</style>
+</head>
+<body>
+
+<div class="theme-banner">Theme 23: Editorial Magazine<span>— Serif heavy, newsprint cream, drop caps, NYT/New Yorker masthead aesthetic (2026 trend)</span></div>
+
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="eyebrow">Est. MMXXVI</div>
+    <div class="masthead">Agent<br>Team</div>
+    <div class="tagline">A periodical of orchestrated intelligence</div>
+  </div>
+  <div class="nav-section">Departments</div>
+  <div class="nav-items">
+    <div class="nav-item active"><span class="nav-icon">&#9678;</span> Command Center</div>
+    <div class="nav-item"><span class="nav-icon">&#8634;</span> History</div>
+    <div class="nav-item"><span class="nav-icon">&#9881;</span> Releases</div>
+    <div class="nav-item"><span class="nav-icon">&#9823;</span> Team</div>
+    <div class="nav-item"><span class="nav-icon">&#36;</span> Cost</div>
+  </div>
+  <div class="sidebar-user">
+    <div class="avatar">CL</div>
+    <div class="user-info">
+      <div class="user-name">Claude</div>
+      <div class="user-role">Editor-in-Chief</div>
+    </div>
+  </div>
+</nav>
+
+<main class="main">
+  <div class="main-header">
+    <div class="date-line">Friday, May 15, 2026 · Issue 042</div>
+    <div class="main-header-row">
+      <h1>The Command <em>Center</em></h1>
+      <div class="notification-bell">
+        <span class="bell-icon">&#128276;</span>
+        <span class="badge">3</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="request-input">
+    <div class="kicker">Submissions Open</div>
+    <div class="lede">Tell the editors what you would like the agent desk to investigate this week.</div>
+    <textarea placeholder="Describe what you want the agent team to build…"></textarea>
+    <div class="input-controls">
+      <select class="type-select">
+        <option>Feature</option>
+        <option>Bug Fix</option>
+        <option>Refactor</option>
+        <option>Docs</option>
+      </select>
+      <div class="priority-pills">
+        <button class="priority-pill">Low</button>
+        <button class="priority-pill selected">Medium</button>
+        <button class="priority-pill">High</button>
+        <button class="priority-pill">Critical</button>
+      </div>
+      <button class="submit-btn">Submit Request</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">In <em>Progress</em></div>
+    <div class="section-rule">Stories the agent desk is currently working</div>
+    <div class="request-card">
+      <div class="drop-cap">B</div>
+      <div class="card-content">
+        <div class="card-top">
+          <span class="request-id">REQ-A1B2C3</span>
+          <span class="byline">— by the Backend Desk</span>
+        </div>
+        <div class="card-title">Build login page with JWT authentication</div>
+      </div>
+      <div class="card-meta">
+        <span class="pill pill-status">in_progress</span>
+        <span class="pill pill-priority-high">high</span>
+      </div>
+    </div>
+    <div class="request-card">
+      <div class="drop-cap">A</div>
+      <div class="card-content">
+        <div class="card-top">
+          <span class="request-id">REQ-D4E5F6</span>
+          <span class="byline">— by the Frontend Desk</span>
+        </div>
+        <div class="card-title">Add dark mode support</div>
+      </div>
+      <div class="card-meta">
+        <span class="pill pill-status analyzing">analyzing</span>
+        <span class="pill pill-priority-medium">medium</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title"><em>Filed</em> Recently</div>
+    <div class="section-rule">Completed this issue</div>
+    <div class="completed-list">
+      <div class="completed-row">
+        <div class="drop-cap">F</div>
+        <span class="request-id">REQ-001</span>
+        <span class="card-title">Fix image upload timeout</span>
+        <span class="pill pill-status completed">completed</span>
+      </div>
+      <div class="completed-row">
+        <div class="drop-cap">U</div>
+        <span class="request-id">REQ-002</span>
+        <span class="card-title">Update API docs</span>
+        <span class="pill pill-status completed">completed</span>
+      </div>
+      <div class="completed-row">
+        <div class="drop-cap">S</div>
+        <span class="request-id">REQ-003</span>
+        <span class="card-title">Setup CI/CD pipeline</span>
+        <span class="pill pill-status completed">completed</span>
+      </div>
+    </div>
+  </div>
+</main>
+
+</body>
+</html>

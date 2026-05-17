@@ -3,10 +3,19 @@ import { useState, useRef, useEffect, useCallback } from "react"
 import { createPortal } from "react-dom"
 import { useThemeStore, THEMES } from "../../stores/theme"
 
-export function ThemeSelector() {
+export function ThemeSelector({ iconOnly = false }: { iconOnly?: boolean } = {}) {
   const { theme, mode, setTheme } = useThemeStore()
   const [open, setOpen] = useState(false)
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null)
+  // Positioning supports both "open downward right-aligned" (original top-bar
+   // navbar usage) and "open upward left-aligned" (sidebar usage where the
+   // button sits low and on the left). We pick whichever fits the viewport,
+   // so the dropdown is never clipped or offscreen.
+  const [pos, setPos] = useState<{
+    top?: number
+    bottom?: number
+    left?: number
+    right?: number
+  } | null>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const currentTheme = THEMES.find((t) => t.id === theme)
@@ -14,9 +23,18 @@ export function ThemeSelector() {
   const updatePosition = useCallback(() => {
     if (!buttonRef.current) return
     const rect = buttonRef.current.getBoundingClientRect()
+    const DROPDOWN_HEIGHT_ESTIMATE = 180 // conservative — 1 header + 2 theme rows
+    const spaceBelow = window.innerHeight - rect.bottom
+    const openUp = spaceBelow < DROPDOWN_HEIGHT_ESTIMATE
+    const spaceRight = window.innerWidth - rect.right
+    const leftAnchor = spaceRight > 260 // dropdown is 240 wide; 260 = 240 + gap
     setPos({
-      top: rect.bottom + 4,
-      right: window.innerWidth - rect.right,
+      ...(openUp
+        ? { bottom: window.innerHeight - rect.top + 4 }
+        : { top: rect.bottom + 4 }),
+      ...(leftAnchor
+        ? { left: rect.left }
+        : { right: window.innerWidth - rect.right }),
     })
   }, [])
 
@@ -55,8 +73,10 @@ export function ThemeSelector() {
         ref={dropdownRef}
         style={{
           position: "fixed",
-          top: pos.top,
-          right: pos.right,
+          ...(pos.top != null ? { top: pos.top } : {}),
+          ...(pos.bottom != null ? { bottom: pos.bottom } : {}),
+          ...(pos.left != null ? { left: pos.left } : {}),
+          ...(pos.right != null ? { right: pos.right } : {}),
           width: 240,
           background: "var(--bg-card)",
           border: "1px solid var(--border)",
@@ -103,12 +123,12 @@ export function ThemeSelector() {
       <button
         ref={buttonRef}
         onClick={() => setOpen(!open)}
-        title="Change theme"
+        title={`Change theme (current: ${currentTheme?.label ?? "—"})`}
         style={{
           display: "inline-flex",
           alignItems: "center",
-          gap: 6,
-          padding: "6px 10px",
+          gap: iconOnly ? 0 : 6,
+          padding: iconOnly ? 6 : "6px 10px",
           background: "var(--bg-hover)",
           color: "var(--text-secondary)",
           border: "1px solid var(--border)",
@@ -121,7 +141,7 @@ export function ThemeSelector() {
         }}
       >
         <Palette size={14} />
-        {currentTheme?.label}
+        {!iconOnly && currentTheme?.label}
       </button>
       {dropdown}
     </>
