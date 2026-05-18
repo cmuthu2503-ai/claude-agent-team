@@ -2,9 +2,23 @@ import { useState, useEffect, useRef } from "react"
 import { api } from "../lib/api"
 import { StatusBadge } from "../components/ui/StatusBadge"
 import { RichTextInput, type RichTextInputHandle } from "../components/ui/RichTextInput"
-import { Link } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 import { Plus, Send, X, Trash2 } from "lucide-react"
 import { useAuthStore } from "../stores/auth"
+import { CreateProjectModal, type CreatedProject } from "../components/projects/CreateProjectModal"
+import { ProjectChip } from "../components/projects/ProjectChip"
+
+// Lightweight Project shape for the dropdown — we only need the fields
+// that affect the New Request form (id, name, default_team).
+interface ProjectOption {
+  project_id: string
+  name: string
+  color: string
+  icon: string
+  default_team: string | null
+}
+const NEW_PROJECT_SENTINEL = "__new__"
+const LAST_PROJECT_LS_KEY = "agent-team:last-project-id"
 
 // Terminal states where a request is safe to hard-delete (nothing will be
 // writing to its rows in the background).
@@ -45,6 +59,75 @@ export function CommandCenterPage() {
   const [activity, setActivity] = useState<ActivityEvent[]>([])
   const editorRef = useRef<RichTextInputHandle>(null)
   const wsRef = useRef<WebSocket | null>(null)
+
+  // Project assignment (PM-38) — required dropdown above the team selector.
+  // Defaults to user's last-used project (localStorage), or whatever the
+  // ?project_id= query param specifies (deep link from Project detail page).
+  const [searchParams] = useSearchParams()
+  const [projects, setProjects] = useState<ProjectOption[]>([])
+  const [projectId, setProjectId] = useState<string>("")  // empty until projects load
+  const [projectModalOpen, setProjectModalOpen] = useState(false)
+
+  // Load the active projects list, then pick the default project:
+  //  1. ?project_id= query param if set (deep link from ProjectDetail)
+  //  2. localStorage last-used project if still active
+  //  3. The first project (likely Unassigned)
+  const loadProjects = async () => {
+    try {
+      const res = await api.get("/projects")
+      const list: ProjectOption[] = (res.data || []).map((p: any) => ({
+        project_id: p.project_id,
+        name: p.name,
+        color: p.color,
+        icon: p.icon,
+        default_team: p.default_team,
+      }))
+      setProjects(list)
+
+      // Resolve default project
+      const fromQuery = searchParams.get("project_id")
+      const fromStorage = localStorage.getItem(LAST_PROJECT_LS_KEY)
+      const isActive = (id: string | null) => !!id && list.some((p) => p.project_id === id)
+      let pick: string = ""
+      if (isActive(fromQuery)) pick = fromQuery!
+      else if (isActive(fromStorage)) pick = fromStorage!
+      else if (list.length > 0) pick = list[0].project_id
+      setProjectId(pick)
+
+      // Auto-fill team from project's default_team
+      const proj = list.find((p) => p.project_id === pick)
+      if (proj?.default_team) {
+        setSelectedTeam(proj.default_team)
+        const taskDefaults: Record<string, string> = {
+          engineering: "feature_request",
+          research: "research_request",
+          content: "content_request",
+        }
+        setTaskType(taskDefaults[proj.default_team] || "feature_request")
+      }
+    } catch {}
+  }
+  // Re-fetch projects when the modal closes (in case the user just created one).
+  // Also runs once on initial mount.
+  useEffect(() => {
+    if (!projectModalOpen) loadProjects()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectModalOpen])
+
+  // Apply prefill from deep link (ProjectDetail "Next Steps" click). Runs once
+  // after projects load — pre-fills the description/type/priority for the user
+  // but doesn't submit. They confirm by clicking Dispatch.
+  useEffect(() => {
+    const prefill = searchParams.get("prefill")
+    const tt = searchParams.get("task_type")
+    const pr = searchParams.get("priority")
+    if (prefill && editorRef.current) {
+      editorRef.current.setContent?.(prefill)
+    }
+    if (tt) setTaskType(tt)
+    if (pr) setPriority(pr)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const loadRequests = async () => {
     try {
@@ -102,6 +185,10 @@ export function CommandCenterPage() {
   const handleSubmit = async () => {
     const content = editorRef.current?.getContent()
     if (!content || !content.text.trim()) return
+    if (!projectId) {
+      setSubmitError("Pick a project before dispatching.")
+      return
+    }
     setSubmitting(true)
     setSubmitError("")
     try {
@@ -109,10 +196,13 @@ export function CommandCenterPage() {
       formData.append("description", content.text)
       formData.append("task_type", taskType)
       formData.append("priority", priority)
+      formData.append("project_id", projectId)
       for (const file of content.files) {
         formData.append("screenshots", file)
       }
       await api.postForm("/requests", formData)
+      // Remember this project for next time
+      localStorage.setItem(LAST_PROJECT_LS_KEY, projectId)
       editorRef.current?.clear()
       setAttachCount(0)
       await loadRequests()
@@ -224,6 +314,56 @@ export function CommandCenterPage() {
             {submitError}
           </div>
         )}
+
+        {/* Project Selector (PM-38) — required dropdown above the team
+            selector. The "+ New project..." sentinel option opens the
+            CreateProjectModal (PM-39). When a project with a default_team
+            is picked, we pre-fill the team selector. */}
+        <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>
+          <label style={{ fontSize: 12, color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+            Project <span style={{ color: "var(--danger)" }}>*</span>
+          </label>
+          <select
+            value={projectId}
+            onChange={(e) => {
+              const v = e.target.value
+              if (v === NEW_PROJECT_SENTINEL) {
+                setProjectModalOpen(true)
+                return
+              }
+              setProjectId(v)
+              const proj = projects.find((p) => p.project_id === v)
+              if (proj?.default_team) {
+                setSelectedTeam(proj.default_team)
+                const taskDefaults: Record<string, string> = {
+                  engineering: "feature_request",
+                  research: "research_request",
+                  content: "content_request",
+                }
+                setTaskType(taskDefaults[proj.default_team] || "feature_request")
+              }
+            }}
+            style={{
+              flex: 1, maxWidth: 380,
+              padding: "6px 10px", fontSize: 13,
+              background: "var(--bg-input, var(--bg-card))",
+              color: "var(--text-primary)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              fontFamily: "var(--font)",
+              cursor: "pointer",
+            }}
+          >
+            {projects.length === 0 && <option value="">Loading…</option>}
+            {projects.map((p) => (
+              <option key={p.project_id} value={p.project_id}>
+                {p.name}
+              </option>
+            ))}
+            <option disabled>──────────</option>
+            <option value={NEW_PROJECT_SENTINEL}>+ New project…</option>
+          </select>
+        </div>
 
         <div style={{ marginTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
@@ -361,7 +501,11 @@ export function CommandCenterPage() {
             </span>
           </h2>
           <div className="ch-section-underline" aria-hidden="true" />
-          <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
+          {/* PM-PHASE4: bumped min card width 300 → 380 so the new ProjectChip
+              in the header strip doesn't get crowded against the StatusBadge +
+              Cancel button at typical 2-cards-per-row layouts. Cards drop to
+              1 per row only on very narrow viewports. */}
+          <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fill, minmax(380px, 1fr))" }}>
             {active.map((r) => (
               <div
                 key={r.request_id}
@@ -383,17 +527,23 @@ export function CommandCenterPage() {
               >
                 {/* Top header strip — request_id on the left, status + cancel as
                     flex siblings on the right. NOT inside the Link so they don't
-                    overlap and stopPropagation isn't needed. */}
+                    overlap and stopPropagation isn't needed.
+                    PM-PHASE4: flexWrap added so when the card is squeezed
+                    (e.g., narrow viewport, 100% zoom with 2 cards/row), the
+                    StatusBadge + Cancel button drop to a second line instead
+                    of overlapping the ProjectChip. */}
                 <div
                   style={{
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "space-between",
+                    flexWrap: "wrap",
                     gap: 8,
+                    rowGap: 6,
                     padding: "12px 16px 0",
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flexWrap: "wrap", rowGap: 4 }}>
                     <span className={`ch-card-dot ch-card-dot-${r.status}`} aria-hidden="true" />
                     <Link
                       to={`/request/${r.request_id}`}
@@ -407,6 +557,7 @@ export function CommandCenterPage() {
                     >
                       {r.request_id}
                     </Link>
+                    <ProjectChip projectId={(r as any).project_id} />
                     <span className="ch-card-eta" aria-hidden="true">
                       · <span className="ch-live">●</span> {r.status.replace(/_/g, " ")}
                     </span>
@@ -531,6 +682,7 @@ export function CommandCenterPage() {
                   <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-muted)", flexShrink: 0 }}>
                     {r.request_id}
                   </span>
+                  <ProjectChip projectId={(r as any).project_id} />
                   <span style={{ fontSize: 14, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {r.description}
                   </span>
@@ -673,6 +825,26 @@ export function CommandCenterPage() {
           50% { opacity: 0.4; }
         }
       `}</style>
+
+      {/* PM-39 — inline "+ New project" modal. On create, select the new
+          project in the dropdown so the user can immediately dispatch
+          against it. Effect on projectModalOpen reloads the project list. */}
+      <CreateProjectModal
+        open={projectModalOpen}
+        onClose={() => setProjectModalOpen(false)}
+        onCreated={(p: CreatedProject) => {
+          setProjectId(p.project_id)
+          if (p.default_team) {
+            setSelectedTeam(p.default_team)
+            const td: Record<string, string> = {
+              engineering: "feature_request",
+              research: "research_request",
+              content: "content_request",
+            }
+            setTaskType(td[p.default_team] || "feature_request")
+          }
+        }}
+      />
     </div>
   )
 }

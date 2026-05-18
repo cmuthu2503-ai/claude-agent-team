@@ -131,6 +131,7 @@ async def submit_request(
     description: str = Form(...),
     task_type: str = Form("feature_request"),
     priority: str = Form("medium"),
+    project_id: str | None = Form(None),
     screenshots: list[UploadFile] = File(default=[]),
     user: dict = Depends(require_role("developer", "admin")),
 ):
@@ -165,17 +166,22 @@ async def submit_request(
             full_description += f"- [{f['filename']}]({f['url']})\n"
 
     orchestrator = request.app.state.orchestrator
-    result = await orchestrator.submit(
-        description=full_description,
-        task_type=task_type,
-        priority=priority,
-        created_by=user.get("username", ""),
-    )
+    try:
+        result = await orchestrator.submit(
+            description=full_description,
+            task_type=task_type,
+            priority=priority,
+            created_by=user.get("username", ""),
+            project_id=project_id,  # None → defaults to Unassigned (PM-11)
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return _envelope({
         "request_id": result.request_id,
         "status": result.status,
         "description": result.description,
         "priority": result.priority,
+        "project_id": result.project_id,
         "created_at": result.created_at.isoformat(),
         "attachments": saved_files,
     })
@@ -197,6 +203,7 @@ async def get_attachment(filename: str):
 async def list_requests(
     request: Request,
     status: str | None = None,
+    project_id: str | None = None,  # PM-16
     page: int = 1,
     per_page: int = 20,
     user: dict = Depends(get_current_user),
@@ -204,6 +211,11 @@ async def list_requests(
     state = request.app.state.state_store
     offset = (page - 1) * per_page
     requests = await state.list_requests(status=status, limit=per_page, offset=offset)
+    # PM-16 — filter by project_id at the app layer (storage layer doesn't
+    # support it yet; cheap given typical list sizes <100). If the use
+    # case grows, push down to a WHERE clause in state.list_requests.
+    if project_id:
+        requests = [r for r in requests if r.project_id == project_id]
     return _envelope(
         [
             {
@@ -215,6 +227,7 @@ async def list_requests(
                 "created_by": r.created_by,
                 "created_at": _iso_utc(r.created_at),
                 "completed_at": _iso_utc(r.completed_at),
+                "project_id": r.project_id,
             }
             for r in requests
         ],
@@ -307,6 +320,7 @@ async def get_request_detail(
         "task_type": req.task_type,
         "priority": req.priority,
         "status": req.status,
+        "project_id": req.project_id,  # PM-43: surfacing project chip on RequestDetail / StoryBoard
         "created_at": _iso_utc(req.created_at),
         "completed_at": _iso_utc(req.completed_at),
         "workflow": workflow_payload,
@@ -372,6 +386,7 @@ async def retry_request(
         task_type=req.task_type,
         priority=req.priority,
         created_by=user.get("username", ""),
+        project_id=req.project_id,  # PM-11 — retried request stays in same project
     )
     return _envelope({"request_id": result.request_id, "status": result.status})
 

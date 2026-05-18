@@ -7,11 +7,45 @@
 
 | Field | Value |
 |-------|-------|
-| Document Version | 1.2 |
+| Document Version | 1.3 |
 | Created Date | 2026-04-05 |
 | Last Updated | 2026-05-17 |
 | Status | Draft |
 | Product Owner | Chandramouli |
+
+---
+
+## Table of Contents
+
+| § | Section |
+|---|---------|
+| — | [How to Use This Document](#how-to-use-this-document) — IDs, statuses, effort sizes, status legend |
+| — | [Progress Summary](#progress-summary) — Per-phase counts (done / in-progress / blocked / not started) |
+| **Original 8-phase build (all complete)** | |
+| P0 | [Phase 0: Project Setup](#phase-0-project-setup) |
+| P1 | [Phase 1: Configuration System](#phase-1-configuration-system) |
+| P2 | [Phase 2: Core Engine](#phase-2-core-engine) |
+| P3 | [Phase 3: Agent System](#phase-3-agent-system) |
+| P4 | [Phase 4: GitHub Integration](#phase-4-github-integration) |
+| P5 | [Phase 5: UI Frontend](#phase-5-ui-frontend) |
+| P6 | [Phase 6: Deployment & Demo](#phase-6-deployment--demo) |
+| P7 | [Phase 7: Notifications & Reports](#phase-7-notifications--reports) |
+| P8 | [Phase 8: Testing & Quality Assurance](#phase-8-testing--quality-assurance) |
+| **Post-release changelog** | |
+| — | [Post-Release Changes (Implemented)](#post-release-changes-implemented) — original 22-entry log; 3 entries tagged ⚠ STALE point to the continued log |
+| — | [Post-Release Changes (continued, since 2026-04-08)](#post-release-changes-continued-since-2026-04-08) — 16 entries: cyberpunk theme, sidebar refactor, supervisor host migration, etc. |
+| **Detailed task breakdowns (one per major feature)** | |
+| — | [Story Board Redesign](#story-board-redesign--detailed-task-breakdown) |
+| — | [Research Publishing Pipeline](#research-publishing-pipeline--detailed-task-breakdown) |
+| — | [Web Search Tools](#web-search-tools--detailed-task-breakdown) |
+| — | [Prompt Studio](#prompt-studio--detailed-task-breakdown) |
+| — | [Prompt Studio Execute Tab](#prompt-studio-execute-tab--detailed-task-breakdown) |
+| — | [Per-Agent Dynamic Model Assignment](#per-agent-dynamic-model-assignment--detailed-task-breakdown) |
+| — | [Project Management](#project-management--detailed-task-breakdown) — newest; 50 tasks (PM-01 → PM-50) across 4 phases |
+| **Planning aids** | |
+| — | [Dependency Graph (Phase Level)](#dependency-graph-phase-level) |
+| — | [Implementation Order Recommendation](#implementation-order-recommendation) |
+| — | [Milestone Checkpoints](#milestone-checkpoints) |
 
 ---
 
@@ -375,6 +409,7 @@ table are superseded by entries here.
 | Live Data Ticker Wiring | Cyberpunk overlay's data ticker was static flavor text; now wired to real API state via 10s polling: [SYS] uplink state (any of 3 endpoints fulfilled), [NET] N of M agents active, [REQ] latest in-flight request with status, [OK] most recent completed commit, [COST] today's USD spend (was incorrectly labeled "tokens today" pulling all-time totals — fixed), [TOKENS] all-time token total, [SYS] model ready. Polling gated on auth state to avoid login-screen reload loops. | Frontend: CyberpunkOverlay.tsx useLiveTicker() hook polls /agents + /requests + /cost/dashboard via Promise.allSettled. |
 | PRD Refresh (v3.4 → v3.6) | Project PRD updated to reflect platform's current state. Section 0 added (Recent Changes since v3.4). Stale theme + provider + Prompt Studio references corrected. New REQ groups added for cyberpunk effects layer, overlay, sidebar, supervisor host execution, deployment judge LLM, rollback simplification, cross-platform reliability, stable Compose project naming. Filename renamed prd-template.md → prd.md. | docs/prd.md (~70 new requirement entries). docs/architecture.md / docker-deployment-assessment.md / feature-gaps-design.md / ui-design.md: reference path updates. |
 | Projects Feature (built then reverted) | A project concept was prototyped: `projects` table, project_id FKs on requests + documents, auto-assignment via keyword similarity, UPSERT for PRD / user_stories so each project owns one evolving spec, Projects list + detail pages in the UI, agent prompt MERGE MODE for both PRD and user-story authors, one-shot backfill script for existing data. **Reverted on 2026-05-17** — the visible footprint was just one sidebar entry and the user didn't see the value yet. Code removed, projects table dropped, project_id columns left NULL but in-place. | See revision-history entries in docs/prd.md v3.5 / v3.6 for the design rationale, and the deletion commit for the revert scope. |
+| Project Management v1 (shipped 2026-05-17) | Second attempt at the projects concept, this time **explicit-assignment** (no keyword similarity, no MERGE prompts). Backend: `projects` table + 5 CRUD endpoints (`GET/POST/PATCH/DELETE /api/v1/projects` + `GET /api/v1/projects/templates`), immutable `proj-unassigned` seed + backfill of 13 existing requests, `project_id` column on `requests` with archived-project submission rejection. Frontend: `/projects` list + `/projects/:id` detail page with rollup stats + Next Steps from template's starter checklist, `CreateProjectModal` with all 10 v1 fields (name, description, color, icon, tags, lead, repo URL, default team, target date, template). Required project dropdown on the New Request form. `ProjectChip` surfaced on Command Center cards, History (+filter column), RequestDetail header, StoryBoard breadcrumb, CostDashboard (+filter dropdown). Module-level project cache (`useProjectsCache`) with WebSocket live invalidation on `project.*` events. RBAC: any user can create/edit visual fields; admin-only for archive/delete/lead-reassign-to-others. 43 of 50 planned PM-XX tasks shipped; 4 deferred to v2 (OpenAPI typegen PM-19, TanStack hooks PM-20, frontend modal Vitest PM-40, backend store pytest PM-18). Bugs caught during PM-48 smoke test and fixed in the same ship: GET /requests/{id} was missing `project_id`, App.tsx imported but didn't register the /projects routes, CostDashboard "Today" + "This Month" cards weren't scoped by the project_id filter. | Backend: `src/api/routes/projects.py` (new ~370 lines), `src/api/routes/requests.py` + `cost.py` (project_id support), `src/state/sqlite_store.py` (8 project CRUD methods + seed + backfill), `src/models/base.py` (Project / ProjectStatus / DefaultTeam + PROJECT_COLOR_PALETTE / PROJECT_ICON_SET / UNASSIGNED_PROJECT_ID), `src/core/{project_validation,project_templates}.py` (new), `src/core/orchestrator.py` (project validation). Frontend: `frontend/src/pages/{Projects,ProjectDetail}.tsx` (new), `CommandCenter.tsx` + `History.tsx` + `RequestDetail.tsx` + `StoryBoard.tsx` + `CostDashboard.tsx` (surfacing), `frontend/src/components/projects/{CreateProjectModal,ProjectChip}.tsx` (new), `frontend/src/hooks/useProjectsCache.ts` (new), `App.tsx` + `Sidebar.tsx` (routing + nav). Config: `config/project_templates.yaml` (new — 5 v1 templates). Docs: `docs/prd-projects-feature.md` v1.2 (full feature PRD), `docs/prd.md` v3.11 (Section 6.7 + revision history), `docs/task-list.md` (this row + PM-01–50 detailed breakdown). |
 
 ---
 
@@ -785,3 +820,109 @@ Tracked here so they don't get lost. **Not in current scope** (see PRD §7 "Out 
 | FE-33 | Model health check endpoint | Low | `GET /api/v1/models/{id}/health` that probes each endpoint's reachability with a tiny request, cached for 60s. Surfaces red/green indicators in the Team page. |
 | FE-34 | Cost attribution breakdown by model loadout | Low | Show which model-assignment loadout was used for each historical request in the Cost Dashboard, enabling cost comparison across different mixes. |
 | FE-35 | Model assignment templates ("profiles") | Low | Save named loadout sets ("All Claude", "Cost-optimized hybrid", "Offline-only") as admin-manageable profiles, one-click apply to all agents. |
+
+---
+
+## Project Management — Detailed Task Breakdown
+
+Breakdown of [docs/prd-projects-feature.md](prd-projects-feature.md) v1.2
+(also summarized in [docs/prd.md](prd.md) §6.7). Roughly 3 days of work
+split across 4 phases / ~50 tasks. Task IDs use the `PM-` prefix.
+
+### Phase 1: Backend (~8 hours)
+
+Schema, models, storage, validation, API routes, orchestrator hookup.
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PM-01 | Add `projects` table to SCHEMA_SQL | Full v1 column set per PRD §5.1: project_id, name, description, status, color, icon, tags, lead_user_id, repo_url, default_team, target_date, template_id, created_by, timestamps. Plus indexes on (status, name) and (lead_user_id). | S | — | `[x]` |
+| PM-02 | Add `project_id` column to `requests` | ALTER TABLE migration; nullable for now (app-layer enforces). Add index. | S | PM-01 | `[x]` |
+| PM-03 | `Project` Pydantic model in `models/base.py` | Matches §5.3 exactly. Include Literal type for status / default_team. | S | — | `[x]` |
+| PM-04 | Add Project methods to `StateStore` ABC | create / get / list / update / delete / find_by_keywords (legacy stub) / get_requests_for_project / get_project_document. | S | PM-03 | `[x]` |
+| PM-05 | Implement Project CRUD in `sqlite_store.py` | All abstract methods + `_row_to_project` helper. Handle JSON serialization for `tags`. | M | PM-04 | `[x]` |
+| PM-06 | Validation helpers | Color in preset palette (PRJ-009), icon in preset set (PRJ-010), tag rules (PRJ-011), URL well-formed (PRJ-013), target_date ≥ today (PRJ-014). Centralize in `src/core/project_validation.py`. | M | PM-05 | `[x]` |
+| PM-07 | `config/project_templates.yaml` | 5 templates: empty, web_feature, research_initiative, content_project, bug_sprint. Schema per PRD §5.4. | S | — | `[x]` |
+| PM-08 | Template loader + endpoint | Read YAML at backend startup into `state.project_templates`. Expose via `GET /api/v1/projects/templates`. | S | PM-07 | `[x]` |
+| PM-09 | `src/api/routes/projects.py` | POST/GET/GET-by-id/PATCH/DELETE per PRD §6. Apply RBAC per §10 (admin gates on archive + delete + lead reassign). Use validation helpers from PM-06. | L | PM-05, PM-06, PM-08 | `[x]` |
+| PM-10 | Register projects router in `main.py` | Add to imports + `app.include_router(projects.router)`. | S | PM-09 | `[x]` |
+| PM-11 | Update `orchestrator.submit()` | Accept `project_id`; validate exists + status='active' (or return 400); attach to Request row. | S | PM-05 | `[x]` |
+| PM-12 | Seed "Unassigned" project on first boot | In `state_store.initialize()` after migrations: insert the immutable Unassigned project if it doesn't exist. Mark with reserved `project_id = "proj-unassigned"` for easy lookup. | S | PM-05 | `[x]` |
+| PM-13 | Backfill existing requests to Unassigned | One-shot migration step after PM-12: `UPDATE requests SET project_id = 'proj-unassigned' WHERE project_id IS NULL`. | S | PM-12 | `[x]` |
+| PM-14 | Block edits to Unassigned project | PATCH/DELETE return 403 if `project_id == 'proj-unassigned'`. PRJ-008. | S | PM-09 | `[x]` |
+| PM-15 | Emit project lifecycle events | `project.created`, `project.updated`, `project.archived` on the EventEmitter; `request.created` payload gains `project_id`. | S | PM-11 | `[x]` |
+| PM-16 | Add `?project_id=` filter to `GET /api/v1/requests` | Existing route. SQL WHERE clause + parameter binding. | S | PM-02 | `[x]` |
+| PM-17 | Add `?project_id=` filter to `/cost/dashboard` | Sum token_usage scoped to requests of that project. | S | PM-02 | `[x]` |
+| PM-18 | Backend tests | `tests/test_projects.py` — CRUD happy paths, RBAC denials, validation errors, Unassigned immutability, name-uniqueness collisions, archive/unarchive flow, template loader returns 5 items. Target ≥85% coverage on `routes/projects.py`. | L | PM-09, PM-14 | `[-]` |
+
+### Phase 2: Frontend — Create + List + Detail (~10 hours)
+
+The Create modal alone is half the phase — 10 form fields, 5 distinct
+input types (text, swatch grid, icon grid, tag input, user dropdown,
+URL, radio group, date picker, template dropdown).
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PM-19 | Regenerate `frontend/src/api/schema.d.ts` | After backend Phase 1 ships, run `npm run generate-types` against live OpenAPI to get Project types. | S | PM-10 | `[-]` |
+| PM-20 | API hooks: `useProjects()`, `useProject(id)`, `useProjectTemplates()` | TanStack Query hooks with 10s polling on list/detail, indefinite cache on templates. | M | PM-19 | `[-]` |
+| PM-21 | `CreateProjectModal.tsx` shell | Three-group layout (Identity / Ownership / Workflow defaults) per PRD §7.1 mockup. Wired to `POST /projects`. | M | PM-20 | `[x]` |
+| PM-22 | `ColorSwatchPicker.tsx` | 8 preset swatches as radio-like buttons. Selected swatch shows a check mark. | S | — | `[x]` |
+| PM-23 | `IconPicker.tsx` | 8 lucide icons as radio-like buttons. Selected icon shows a colored ring. | S | — | `[x]` |
+| PM-24 | `TagInput.tsx` | Chip-style input. Add on Enter or comma, remove with × button. Enforces ≤10 chips / ≤25 chars each. Auto-lowercase, dedup. | M | — | `[x]` |
+| PM-25 | `UserPicker.tsx` | Dropdown of developer + admin users (filter from `GET /users`). Searchable when list >10. Defaults to current user. | M | — | `[x]` |
+| PM-26 | URL input field | Text input with on-blur validation (`https://` required, well-formed URL). Inline error message. | S | — | `[x]` |
+| PM-27 | Date picker for `target_date` | Native `<input type="date">` works; enforce `min={today}` to block past dates. | S | — | `[x]` |
+| PM-28 | Template dropdown | Reads from `useProjectTemplates()`. Shows name + 1-line description per option. | S | PM-20 | `[x]` |
+| PM-29 | Modal validation + submit | Disable Create button until name is valid + within limits. On API 409 (name collision): inline error under Name. On API 400: surface field-level error from response. | M | PM-21–PM-28 | `[x]` |
+| PM-30 | `Projects.tsx` list page | Row layout per §7.2: color stripe + icon + name + description + tags chips + stats line + lead avatar. Default sort: last activity desc. | L | PM-20 | `[x]` |
+| PM-31 | Status filter + sort dropdown on list page | Active / Archived / All toggle + sort by (last activity / name / created). | S | PM-30 | `[x]` |
+| PM-32 | "+ New Project" button on list page | Opens `CreateProjectModal`. | S | PM-30, PM-29 | `[x]` |
+| PM-33 | `ProjectDetail.tsx` | Header (color/icon/name/description/lead/tags/repo link/target date/status), 4 stat cards, request list, recent documents panel. | L | PM-20 | `[x]` |
+| PM-34 | "Next Steps" checklist on detail page | When `project.template_id` is set, render `template.starter_checklist`. Match items to filed requests by template-id + description hash; render checked when matched. Click unchecked item → opens New Request form pre-filled. | M | PM-33, PM-28 | `[x]` |
+| PM-35 | "Submit Request →" button on detail page | Pre-selects this project in the New Request form (via query param or store). | S | PM-33 | `[x]` |
+| PM-36 | Routes in `App.tsx` | `/projects` → ProjectsPage; `/projects/:projectId` → ProjectDetailPage. | S | PM-30, PM-33 | `[x]` |
+| PM-37 | Sidebar entry | Add "Projects" between Command Center and Prompt Studio in `Sidebar.tsx`. Active-page prefix matching so `/projects/abc` keeps it highlighted. | S | PM-36 | `[x]` |
+| PM-38 | New Request form: required project dropdown | Add dropdown to `CommandCenter.tsx`. Required, defaults to user's last-used active project (localStorage), pre-fills team selector when project has `default_team`. | M | PM-20 | `[x]` |
+| PM-39 | "+ New project" inline option in dropdown | Bottom of the dropdown opens the same `CreateProjectModal`; on save, selects the new project. | S | PM-38, PM-29 | `[x]` |
+| PM-40 | Frontend tests for `CreateProjectModal` | Validation rules, dropdown behavior, submit success/failure paths. Vitest + Testing Library. | M | PM-29 | `[-]` |
+
+### Phase 3: Project surfacing everywhere (~4 hours)
+
+Make the project association visible on every page that touches requests
+so users feel the new structure, not just on the dedicated Projects pages.
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PM-41 | Project chip on Command Center request cards | Small clickable chip (color + icon + name) beside the REQ-id on each Active Request card. Same on Recently Completed rows. | S | PM-37 | `[x]` |
+| PM-42 | Project column + filter on History | New Project column showing chip; toolbar dropdown to filter by project. | M | PM-37, PM-16 | `[x]` |
+| PM-43 | "Project: <name>" line on RequestDetail header | Link to `/projects/{id}` directly under the REQ-id. | S | PM-37 | `[x]` |
+| PM-44 | StoryBoard breadcrumb update | Change `Command Center ▸ REQ-XXX` → `Command Center ▸ <project name> ▸ REQ-XXX`. Project name links to detail. | S | PM-43 | `[x]` |
+| PM-45 | Cost dashboard project filter | New "Project" dropdown in the dashboard toolbar; passes `?project_id` to the API. | S | PM-17 | `[x]` |
+| PM-46 | WebSocket live updates | Subscribe to `project.created` / `project.updated` events on the Projects list page so it updates without a poll-tick wait. | S | PM-15, PM-30 | `[x]` |
+| PM-47 | Defensive guard for missing project | If `request.project_id` points at a deleted project (shouldn't happen given PRJ-006), render "Unassigned" inline + log a warning. | S | PM-30 | `[x]` |
+
+### Phase 4: QA, docs, ship (~2 hours)
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PM-48 | End-to-end smoke test | Automated 13-step Python smoke at `scripts/smoke_test_pm48.py`: login → list 5 templates → create one project per template (verify all 10 fields round-trip) → list default/active → file request with project_id → file request without (defaults to Unassigned) → filter requests by project_id → fetch detail with rollup stats → cost dashboard with project_id → PATCH name → archive (verify disappears from default listing) → Unassigned-protection (archive + delete both rejected) → cleanup. **All 13 checks pass.** Found and fixed 4 bugs: missing `project_id` in GET /requests/{id} response, missing /projects routes in App.tsx, missing project_id scope on cost dashboard daily/monthly cards, awkward dynamic datetime import. Also verified archived-project submission rejection (orchestrator check). | M | PM-41–PM-47 | `[x]` |
+| PM-49 | Update `docs/prd.md` v3.11 + revision history | Bumped Document Version 3.10 → 3.11. Added Section 14.4 row for v3.11 describing the actual shipped scope, the 4 deferred tasks, and the 3 bugs found+fixed during the smoke test. | S | PM-48 | `[x]` |
+| PM-50 | Add to `task-list.md` Post-Release Changes | New "Project Management v1 (shipped 2026-05-17)" row in Post-Release Changes (continued) — contrasts with the earlier "Projects Feature (built then reverted)" row so the history of both attempts is captured in one place. Lists the file scope (backend, frontend, config, docs) for future onboarding. | S | PM-48 | `[x]` |
+
+### Progress Summary
+
+| Phase | Tasks | Done | In Progress | Deferred | Not Started |
+|-------|-------|------|-------------|----------|-------------|
+| Phase 1: Backend | 18 | 17 | 0 | 1 (PM-18 tests) | 0 |
+| Phase 2: Frontend (Create + List + Detail) | 22 | 19 | 0 | 3 (PM-19 typegen, PM-20 TanStack hooks, PM-40 tests) | 0 |
+| Phase 3: Surfacing everywhere | 7 | 7 | 0 | 0 | 0 |
+| Phase 4: QA, docs, ship | 3 | 3 | 0 | 0 | 0 |
+| **Total** | **50** | **46** | **0** | **4** | **0** |
+
+### Critical Path
+
+`PM-01 → PM-02 → PM-05 → PM-09 → PM-10 → PM-19 → PM-20 → PM-21 → PM-29 → PM-30 → PM-36 → PM-37 → PM-38 → PM-41 → PM-48`
+
+Other tasks can fan out from these checkpoints in parallel:
+- PM-22 through PM-28 (sub-components) can be developed in parallel after PM-21
+- PM-30 / PM-33 (list + detail pages) can be developed in parallel after PM-20
+- PM-41 through PM-47 (surfacing) are all independent of each other

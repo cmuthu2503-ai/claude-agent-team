@@ -86,6 +86,9 @@ class Request(BaseModel):
     priority: TaskPriority = TaskPriority.MEDIUM
     status: RequestStatus = RequestStatus.RECEIVED
     tags: list[str] = Field(default_factory=list)
+    # Parent project. Defaults to the immutable Unassigned project at the
+    # API layer when not supplied; see docs/prd-projects-feature.md.
+    project_id: str | None = None
     created_by: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
     completed_at: datetime | None = None
@@ -216,6 +219,72 @@ class Document(BaseModel):
     agent_id: str
     version: int = 1
     tags: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime | None = None
+
+
+# ── Projects ─────────────────────────────────────
+# A project groups related requests so the platform has a sense of
+# "what work stream is this part of." Every request belongs to exactly
+# one project; the seeded immutable "proj-unassigned" project catches
+# legacy/orphaned rows. See docs/prd-projects-feature.md §5.3 for
+# field-by-field rationale.
+
+
+class ProjectStatus(StrEnum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class DefaultTeam(StrEnum):
+    ENGINEERING = "engineering"
+    RESEARCH = "research"
+    CONTENT = "content"
+
+
+# Closed-set palette + icon names enforced at validation time (PRJ-009, PRJ-010).
+PROJECT_COLOR_PALETTE: tuple[str, ...] = (
+    "#00f0ff",  # cyan (default)
+    "#ff2a6d",  # pink
+    "#39ff14",  # matrix green
+    "#f9f871",  # yellow
+    "#ff8c00",  # orange
+    "#b026ff",  # purple
+    "#0070f3",  # blue
+    "#8080a0",  # gray
+)
+PROJECT_ICON_SET: tuple[str, ...] = (
+    "folder",
+    "rocket",
+    "layers",
+    "code",
+    "flask-conical",
+    "palette",
+    "bug",
+    "book-open",
+)
+UNASSIGNED_PROJECT_ID = "proj-unassigned"
+
+
+class Project(BaseModel):
+    """A parent container for requests. PRD: docs/prd-projects-feature.md."""
+
+    project_id: str
+    name: str
+    description: str = ""
+    status: ProjectStatus = ProjectStatus.ACTIVE
+    # Identity / visual
+    color: str = "#00f0ff"
+    icon: str = "folder"
+    tags: list[str] = Field(default_factory=list)
+    # Ownership / context
+    lead_user_id: str | None = None
+    repo_url: str = ""
+    default_team: DefaultTeam | None = None
+    target_date: datetime | None = None
+    template_id: str | None = None
+    # Audit
+    created_by: str | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime | None = None
 

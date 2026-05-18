@@ -15,6 +15,8 @@ import { TeamStatusPage } from "./pages/TeamStatus"
 import { CostDashboardPage } from "./pages/CostDashboard"
 import { UserManagementPage } from "./pages/UserManagement"
 import { MermaidViewerPage } from "./pages/MermaidViewer"
+import { ProjectsPage } from "./pages/Projects"
+import { ProjectDetailPage } from "./pages/ProjectDetail"
 import "./themes.css"
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -59,6 +61,8 @@ function App() {
                 <Layout>
                   <Routes>
                     <Route path="/" element={<CommandCenterPage />} />
+                    <Route path="/projects" element={<ProjectsPage />} />
+                    <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
                     <Route path="/request/:requestId" element={<RequestDetailPage />} />
                     <Route path="/stories/:requestId" element={<StoryBoardPage />} />
                     <Route path="/prompts" element={<PromptStudioPage />} />

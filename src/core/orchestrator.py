@@ -78,20 +78,38 @@ class Orchestrator(AgentExecutor):
         self._agent_executor = executor
 
     async def submit(self, description: str, task_type: str = "feature_request",
-                     priority: str = "medium", created_by: str = "") -> Request:
+                     priority: str = "medium", created_by: str = "",
+                     project_id: str | None = None) -> Request:
         request_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
+
+        # PM-11 — project assignment. Default to the immutable Unassigned
+        # project when caller doesn't supply one. Validate exists + active
+        # otherwise; reject with ValueError (route turns into HTTP 400).
+        from src.models.base import UNASSIGNED_PROJECT_ID, ProjectStatus
+        if not project_id:
+            project_id = UNASSIGNED_PROJECT_ID
+        else:
+            project = await self.state.get_project(project_id)
+            if project is None:
+                raise ValueError(f"Project {project_id!r} not found.")
+            if project.status != ProjectStatus.ACTIVE:
+                raise ValueError(f"Project {project_id!r} is archived; cannot file requests against it.")
+
         request = Request(
             request_id=request_id,
             description=description,
             task_type=task_type,
             priority=priority,
             created_by=created_by,
+            project_id=project_id,
         )
         await self.state.create_request(request)
         await self.events.emit("request.created", {
             "request_id": request_id, "description": description, "task_type": task_type,
+            "project_id": project_id,
         })
-        logger.info("request_submitted", request_id=request_id, task_type=task_type)
+        logger.info("request_submitted", request_id=request_id, task_type=task_type,
+                   project_id=project_id)
 
         # Check for existing documents (duplicate detection)
         skip_stages: list[str] = []

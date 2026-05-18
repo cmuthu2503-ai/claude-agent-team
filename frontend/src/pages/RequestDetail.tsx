@@ -4,6 +4,7 @@ import { api } from "../lib/api"
 import { StatusBadge } from "../components/ui/StatusBadge"
 import { ArrowLeft, ChevronDown, ChevronRight, FileText, ExternalLink, Github, FileType, Presentation, FileImage, Code } from "lucide-react"
 import { MarkdownRenderer } from "../components/ui/MarkdownRenderer"
+import { ProjectChip } from "../components/projects/ProjectChip"
 
 // Map filename extension → icon component
 function fileIcon(path: string) {
@@ -89,6 +90,10 @@ export function RequestDetailPage() {
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
           <div>
             <h1 style={{ fontSize: 20, fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>{data.request_id}</h1>
+            <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-muted)" }}>
+              <span>Project:</span>
+              <ProjectChip projectId={data.project_id} variant="full" />
+            </div>
             <p style={{ marginTop: 8, color: "var(--text-secondary)", fontSize: 14, lineHeight: 1.6 }}>{data.description}</p>
           </div>
           <StatusBadge status={data.status} size="md" />

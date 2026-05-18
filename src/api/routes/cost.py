@@ -1,5 +1,7 @@
 """Cost and token usage endpoints."""
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, Request
 
 from src.auth.service import get_current_user
@@ -10,19 +12,53 @@ router = APIRouter(prefix="/api/v1/cost", tags=["cost"])
 @router.get("/dashboard")
 async def cost_dashboard(
     request: Request,
+    project_id: str | None = None,  # PM-17 — scope all rollups to a single project
     user: dict = Depends(get_current_user),
 ):
     state = request.app.state.state_store
-    daily = await state.get_daily_cost()
-    monthly = await state.get_monthly_cost()
 
     # Get all token usage records for breakdowns
     db = await state._get_db()
 
+    # PM-17 — when scoped to a project, restrict every aggregation to that
+    # project's requests via a subquery. The non-scoped path stays exactly
+    # as before (no perf hit when project_id is omitted).
+    where_proj = ""
+    params_proj: tuple = ()
+    if project_id:
+        where_proj = "WHERE request_id IN (SELECT request_id FROM requests WHERE project_id = ?)"
+        params_proj = (project_id,)
+
+    # PM-17 fix: Daily/monthly totals also need to respect the project filter,
+    # otherwise the "Today"/"This Month" cards stay global while the breakdown
+    # tables go filtered — confusing. Compute them inline against the same
+    # scoped query when project_id is set, fall back to the legacy helpers
+    # (which scan the full table once) when unscoped.
+    if project_id:
+        today_iso = datetime.utcnow().date().isoformat()
+        first_of_month_iso = datetime.utcnow().replace(day=1).date().isoformat()
+        proj_filter = "request_id IN (SELECT request_id FROM requests WHERE project_id = ?)"
+        async with db.execute(
+            f"SELECT COALESCE(SUM(cost_usd), 0) AS total FROM token_usage "
+            f"WHERE {proj_filter} AND recorded_at >= ?",
+            (project_id, today_iso),
+        ) as cur:
+            daily = float((await cur.fetchone())["total"])
+        async with db.execute(
+            f"SELECT COALESCE(SUM(cost_usd), 0) AS total FROM token_usage "
+            f"WHERE {proj_filter} AND recorded_at >= ?",
+            (project_id, first_of_month_iso),
+        ) as cur:
+            monthly = float((await cur.fetchone())["total"])
+    else:
+        daily = await state.get_daily_cost()
+        monthly = await state.get_monthly_cost()
+
     # Per-model breakdown
     async with db.execute(
-        "SELECT model, SUM(input_tokens) as inp, SUM(output_tokens) as outp, SUM(cost_usd) as cost "
-        "FROM token_usage GROUP BY model ORDER BY cost DESC"
+        f"SELECT model, SUM(input_tokens) as inp, SUM(output_tokens) as outp, SUM(cost_usd) as cost "
+        f"FROM token_usage {where_proj} GROUP BY model ORDER BY cost DESC",
+        params_proj,
     ) as cursor:
         model_rows = await cursor.fetchall()
 
@@ -33,8 +69,9 @@ async def cost_dashboard(
 
     # Per-agent breakdown
     async with db.execute(
-        "SELECT agent_id, SUM(input_tokens) as inp, SUM(output_tokens) as outp, SUM(cost_usd) as cost, COUNT(*) as calls "
-        "FROM token_usage GROUP BY agent_id ORDER BY cost DESC"
+        f"SELECT agent_id, SUM(input_tokens) as inp, SUM(output_tokens) as outp, SUM(cost_usd) as cost, COUNT(*) as calls "
+        f"FROM token_usage {where_proj} GROUP BY agent_id ORDER BY cost DESC",
+        params_proj,
     ) as cursor:
         agent_rows = await cursor.fetchall()
 
@@ -45,8 +82,9 @@ async def cost_dashboard(
 
     # Per-request breakdown (top 10 most expensive)
     async with db.execute(
-        "SELECT request_id, SUM(cost_usd) as cost, SUM(input_tokens) as inp, SUM(output_tokens) as outp, COUNT(*) as calls "
-        "FROM token_usage GROUP BY request_id ORDER BY cost DESC LIMIT 10"
+        f"SELECT request_id, SUM(cost_usd) as cost, SUM(input_tokens) as inp, SUM(output_tokens) as outp, COUNT(*) as calls "
+        f"FROM token_usage {where_proj} GROUP BY request_id ORDER BY cost DESC LIMIT 10",
+        params_proj,
     ) as cursor:
         request_rows = await cursor.fetchall()
 

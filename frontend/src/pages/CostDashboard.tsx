@@ -1,19 +1,41 @@
 import { useState, useEffect } from "react"
 import { api } from "../lib/api"
+import { useProjectsCache } from "../hooks/useProjectsCache"
 
 export function CostDashboardPage() {
   const [data, setData] = useState<any>(null)
+  const [projectFilter, setProjectFilter] = useState("")  // PM-45
+  const { all: allProjects } = useProjectsCache()
 
   useEffect(() => {
-    api.get("/cost/dashboard").then((res) => setData(res.data)).catch(() => {})
-  }, [])
+    const url = projectFilter
+      ? `/cost/dashboard?project_id=${encodeURIComponent(projectFilter)}`
+      : "/cost/dashboard"
+    api.get(url).then((res) => setData(res.data)).catch(() => {})
+  }, [projectFilter])
 
   const fmt = (n: number) => (n ?? 0).toFixed(4)
   const fmtTokens = (n: number) => (n ?? 0).toLocaleString()
 
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: 24, display: "flex", flexDirection: "column", gap: 24, fontFamily: "var(--font)" }}>
-      <h1 style={{ fontSize: 20, fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>Cost Dashboard</h1>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+        <h1 style={{ fontSize: 20, fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>Cost Dashboard</h1>
+        <select
+          value={projectFilter}
+          onChange={(e) => setProjectFilter(e.target.value)}
+          style={{
+            background: "var(--bg-card)", color: "var(--text-primary)",
+            border: "1px solid var(--border)", borderRadius: "var(--radius)",
+            padding: "6px 10px", fontSize: 13,
+          }}
+        >
+          <option value="">All Projects</option>
+          {allProjects().map((p) => (
+            <option key={p.project_id} value={p.project_id}>{p.name}</option>
+          ))}
+        </select>
+      </div>
 
       {/* Summary Cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16 }}>

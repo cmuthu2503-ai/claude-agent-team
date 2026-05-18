@@ -65,6 +65,17 @@ class ApiClient {
     return res.json()
   }
 
+  async patch<T = any>(path: string, body?: any): Promise<T> {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: "PATCH",
+      headers: this.headers(),
+      body: body ? JSON.stringify(body) : undefined,
+    })
+    if (res.status === 401) { this.handle401(); throw new Error("Session expired") }
+    if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`)
+    return res.json()
+  }
+
   async delete<T = any>(path: string): Promise<T> {
     const res = await fetch(`${API_BASE}${path}`, {
       method: "DELETE",
@@ -72,7 +83,12 @@ class ApiClient {
     })
     if (res.status === 401) { this.handle401(); throw new Error("Session expired") }
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`)
-    return res.json()
+    // FastAPI DELETE routes commonly return 204 No Content with an empty
+    // body — calling res.json() on that throws "unexpected end of data".
+    // Treat any 204 / empty body as a successful no-op result.
+    if (res.status === 204) return undefined as T
+    const text = await res.text()
+    return (text ? JSON.parse(text) : undefined) as T
   }
 }
 

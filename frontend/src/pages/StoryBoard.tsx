@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 import { useParams, Link } from "react-router-dom"
 import { api } from "../lib/api"
+import { ProjectChip } from "../components/projects/ProjectChip"
 
 /* ── Color tokens — mapped to theme CSS variables so the Story Board
    picks up whatever theme is active (was hardcoded light-mode colors
@@ -302,6 +303,8 @@ export function StoryBoardPage() {
       <div style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "12px 24px", display: "flex", alignItems: "center", gap: 8 }}>
         <Link to="/" style={{ fontSize: 13, color: C.accent, textDecoration: "none" }}>Command Center</Link>
         <span style={{ color: C.dimBorder, fontSize: 12 }}>▸</span>
+        <ProjectChip projectId={data.project_id} variant="compact" stopPropagation={false} />
+        <span style={{ color: C.dimBorder, fontSize: 12 }}>▸</span>
         <span style={{ fontSize: 13, color: C.text2, fontWeight: 600 }}>
           {data.request_id}
         </span>
@@ -451,6 +454,7 @@ export function StoryBoardPage() {
             ? [{ key: "board", label: "Story Board", count: stories.length }]
             : []),
           { key: "timeline", label: "Agent Timeline", count: subtasks.length },
+          { key: "tests", label: "Test Coverage", count: totalTests },
           { key: "outputs", label: "Outputs", count: 0 },
         ].map((tab) => (
           <div
@@ -464,7 +468,7 @@ export function StoryBoardPage() {
             }}
           >
             {tab.label}
-            {(tab.key === "board" || tab.key === "timeline") && tab.count > 0 && (
+            {(tab.key === "board" || tab.key === "timeline" || tab.key === "tests") && tab.count > 0 && (
               <span style={{
                 background: C.accentBg, color: C.accent, fontSize: 11, fontWeight: 600,
                 padding: "1px 6px", borderRadius: 8, marginLeft: 6,
@@ -478,6 +482,9 @@ export function StoryBoardPage() {
 
       {/* ── Outputs tab ─────────────────────────────── */}
       {activeTab === "outputs" && <OutputsTab data={data} />}
+
+      {/* ── Test Coverage tab ──────────────────────── */}
+      {activeTab === "tests" && <TestCoverageTab stories={stories} />}
 
       {/* ── Agent Timeline tab ──────────────────────── */}
       {activeTab === "timeline" && <AgentTimelineTab subtasks={subtasks} workflow={workflow} />}
@@ -981,5 +988,328 @@ function StoryCard({ story: s, column }: { story: any; column: string }) {
       )}
     </div>
   )
+}
+
+
+/* ── Test Coverage tab ───────────────────────────────
+   Aggregates every test_case across every story into a single dashboard:
+   top summary cards (total / pass / fail / running+pending / avg coverage),
+   pass-rate bar, a per-story breakdown table, and an explicit "Failing
+   Tests" callout so regressions are impossible to miss. */
+function TestCoverageTab({ stories }: { stories: any[] }) {
+  // Flatten every test case across every story, tagging each with its
+  // parent story so the failing-tests list can show story context.
+  type TC = {
+    test_id?: string
+    name: string
+    status: string  // "pass" | "fail" | "running" | "pending" (others = pending)
+    story_id?: string
+    story_title?: string
+  }
+  const allTests: TC[] = []
+  for (const s of stories) {
+    for (const tc of s.test_cases || []) {
+      allTests.push({
+        test_id: tc.test_id,
+        name: tc.name,
+        status: tc.status || "pending",
+        story_id: s.story_id,
+        story_title: s.title,
+      })
+    }
+  }
+
+  const total = allTests.length
+  const passed = allTests.filter((t) => t.status === "pass").length
+  const failed = allTests.filter((t) => t.status === "fail").length
+  const running = allTests.filter((t) => t.status === "running").length
+  const pending = total - passed - failed - running
+  const passRate = total > 0 ? Math.round((passed / total) * 100) : 0
+  const failRate = total > 0 ? Math.round((failed / total) * 100) : 0
+
+  // Avg coverage from stories that have a coverage_pct (skip nulls so a
+  // single 0% on a not-yet-tested story doesn't drag the mean down).
+  const withCoverage = stories.filter((s) => s.coverage_pct != null)
+  const avgCoverage = withCoverage.length > 0
+    ? Math.round(withCoverage.reduce((acc, s) => acc + (s.coverage_pct || 0), 0) / withCoverage.length)
+    : 0
+
+  if (total === 0) {
+    return (
+      <div style={{ padding: "20px 24px", maxWidth: 960, margin: "0 auto" }}>
+        <div style={{
+          padding: 40, textAlign: "center", fontSize: 13, color: C.text4,
+          background: C.colBg, borderRadius: 12, border: `1px solid ${C.border}`,
+        }}>
+          No test cases yet. They'll appear here once the Tester agent runs and writes test_cases on each story.
+        </div>
+      </div>
+    )
+  }
+
+  const failingTests = allTests.filter((t) => t.status === "fail")
+  // Group tests by story for the per-story breakdown table.
+  const byStory = stories
+    .map((s) => {
+      const tcs = (s.test_cases || []) as Array<{ status: string }>
+      return {
+        story_id: s.story_id,
+        title: s.title,
+        total: tcs.length,
+        passed: tcs.filter((t) => t.status === "pass").length,
+        failed: tcs.filter((t) => t.status === "fail").length,
+        running: tcs.filter((t) => t.status === "running").length,
+        coverage_pct: s.coverage_pct,
+      }
+    })
+    .filter((row) => row.total > 0)
+
+  return (
+    <div style={{ padding: "20px 24px", maxWidth: 1100, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* ── Summary cards ── */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+        gap: 12,
+      }}>
+        <StatCard label="Total tests" value={String(total)} color={C.text1} />
+        <StatCard label="Passed" value={`${passed}`} sub={`${passRate}%`} color={C.green} />
+        <StatCard label="Failed" value={`${failed}`} sub={`${failRate}%`} color={failed > 0 ? C.red : C.text4} />
+        <StatCard label="In flight" value={`${running + pending}`} sub={running > 0 ? `${running} running` : "queued"} color={C.accent} />
+        <StatCard label="Avg coverage" value={`${avgCoverage}%`} color={avgCoverage >= 80 ? C.green : avgCoverage >= 50 ? C.amber : C.red} />
+      </div>
+
+      {/* ── Pass-rate bar ── */}
+      <div style={{
+        background: C.white, borderRadius: 12, border: `1px solid ${C.border}`,
+        padding: "18px 20px",
+      }}>
+        <div style={{
+          display: "flex", justifyContent: "space-between", alignItems: "baseline",
+          marginBottom: 10,
+        }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: C.text2, textTransform: "uppercase", letterSpacing: 0.5 }}>
+            Pass rate
+          </span>
+          <span style={{ fontSize: 12, color: C.text3 }}>
+            {passed} / {total} passing
+          </span>
+        </div>
+        <div style={{
+          height: 10, background: C.colBg, borderRadius: 5, overflow: "hidden",
+          display: "flex",
+        }}>
+          {passed > 0 && <div style={{ width: `${(passed / total) * 100}%`, background: C.green }} />}
+          {failed > 0 && <div style={{ width: `${(failed / total) * 100}%`, background: C.red }} />}
+          {running > 0 && <div style={{ width: `${(running / total) * 100}%`, background: C.accent }} />}
+          {pending > 0 && <div style={{ width: `${(pending / total) * 100}%`, background: C.text4 }} />}
+        </div>
+        <div style={{ display: "flex", gap: 14, marginTop: 8, fontSize: 11, color: C.text3, flexWrap: "wrap" }}>
+          <LegendDot color={C.green} label={`Pass (${passed})`} />
+          <LegendDot color={C.red}   label={`Fail (${failed})`} />
+          <LegendDot color={C.accent} label={`Running (${running})`} />
+          <LegendDot color={C.text4} label={`Pending (${pending})`} />
+        </div>
+      </div>
+
+      {/* ── Failing tests callout (only if any) ── */}
+      {failingTests.length > 0 && (
+        <div style={{
+          background: C.redBg, borderRadius: 12, border: `1px solid ${C.red}`,
+          padding: "16px 18px",
+        }}>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8, marginBottom: 10,
+            fontSize: 13, fontWeight: 700, color: C.red,
+          }}>
+            ✗ {failingTests.length} failing {failingTests.length === 1 ? "test" : "tests"}
+          </div>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+            {failingTests.map((t, i) => (
+              <li key={t.test_id || `${t.story_id}-${i}`} style={{
+                display: "flex", alignItems: "center", gap: 10,
+                padding: "8px 10px", background: C.white, borderRadius: 6,
+                border: `1px solid ${C.border}`, fontSize: 12,
+              }}>
+                <span style={{ color: C.red, fontSize: 13 }}>✗</span>
+                <span style={{ color: C.text1, flex: 1, minWidth: 0 }}>{t.name}</span>
+                {t.story_title && (
+                  <span style={{
+                    fontSize: 10, color: C.text3, textTransform: "uppercase", letterSpacing: 0.5,
+                    whiteSpace: "nowrap",
+                  }}>
+                    {t.story_id || t.story_title.slice(0, 40)}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* ── Per-story breakdown table ── */}
+      <div style={{
+        background: C.white, borderRadius: 12, border: `1px solid ${C.border}`,
+        overflow: "hidden",
+      }}>
+        <div style={{
+          padding: "14px 18px", borderBottom: `1px solid ${C.border}`,
+          fontSize: 12, fontWeight: 700, color: C.text2,
+          textTransform: "uppercase", letterSpacing: 0.5,
+        }}>
+          Per-story breakdown ({byStory.length} {byStory.length === 1 ? "story" : "stories"})
+        </div>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr style={{ background: C.colBg, color: C.text3, textTransform: "uppercase", letterSpacing: 0.5 }}>
+              <th style={cellHead}>Story</th>
+              <th style={{ ...cellHead, textAlign: "right" }}>Tests</th>
+              <th style={{ ...cellHead, textAlign: "right" }}>Passed</th>
+              <th style={{ ...cellHead, textAlign: "right" }}>Failed</th>
+              <th style={{ ...cellHead, textAlign: "right" }}>Pass %</th>
+              <th style={{ ...cellHead, textAlign: "right" }}>Coverage</th>
+            </tr>
+          </thead>
+          <tbody>
+            {byStory.map((row) => {
+              const pct = row.total > 0 ? Math.round((row.passed / row.total) * 100) : 0
+              return (
+                <tr key={row.story_id} style={{ borderTop: `1px solid ${C.border}` }}>
+                  <td style={cellBody}>
+                    <div style={{ fontSize: 12, color: C.text1, fontWeight: 600 }}>{row.title || row.story_id}</div>
+                    {row.story_id && (
+                      <div style={{ fontSize: 10, color: C.text4, fontFamily: "ui-monospace, monospace", marginTop: 2 }}>
+                        {row.story_id}
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ ...cellBody, textAlign: "right", color: C.text2, fontWeight: 600 }}>{row.total}</td>
+                  <td style={{ ...cellBody, textAlign: "right", color: C.green, fontWeight: 600 }}>{row.passed}</td>
+                  <td style={{ ...cellBody, textAlign: "right", color: row.failed > 0 ? C.red : C.text4, fontWeight: 600 }}>{row.failed}</td>
+                  <td style={{ ...cellBody, textAlign: "right", color: pct === 100 ? C.green : pct >= 50 ? C.amber : C.red, fontWeight: 700 }}>{pct}%</td>
+                  <td style={{ ...cellBody, textAlign: "right" }}>
+                    {row.coverage_pct != null ? (
+                      <span style={{
+                        color: row.coverage_pct >= 80 ? C.green : row.coverage_pct >= 50 ? C.amber : C.red,
+                        fontWeight: 700,
+                      }}>
+                        {row.coverage_pct}%
+                      </span>
+                    ) : (
+                      <span style={{ color: C.text4 }}>—</span>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* ── Full test list (collapsed by default would be nicer; for v1
+           we just render everything inline grouped by story). ── */}
+      <div style={{
+        background: C.white, borderRadius: 12, border: `1px solid ${C.border}`,
+        padding: 0, overflow: "hidden",
+      }}>
+        <div style={{
+          padding: "14px 18px", borderBottom: `1px solid ${C.border}`,
+          fontSize: 12, fontWeight: 700, color: C.text2,
+          textTransform: "uppercase", letterSpacing: 0.5,
+        }}>
+          All test cases ({total})
+        </div>
+        {stories
+          .filter((s) => (s.test_cases || []).length > 0)
+          .map((s) => (
+            <div key={s.story_id} style={{ padding: "12px 18px", borderTop: `1px solid ${C.border}` }}>
+              <div style={{
+                fontSize: 12, fontWeight: 600, color: C.text1, marginBottom: 8,
+                display: "flex", alignItems: "center", gap: 8,
+              }}>
+                <span>{s.title || s.story_id}</span>
+                <span style={{
+                  fontSize: 10, color: C.text4, fontFamily: "ui-monospace, monospace",
+                }}>
+                  {s.story_id}
+                </span>
+              </div>
+              <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+                {(s.test_cases || []).map((tc: any) => {
+                  const tone = tc.status === "pass" ? C.green
+                    : tc.status === "fail" ? C.red
+                    : tc.status === "running" ? C.accent
+                    : C.text4
+                  const icon = tc.status === "pass" ? "✓"
+                    : tc.status === "fail" ? "✗"
+                    : tc.status === "running" ? "↻"
+                    : "○"
+                  return (
+                    <li key={tc.test_id} style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      fontSize: 11, lineHeight: 1.4, color: C.text2,
+                    }}>
+                      <span style={{ color: tone, fontWeight: 700, width: 12 }}>{icon}</span>
+                      <span>{tc.name}</span>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          ))}
+      </div>
+    </div>
+  )
+}
+
+/* Small presentational helpers used by TestCoverageTab. */
+function StatCard({
+  label,
+  value,
+  sub,
+  color,
+}: {
+  label: string
+  value: string
+  sub?: string
+  color: string
+}) {
+  return (
+    <div style={{
+      background: C.white, borderRadius: 12, border: `1px solid ${C.border}`,
+      padding: "14px 16px", display: "flex", flexDirection: "column", gap: 4,
+    }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: C.text3, textTransform: "uppercase", letterSpacing: 0.8 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 22, fontWeight: 700, color, lineHeight: 1 }}>
+        {value}
+      </div>
+      {sub && (
+        <div style={{ fontSize: 11, color: C.text3 }}>{sub}</div>
+      )}
+    </div>
+  )
+}
+
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+      <span style={{ width: 8, height: 8, borderRadius: 4, background: color, display: "inline-block" }} />
+      {label}
+    </span>
+  )
+}
+
+const cellHead: React.CSSProperties = {
+  padding: "10px 14px",
+  fontSize: 10,
+  fontWeight: 700,
+  textAlign: "left",
+  letterSpacing: 0.5,
+}
+const cellBody: React.CSSProperties = {
+  padding: "12px 14px",
+  verticalAlign: "top",
 }
 

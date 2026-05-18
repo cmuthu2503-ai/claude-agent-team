@@ -16,6 +16,8 @@ from src.models.base import (
     Deployment,
     Metric,
     Notification,
+    Project,
+    ProjectStatus,
     PromptSession,
     PromptVariant,
     Request,
@@ -48,7 +50,8 @@ CREATE TABLE IF NOT EXISTS requests (
     published_files TEXT DEFAULT '[]',
     commit_sha TEXT,
     commit_url TEXT,
-    code_commit_error TEXT
+    code_commit_error TEXT,
+    project_id TEXT  -- FK projects(project_id); nullable, app-layer defaults to 'proj-unassigned'
 );
 
 CREATE TABLE IF NOT EXISTS subtasks (
@@ -247,6 +250,26 @@ CREATE TABLE IF NOT EXISTS documents (
     updated_at TIMESTAMP
 );
 
+-- Projects (parent container for requests; one PRD per project, etc.)
+-- See docs/prd-projects-feature.md §5.1 for the field-by-field rationale.
+CREATE TABLE IF NOT EXISTS projects (
+    project_id      TEXT PRIMARY KEY,           -- 'proj-<uuid>' or 'proj-unassigned'
+    name            TEXT NOT NULL,
+    description     TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'active',     -- active | archived
+    color           TEXT NOT NULL DEFAULT '#00f0ff',    -- one of 8 preset hex (PRJ-009)
+    icon            TEXT NOT NULL DEFAULT 'folder',     -- one of 8 preset lucide names (PRJ-010)
+    tags            TEXT NOT NULL DEFAULT '[]',         -- JSON array of strings (PRJ-011)
+    lead_user_id    TEXT,                                -- FK users(user_id), defaults to created_by
+    repo_url        TEXT NOT NULL DEFAULT '',           -- optional URL (PRJ-013)
+    default_team    TEXT,                                -- 'engineering' | 'research' | 'content' | NULL (PRJ-015)
+    target_date     TIMESTAMP,                           -- optional, ISO date (PRJ-014)
+    template_id     TEXT,                                -- refs config/project_templates.yaml (PRJ-016)
+    created_by      TEXT,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP
+);
+
 -- Prompt Studio
 CREATE TABLE IF NOT EXISTS prompt_sessions (
     session_id TEXT PRIMARY KEY,
@@ -294,6 +317,9 @@ CREATE INDEX IF NOT EXISTS idx_agent_traces_request ON agent_traces(request_id);
 CREATE INDEX IF NOT EXISTS idx_deployments_env ON deployments(environment, status);
 CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(doc_type);
 CREATE INDEX IF NOT EXISTS idx_documents_request ON documents(request_id);
+CREATE INDEX IF NOT EXISTS idx_projects_status_name ON projects(status, name);
+CREATE INDEX IF NOT EXISTS idx_projects_lead ON projects(lead_user_id);
+CREATE INDEX IF NOT EXISTS idx_requests_project ON requests(project_id);
 """
 
 
@@ -330,12 +356,46 @@ class SQLiteStateStore(StateStore):
             "ALTER TABLE deployment_states ADD COLUMN strategy TEXT DEFAULT ''",
             "ALTER TABLE deployment_states ADD COLUMN strategy_reasoning TEXT DEFAULT ''",
             "ALTER TABLE deployment_states ADD COLUMN risk TEXT DEFAULT ''",
+            # Project management (PM-02). project_id is nullable; app layer
+            # defaults missing values to 'proj-unassigned' (seeded by PM-12).
+            "ALTER TABLE requests ADD COLUMN project_id TEXT",
         ]
         for stmt in migrations:
             try:
                 await db.execute(stmt)
             except Exception:
                 pass  # Column already exists — ignore
+        await db.commit()
+
+        # PM-12 + PM-13: Seed the immutable Unassigned project and backfill
+        # any pre-existing requests that don't have a project yet. Idempotent —
+        # the INSERT is gated on a SELECT, the UPDATE is a no-op once every
+        # request has a project_id.
+        from src.models.base import UNASSIGNED_PROJECT_ID  # local import — model file imports nothing from us, no cycle
+        async with db.execute(
+            "SELECT 1 FROM projects WHERE project_id = ?", (UNASSIGNED_PROJECT_ID,)
+        ) as cur:
+            exists = await cur.fetchone() is not None
+        if not exists:
+            await db.execute(
+                """INSERT INTO projects
+                   (project_id, name, description, status, color, icon, tags,
+                    lead_user_id, repo_url, default_team, target_date,
+                    template_id, created_by, created_at)
+                   VALUES (?, ?, ?, 'active', ?, ?, '[]', NULL, '', NULL, NULL, NULL, NULL, ?)""",
+                (
+                    UNASSIGNED_PROJECT_ID,
+                    "Unassigned",
+                    "Default project for legacy or orphaned requests. Cannot be renamed, archived, or deleted.",
+                    "#8080a0",  # gray, distinct from any active project
+                    "folder",
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+        await db.execute(
+            "UPDATE requests SET project_id = ? WHERE project_id IS NULL OR project_id = ''",
+            (UNASSIGNED_PROJECT_ID,),
+        )
         await db.commit()
 
     async def close(self) -> None:
@@ -351,8 +411,8 @@ class SQLiteStateStore(StateStore):
             """INSERT INTO requests
                (request_id, description, task_type, priority, status, tags,
                 created_by, created_at, estimated_cost_usd, provider,
-                published_files, commit_sha, commit_url)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                published_files, commit_sha, commit_url, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 request.request_id,
                 request.description,
@@ -367,6 +427,7 @@ class SQLiteStateStore(StateStore):
                 json.dumps(request.published_files),
                 request.commit_sha,
                 request.commit_url,
+                request.project_id,
             ),
         )
         await db.commit()
@@ -386,7 +447,8 @@ class SQLiteStateStore(StateStore):
         db = await self._get_db()
         await db.execute(
             """UPDATE requests SET status=?, completed_at=?, actual_cost_usd=?,
-               published_files=?, commit_sha=?, commit_url=?, code_commit_error=?
+               published_files=?, commit_sha=?, commit_url=?, code_commit_error=?,
+               project_id=?
                WHERE request_id=?""",
             (
                 request.status,
@@ -396,6 +458,7 @@ class SQLiteStateStore(StateStore):
                 request.commit_sha,
                 request.commit_url,
                 request.code_commit_error,
+                request.project_id,
                 request.request_id,
             ),
         )
@@ -487,6 +550,7 @@ class SQLiteStateStore(StateStore):
             commit_sha=_safe_get("commit_sha"),
             commit_url=_safe_get("commit_url"),
             code_commit_error=_safe_get("code_commit_error"),
+            project_id=_safe_get("project_id"),
         )
 
     # ── Subtasks ─────────────────────────────────
@@ -1274,6 +1338,157 @@ class SQLiteStateStore(StateStore):
             agent_id=row["agent_id"],
             version=row["version"],
             tags=json.loads(row["tags"]) if row["tags"] else [],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=(
+                datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
+            ),
+        )
+
+    # ── Projects ─────────────────────────────────
+
+    async def create_project(self, project: Project) -> str:
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO projects
+               (project_id, name, description, status, color, icon, tags,
+                lead_user_id, repo_url, default_team, target_date,
+                template_id, created_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                project.project_id, project.name, project.description,
+                project.status, project.color, project.icon,
+                json.dumps(project.tags),
+                project.lead_user_id, project.repo_url, project.default_team,
+                project.target_date.isoformat() if project.target_date else None,
+                project.template_id, project.created_by,
+                project.created_at.isoformat(),
+            ),
+        )
+        await db.commit()
+        return project.project_id
+
+    async def get_project(self, project_id: str) -> Project | None:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM projects WHERE project_id = ?", (project_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return self._row_to_project(row) if row else None
+
+    async def list_projects(self, include_archived: bool = False) -> list[Project]:
+        db = await self._get_db()
+        # Sort by updated_at then created_at, both desc — matches the
+        # "Last activity" default sort on the Projects list page (PUI-001).
+        if include_archived:
+            sql = (
+                "SELECT * FROM projects "
+                "ORDER BY COALESCE(updated_at, created_at) DESC"
+            )
+            params: tuple = ()
+        else:
+            sql = (
+                "SELECT * FROM projects WHERE status = ? "
+                "ORDER BY COALESCE(updated_at, created_at) DESC"
+            )
+            params = (ProjectStatus.ACTIVE,)
+        async with db.execute(sql, params) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_project(r) for r in rows]
+
+    async def update_project(self, project: Project) -> None:
+        db = await self._get_db()
+        await db.execute(
+            """UPDATE projects SET
+                 name = ?, description = ?, status = ?, color = ?, icon = ?,
+                 tags = ?, lead_user_id = ?, repo_url = ?, default_team = ?,
+                 target_date = ?, template_id = ?, updated_at = ?
+               WHERE project_id = ?""",
+            (
+                project.name, project.description, project.status,
+                project.color, project.icon, json.dumps(project.tags),
+                project.lead_user_id, project.repo_url, project.default_team,
+                project.target_date.isoformat() if project.target_date else None,
+                project.template_id,
+                datetime.utcnow().isoformat(),
+                project.project_id,
+            ),
+        )
+        await db.commit()
+
+    async def delete_project(self, project_id: str) -> None:
+        db = await self._get_db()
+        await db.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
+        await db.commit()
+
+    async def find_project_by_name(
+        self, name: str, active_only: bool = True
+    ) -> Project | None:
+        db = await self._get_db()
+        if active_only:
+            sql = (
+                "SELECT * FROM projects "
+                "WHERE LOWER(name) = LOWER(?) AND status = ? "
+                "LIMIT 1"
+            )
+            params: tuple = (name, ProjectStatus.ACTIVE)
+        else:
+            sql = "SELECT * FROM projects WHERE LOWER(name) = LOWER(?) LIMIT 1"
+            params = (name,)
+        async with db.execute(sql, params) as cursor:
+            row = await cursor.fetchone()
+        return self._row_to_project(row) if row else None
+
+    async def get_requests_for_project(self, project_id: str) -> list[Request]:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM requests WHERE project_id = ? "
+            "ORDER BY created_at DESC",
+            (project_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_request(r) for r in rows]
+
+    async def count_requests_for_project(self, project_id: str) -> dict[str, int]:
+        """Per-status counts for the project detail page stat cards (PUI-003).
+        Returns {total, active, completed, failed} with `active` meaning any
+        non-terminal status."""
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT status, COUNT(*) AS n FROM requests "
+            "WHERE project_id = ? GROUP BY status",
+            (project_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        by_status = {r["status"]: r["n"] for r in rows}
+        total = sum(by_status.values())
+        completed = by_status.get(RequestStatus.COMPLETED, 0)
+        failed = by_status.get(RequestStatus.FAILED, 0)
+        cancelled = by_status.get(RequestStatus.CANCELLED, 0)
+        active = total - completed - failed - cancelled
+        return {
+            "total": total,
+            "active": active,
+            "completed": completed,
+            "failed": failed,
+        }
+
+    def _row_to_project(self, row: aiosqlite.Row) -> Project:
+        return Project(
+            project_id=row["project_id"],
+            name=row["name"],
+            description=row["description"] or "",
+            status=row["status"],
+            color=row["color"] or "#00f0ff",
+            icon=row["icon"] or "folder",
+            tags=json.loads(row["tags"]) if row["tags"] else [],
+            lead_user_id=row["lead_user_id"],
+            repo_url=row["repo_url"] or "",
+            default_team=row["default_team"],
+            target_date=(
+                datetime.fromisoformat(row["target_date"]) if row["target_date"] else None
+            ),
+            template_id=row["template_id"],
+            created_by=row["created_by"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=(
                 datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None

@@ -21,6 +21,7 @@ import {
   Wand2,
   Workflow,
   LogOut,
+  FolderGit2,
 } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 import { useAuthStore } from "../../stores/auth"
@@ -34,6 +35,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { path: "/", label: "Command Center", icon: LayoutDashboard },
+  { path: "/projects", label: "Projects", icon: FolderGit2 },
   { path: "/prompts", label: "Prompt Studio", icon: Wand2 },
   { path: "/diagrams", label: "Diagrams", icon: Workflow },
   { path: "/history", label: "History", icon: History },

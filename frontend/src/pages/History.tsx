@@ -4,6 +4,8 @@ import { StatusBadge } from "../components/ui/StatusBadge"
 import { Link } from "react-router-dom"
 import { Trash2, X } from "lucide-react"
 import { useAuthStore } from "../stores/auth"
+import { useProjectsCache } from "../hooks/useProjectsCache"
+import { ProjectChip } from "../components/projects/ProjectChip"
 
 const TERMINAL_STATUSES = ["completed", "failed", "cancelled"]
 function isTerminal(status: string): boolean {
@@ -13,15 +15,19 @@ function isTerminal(status: string): boolean {
 export function HistoryPage() {
   const [requests, setRequests] = useState<any[]>([])
   const [statusFilter, setStatusFilter] = useState("")
+  const [projectFilter, setProjectFilter] = useState("")  // PM-42
   const [busyId, setBusyId] = useState<string | null>(null)
   const currentUser = useAuthStore((s) => s.user)
+  const { all: allProjects } = useProjectsCache()
 
   const load = () => {
-    const params = statusFilter ? `?status=${statusFilter}&per_page=50` : "?per_page=50"
-    api.get(`/requests${params}`).then((res) => setRequests(res.data)).catch(() => {})
+    const parts: string[] = ["per_page=50"]
+    if (statusFilter) parts.push(`status=${statusFilter}`)
+    if (projectFilter) parts.push(`project_id=${projectFilter}`)
+    api.get(`/requests?${parts.join("&")}`).then((res) => setRequests(res.data)).catch(() => {})
   }
 
-  useEffect(load, [statusFilter])
+  useEffect(load, [statusFilter, projectFilter])
 
   const canMutate = (r: any): boolean => {
     if (!currentUser) return false
@@ -62,25 +68,38 @@ export function HistoryPage() {
   // grays regardless of theme). Layout/structure unchanged.
   return (
     <div className="mx-auto max-w-[1800px] space-y-4 px-9 py-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <h1 className="text-xl font-bold text-[var(--text-primary)]">History</h1>
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] px-3 py-1.5 text-sm"
-        >
-          <option value="">All Statuses</option>
-          <option value="completed">Completed</option>
-          <option value="failed">Failed</option>
-          <option value="cancelled">Cancelled</option>
-          <option value="in_progress">In Progress</option>
-        </select>
+        <div className="flex items-center gap-2">
+          <select
+            value={projectFilter}
+            onChange={(e) => setProjectFilter(e.target.value)}
+            className="rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] px-3 py-1.5 text-sm"
+          >
+            <option value="">All Projects</option>
+            {allProjects().map((p) => (
+              <option key={p.project_id} value={p.project_id}>{p.name}</option>
+            ))}
+          </select>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] px-3 py-1.5 text-sm"
+          >
+            <option value="">All Statuses</option>
+            <option value="completed">Completed</option>
+            <option value="failed">Failed</option>
+            <option value="cancelled">Cancelled</option>
+            <option value="in_progress">In Progress</option>
+          </select>
+        </div>
       </div>
       <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-card)]">
         <table className="w-full text-sm">
           <thead className="border-b border-[var(--border)] bg-[var(--bg-secondary)] text-left text-xs font-medium text-[var(--text-muted)]">
             <tr>
               <th className="px-4 py-3">ID</th>
+              <th className="px-4 py-3">Project</th>
               <th className="px-4 py-3">Description</th>
               <th className="px-4 py-3">Type</th>
               <th className="px-4 py-3">Priority</th>
@@ -101,6 +120,7 @@ export function HistoryPage() {
                       {r.request_id}
                     </Link>
                   </td>
+                  <td className="px-4 py-3"><ProjectChip projectId={r.project_id} /></td>
                   <td className="max-w-xs truncate px-4 py-3 text-[var(--text-primary)]">{r.description}</td>
                   <td className="px-4 py-3 capitalize text-[var(--text-secondary)]">{r.task_type?.replace("_", " ")}</td>
                   <td className="px-4 py-3 capitalize text-[var(--text-secondary)]">{r.priority}</td>

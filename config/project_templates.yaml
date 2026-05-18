@@ -1,0 +1,82 @@
+# Project templates — used by the "Template" field on the Create Project form
+# (PRJ-016) and rendered as a "Next Steps" checklist on the project detail page
+# (PRJ-017). Loaded by src/core/project_templates.py at backend startup.
+#
+# Each template has:
+#   id              stable identifier referenced by projects.template_id
+#   name            human-facing label
+#   description     1-line description shown under the dropdown option
+#   starter_checklist  list of suggested requests with description, task_type, priority
+#                      (empty list = no checklist — useful for the "Empty" template)
+#
+# The orchestrator does NOT auto-submit these. They render as clickable
+# checklist items on the project page; clicking pre-fills the New Request
+# form with the template's description/task_type/priority for user confirmation.
+
+templates:
+  - id: empty
+    name: Empty
+    description: A blank project. You'll file requests one at a time as you need them.
+    starter_checklist: []
+
+  - id: web_feature
+    name: Web Feature
+    description: A user-facing feature with PRD, frontend implementation, and a bug-fix slot.
+    starter_checklist:
+      - description: "Write the PRD for [feature name]"
+        task_type: feature_request
+        priority: high
+      - description: "Build the frontend for [feature name]"
+        task_type: feature_request
+        priority: high
+      - description: "Bug fixes for [feature name]"
+        task_type: bug_report
+        priority: medium
+
+  - id: research_initiative
+    name: Research Initiative
+    description: A research project with a primary inquiry, comparison study, and final report.
+    starter_checklist:
+      - description: "Research [primary topic] — current state of the art"
+        task_type: research_request
+        priority: high
+      - description: "Compare [primary topic] approaches against [alternatives]"
+        task_type: research_request
+        priority: medium
+      - description: "Final recommendation report for [primary topic]"
+        task_type: research_request
+        priority: medium
+
+  - id: content_project
+    name: Content Project
+    description: A content deliverable with a slide deck, a longer-form report, and a one-pager summary.
+    starter_checklist:
+      - description: "Slide deck for [topic]"
+        task_type: content_request
+        priority: high
+      - description: "Long-form report for [topic]"
+        task_type: content_request
+        priority: medium
+      - description: "One-page executive summary for [topic]"
+        task_type: content_request
+        priority: medium
+
+  - id: bug_sprint
+    name: Bug Sprint
+    description: Five generic bug-report placeholders. Useful for an end-of-cycle cleanup project.
+    starter_checklist:
+      - description: "Bug #1 — [describe the bug]"
+        task_type: bug_report
+        priority: high
+      - description: "Bug #2 — [describe the bug]"
+        task_type: bug_report
+        priority: medium
+      - description: "Bug #3 — [describe the bug]"
+        task_type: bug_report
+        priority: medium
+      - description: "Bug #4 — [describe the bug]"
+        task_type: bug_report
+        priority: low
+      - description: "Bug #5 — [describe the bug]"
+        task_type: bug_report
+        priority: low

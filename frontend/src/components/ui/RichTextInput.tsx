@@ -4,6 +4,9 @@ import { Paperclip } from "lucide-react"
 export interface RichTextInputHandle {
   getContent: () => { text: string; files: File[] }
   clear: () => void
+  /** Replace the editor's text contents (no attachments). Used for deep-link
+   *  pre-fill from the Project detail page's "Next Steps" checklist. */
+  setContent: (text: string) => void
 }
 
 interface RichTextInputProps {
@@ -169,6 +172,15 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
         }
         filesRef.current.clear()
         onFilesChange?.(0)
+      },
+      setContent: (text: string) => {
+        const editor = editorRef.current
+        if (!editor) return
+        // Plain-text only — escapes any HTML in `text` by using textContent.
+        // Attachments are not touched (this is for deep-link prefill of just
+        // the description body).
+        editor.textContent = text
+        onTextChange?.(text)
       },
     }))
 

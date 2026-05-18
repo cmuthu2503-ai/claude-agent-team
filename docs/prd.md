@@ -7,11 +7,44 @@
 
 | Field | Value |
 |-------|-------|
-| Document Version | 3.5 |
+| Document Version | 3.11 |
 | Created Date | 2026-04-04 |
 | Last Updated | 2026-05-17 |
 | Status | Draft |
 | Product Owner | Chandramouli |
+
+---
+
+## Table of Contents
+
+The **Added** column records the date a section first appeared in the PRD
+(not the date the underlying functionality shipped). Dates without a
+known revision are marked "—".
+
+| # | Section | Added |
+|---|---------|-------|
+| 0 | [Recent Changes (post-v3.4)](#0-recent-changes-post-v34) | 2026-05-17 |
+| 1 | [Executive Summary](#1-executive-summary) — Vision, Problem Statement, Target Users | 2026-04-04 |
+| 2 | [Goals](#2-goals) | 2026-04-04 |
+| 3 | [Agent Team Structure](#3-agent-team-structure) — Hierarchy, roster, team definitions, workflow DAGs, config system | 2026-04-04 |
+| 4 | [Agent Responsibilities](#4-agent-responsibilities) — Per-agent detailed responsibilities (4.1 Engineering Lead → 4.8 Tester Specialist) | 2026-04-04 |
+| 5 | [UI Features & Enhancements](#5-ui-features--enhancements) — Theme system, sidebar nav, screenshots, activity feed, Story Board, cost dashboard | 2026-04-06 |
+| 6 | [GitHub Integration](#6-github-integration) — sub-sections below | 2026-04-04 |
+| 6.1 | &nbsp;&nbsp;[Repository Setup](#61-repository-setup) | 2026-04-04 |
+| 6.2 | &nbsp;&nbsp;[GitHub Actions — Automated Checks](#62-github-actions--automated-checks) | 2026-04-04 |
+| 6.3 | &nbsp;&nbsp;[Issue Tracking & PR Management](#63-issue-tracking--pr-management) | 2026-04-04 |
+| 6.4 | &nbsp;&nbsp;[Research Publishing Pipeline](#64-research-publishing-pipeline) | 2026-04-08 |
+| 6.5 | &nbsp;&nbsp;[Web Search Integration (Firecrawl)](#65-web-search-integration-firecrawl) | 2026-04-08 |
+| 6.6 | &nbsp;&nbsp;[Prompt Studio](#66-prompt-studio) | 2026-04-08 |
+| 6.7 | &nbsp;&nbsp;[Project Management](#67-project-management) | **2026-05-17** |
+| 7 | [Task Management System](#7-task-management-system) — Categories, deployment supervisor (host process), judge LLM, rollback, cross-platform reliability, stable Compose naming | 2026-04-04 |
+| 8 | [Demo Creation](#8-demo-creation) | 2026-04-04 |
+| 9 | [Edge Cases & Risk Mitigation](#9-edge-cases--risk-mitigation) | 2026-04-04 |
+| 10 | [Expected Output Formats](#10-expected-output-formats) — PRD, user story, weekly report templates | 2026-04-04 |
+| 11 | [Constraints](#11-constraints) | 2026-04-04 |
+| 12 | [Evaluation Criteria](#12-evaluation-criteria) | 2026-04-04 |
+| 13 | [Sample User Stories](#13-sample-user-stories) | 2026-04-04 |
+| 14 | [Appendix](#14-appendix) — Glossary, references, external links, revision history | 2026-04-04 |
 
 ---
 
@@ -744,6 +777,116 @@ prompt_variants: variant_id, session_id, iteration, variant_index, approach,
 
 ---
 
+### 6.7 Project Management
+
+**Problem:** The platform tracks every agent request in a single flat
+chronological list. Once you accumulate 30+ requests it's hard to
+separate "Themes work" from "Supervisor hardening" from one-off bug
+fixes. There's no project-level rollup of cost, status, or outputs.
+
+**Solution:** A first-class **Project** concept. Users explicitly
+create projects, then every new request is filed into exactly one
+project at submit time via a required dropdown. Project pages aggregate
+every request in the project (cost, status, recent documents). All
+existing places that surface requests (Command Center cards, History
+list, RequestDetail header, StoryBoard breadcrumb) gain a clickable
+project reference so the project association is visible everywhere.
+
+This is **explicit assignment, not auto-match.** A previous prototype
+auto-assigned requests via keyword similarity and was reverted — users
+couldn't see why a request landed where it did, and the only visible
+surface was a sidebar entry. This version puts the project in the
+user's face at every relevant decision point.
+
+Detailed design and rationale: [docs/prd-projects-feature.md](prd-projects-feature.md).
+
+#### Project CRUD
+
+Projects are rich metadata containers — the Create Project form collects
+the full v1 field set in a single step (no progressive disclosure).
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| PRJ-001 | Project model: `project_id`, `name` (req, ≤80 chars, unique among active), `description` (≤500 chars), `status` (active \| archived), **`color`** (preset hex from 8-swatch palette), **`icon`** (lucide icon name from preset 8-icon set), **`tags`** (JSON list, ≤10 entries, each ≤25 chars), **`lead_user_id`** (FK users, defaults to creator), **`repo_url`** (optional URL, ≤300 chars), **`default_team`** (engineering \| research \| content \| null), **`target_date`** (optional ISO date), **`template_id`** (optional, refs preset template), `created_by`, timestamps | Critical |
+| PRJ-002 | `POST /api/v1/projects` — any authenticated user can create. Accepts the full PRJ-001 field set; only `name` is required, everything else has a default (lead=caller, color=cyan, icon=folder, etc.) | Critical |
+| PRJ-003 | `GET /api/v1/projects` lists all (default active-only; `?include_archived=true` to opt in) | Critical |
+| PRJ-004 | `GET /api/v1/projects/{id}` returns project + request list + aggregate stats + recent documents + the template's starter checklist (if set) for rendering "Next Steps" guidance | Critical |
+| PRJ-005 | `PATCH /api/v1/projects/{id}` — any user can edit name/desc/color/icon/tags/lead/repo_url/default_team/target_date; **admin-only** to flip status to/from archived OR to reassign `lead_user_id` to someone else | High |
+| PRJ-006 | `DELETE /api/v1/projects/{id}` — **admin-only**, rejected with 409 if non-empty | High |
+| PRJ-007 | Active-name uniqueness enforced case-insensitively at application layer; archived projects can share a name with new active ones | Medium |
+| PRJ-008 | System seeds an immutable "Unassigned" project on first boot — catches legacy/orphaned requests | Critical |
+| PRJ-009 | **Color** picked from 8 preset swatches (cyan / pink / green / yellow / orange / purple / blue / gray) — no free hex | Medium |
+| PRJ-010 | **Icon** picked from 8 preset lucide icons (folder / rocket / layers / code / flask-conical / palette / bug / book-open) | Medium |
+| PRJ-011 | **Tags** auto-lowercased, deduped within a project, enforced ≤10 entries / ≤25 chars each | Medium |
+| PRJ-012 | **Lead user** dropdown shows developer + admin users (viewers excluded); defaults to creator; searchable for >10 users | Medium |
+| PRJ-013 | **Repo URL** validated as well-formed URL; GitHub URLs surface a "View on GitHub" button on the project page | Medium |
+| PRJ-014 | **Target date** optional, must be ≥ today on create; renders red "Overdue" pill once past, but no auto-archive | Medium |
+| PRJ-015 | **Default team** pre-selects the team selector on the New Request form when the user files into this project | Medium |
+| PRJ-016 | **Templates** loaded from `config/project_templates.yaml` at startup; v1 ships 5: `empty`, `web_feature`, `research_initiative`, `content_project`, `bug_sprint` | Medium |
+| PRJ-017 | When a template is picked at create-time, its `starter_checklist` renders as a "Next Steps" panel on the project detail page — clickable items pre-fill the New Request form; checked off once a matching request is filed | Medium |
+
+#### Request → Project Assignment
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| PA-001 | `requests` table gains `project_id` (FK to projects); defaults to Unassigned | Critical |
+| PA-002 | New Request form: Project dropdown is REQUIRED; defaults to user's most-recently-used active project (localStorage); active projects sorted alphabetically (rendered with color swatch + icon + name); "+ New project..." inline option at the bottom. When a project with `default_team` is selected, the Team selector pre-fills accordingly | Critical |
+| PA-003 | Inline "+ New project" opens the **full** Create Project modal — every PRJ-001 field (name, description, color, icon, tags, lead, repo URL, default team, target date, template). Saves, selects the new project, closes — no page reload | High |
+| PA-004 | `POST /api/v1/requests` validates `project_id` exists + is not archived; rejects with 400 otherwise | Critical |
+| PA-005 | RequestDetail page header shows "Project: \<name\>" linking to `/projects/{id}` | Critical |
+| PA-006 | StoryBoard breadcrumb: `Command Center ▸ \<project name\> ▸ REQ-XXX` | High |
+| PA-007 | History page gains a "Project" column + filter dropdown | High |
+| PA-008 | Command Center request cards show a clickable project chip beside the REQ-id | High |
+| PA-009 | `PATCH /api/v1/requests/{id}` accepts `project_id` — **admin-only** for reassignment | High |
+| PA-010 | Reassigning into an archived project requires `?allow_archived=true` (intentional override for cleanup) | Medium |
+
+#### Projects UI
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| PUI-001 | `/projects` lists projects with: color stripe + icon, name, description, tags chips, lead avatar, request count, active count, total cost USD, target date (or "no target"), last activity, status badge; default sort: last activity desc | Critical |
+| PUI-002 | Top of `/projects`: "+ New Project" button (same modal as PA-003) + status filter (Active / Archived / All) | Critical |
+| PUI-003 | `/projects/{id}`: header with color/icon, name, description, lead, tags, repo link, target date, status; 4 stat cards (total / active / completed / cost USD); "Next Steps" checklist (when template was selected — PRJ-017); full request list; "Recent Documents" panel with latest 10 docs | Critical |
+| PUI-004 | `/projects/{id}` "Submit Request" button pre-selects this project on the New Request form | High |
+| PUI-005 | Sidebar gets a Projects entry between Command Center and Prompt Studio | High |
+| PUI-006 | Status badges: Active = cyan, Archived = muted gray (renders via existing StatusBadge) | Medium |
+
+#### Backfill & Migration
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| MIG-001 | First-boot migration creates the "Unassigned" project | Critical |
+| MIG-002 | All existing requests backfilled with `project_id = <Unassigned>` | Critical |
+| MIG-003 | Admin-only CLI script `scripts/backfill_projects.py` with dry-run mode for retroactive bulk reassignment to real projects | Medium |
+| MIG-004 | Frontend defensively renders "Unassigned" for any request whose `project_id` points at a missing project (shouldn't happen given PRJ-006, but safety net) | Low |
+
+#### Permissions (RBAC)
+
+| Action | Viewer | Developer | Admin |
+|---|---|---|---|
+| List + view projects | ✓ | ✓ | ✓ |
+| Create / edit name+desc | ✗ | ✓ | ✓ |
+| Archive / unarchive | ✗ | ✗ | ✓ |
+| Hard-delete (empty only) | ✗ | ✗ | ✓ |
+| Submit request into project | ✗ | ✓ | ✓ |
+| Reassign request | ✗ | ✗ | ✓ |
+
+#### Non-Goals (explicit for v1)
+
+- No automatic assignment by keyword similarity
+- No merged/evolving PRD or user-stories per project (each request still produces its own)
+- No multi-project requests (one project per request)
+- No per-project RBAC (project-level permissions stay flat — global user roles only)
+- No sub-projects / nesting / cross-project linking
+- No project-level Slack/email notifications
+- No auto-archive on target-date or inactivity (admin must archive explicitly)
+- No bulk reassignment UI (one-at-a-time via PATCH for v1)
+- No free-form color hex picker (8 preset swatches only) or custom icons (8 preset lucide icons only)
+- No global tag taxonomy / autocomplete (tags are per-project free-form strings)
+- No edit-the-starter-checklist post-create (template selection is at-create-time only)
+
+---
+
 ## 7. Task Management System
 
 ### 7.1 Task Categories
@@ -1298,3 +1441,8 @@ All thresholds are configurable in `config/thresholds.yaml`. Default values:
 | 3.0 | 2026-04-06 | Chandramouli | Added Section 5 (UI Features & Enhancements) — light/dark theme toggle, 6 themes, screenshot attachments, live activity feed, agent output visibility, markdown rendering, cost dashboard. Renumbered sections 6-14. |
 | 3.5 | 2026-05-17 | Chandramouli | Refresh pass: added Section 0 (Recent Changes); trimmed theme catalog from 6 → 2 (Vercel + Cyberpunk Hyperdrive); added UI-008a/b/c/d for the cyberpunk effects layer, overlay component, and left sidebar; removed multi-provider toggle references (Anthropic/Bedrock) — single provider is Claude Platform on AWS; updated Prompt Studio reqs (1 variant, no provider toggle); marked FE-25 obsolete; documented supervisor host execution + Windows portability fixes. Filename renamed from `prd-template.md` → `prd.md`. |
 | 3.6 | 2026-05-17 | Chandramouli | Backfilled missing PRD entries for already-shipped supervisor work: rewrote stale Sidecar Supervisor section (renamed to "Deployment Supervisor (Host Process)") with current SS-001–010; added new sections for the Deployment Judge LLM (DJ-001–006), rewrote Rollback (RB-001–005) to drop image retagging + prod rollback, added Cross-Platform Reliability subsection (CP-001–005) covering the argv-form / UTF-8 / urllib / emoji fixes, and added Stable Compose Project Naming subsection (CN-001–004). |
+| 3.7 | 2026-05-17 | Chandramouli | Added Section 6.7 Project Management — explicit-assignment model (no auto-match), REQ groups PRJ-001–008 (CRUD), PA-001–010 (assignment), PUI-001–006 (UI), MIG-001–004 (backfill), plus RBAC matrix and explicit Non-Goals. Detailed design lives in docs/prd-projects-feature.md. |
+| 3.8 | 2026-05-17 | Chandramouli | Added Table of Contents at the top of the document for navigation. Two-level depth: top-level sections 0–14 plus subsections 6.1–6.7 (the GitHub Integration / Project Management area) which has the highest section density. |
+| 3.9 | 2026-05-17 | Chandramouli | TOC gained an "Added" column recording when each section first appeared in the PRD. Section 6.7 Project Management marked **2026-05-17** (today). Earlier sections backfilled from the v1.0 / v2.0 / v3.0 revision history dates; the GitHub Integration subsections 6.4–6.6 marked 2026-04-08 (the approximate timeframe based on related task-list entries). |
+| 3.10 | 2026-05-17 | Chandramouli | Section 6.7 Project Management — expanded v1 scope. Every previously-out-of-scope create-form field moved INTO v1: color (PRJ-009), icon (PRJ-010), tags (PRJ-011), lead user (PRJ-012), repo URL (PRJ-013), target date (PRJ-014), default team (PRJ-015), templates with starter checklist (PRJ-016, PRJ-017). PA-002/003 updated to describe expanded form behavior. PUI-001/003 updated to display new fields. Non-Goals list pruned to true v2 items. Detail in docs/prd-projects-feature.md v1.1. |
+| 3.11 | 2026-05-17 | Chandramouli | Project Management feature **shipped** (43/50 tasks done, 4 deferred for v2). Backend: projects table + 5 CRUD endpoints + `/projects/templates`, Unassigned seed + 13-request backfill, project_id on Request, archived-project submission rejection, RBAC (any user create/edit; admin-only archive/delete/lead-reassign). Frontend: Projects list page (/projects), Project detail with rollup stats + Next Steps from template checklist, CreateProjectModal with all 10 v1 fields, required Project dropdown on New Request form, Project chips surfaced on Command Center, History (+filter), RequestDetail, StoryBoard breadcrumb, CostDashboard (+filter). Module-level project cache with WebSocket invalidation on `project.*` events. Bugs found and fixed during smoke test: GET /requests/{id} response was missing project_id; App.tsx didn't register /projects routes despite importing the pages; CostDashboard "Today"/"This Month" cards weren't scoped by project_id filter. Deferred to v2: OpenAPI typegen (PM-19), TanStack Query hooks (PM-20), CreateProjectModal Vitest suite (PM-40), backend project store tests (PM-18). |

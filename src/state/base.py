@@ -10,6 +10,7 @@ from src.models.base import (
     Document,
     Metric,
     Notification,
+    Project,
     PromptSession,
     PromptVariant,
     Request,
@@ -207,6 +208,40 @@ class StateStore(ABC):
 
     @abstractmethod
     async def update_document(self, doc: Document) -> None: ...
+
+    # ── Projects ─────────────────────────────────
+
+    @abstractmethod
+    async def create_project(self, project: Project) -> str: ...
+
+    @abstractmethod
+    async def get_project(self, project_id: str) -> Project | None: ...
+
+    @abstractmethod
+    async def list_projects(self, include_archived: bool = False) -> list[Project]: ...
+
+    @abstractmethod
+    async def update_project(self, project: Project) -> None: ...
+
+    @abstractmethod
+    async def delete_project(self, project_id: str) -> None:
+        """Hard-delete. Caller is responsible for ensuring no requests reference
+        this project (PRJ-006). Backend route returns 409 otherwise."""
+        ...
+
+    @abstractmethod
+    async def find_project_by_name(self, name: str, active_only: bool = True) -> Project | None:
+        """Case-insensitive lookup used for uniqueness enforcement (PRJ-007)."""
+        ...
+
+    @abstractmethod
+    async def get_requests_for_project(self, project_id: str) -> list[Request]: ...
+
+    @abstractmethod
+    async def count_requests_for_project(self, project_id: str) -> dict[str, int]:
+        """Returns {'total': N, 'active': N, 'completed': N, 'failed': N} for
+        the project detail page stat cards."""
+        ...
 
     # ── Token Usage ──────────────────────────────
 
