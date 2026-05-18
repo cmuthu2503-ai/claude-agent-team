@@ -87,8 +87,12 @@ export function EditProjectModal({ open, initial, onClose, onSaved }: Props) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState("")
 
-  // Re-sync state when the modal is re-opened on a different project, or
-  // after a refresh of the parent page changes initial fields.
+  // Re-seed the form ONLY when the modal opens (or when the user opens it
+  // for a different project_id). The parent page polls every 5s and hands
+  // us a brand-new `initial` object on each poll — depending on that
+  // reference here would wipe whatever the user has typed mid-edit, and
+  // then submit() would PATCH the wiped values (= "URL not saved" bug).
+  // Keying on `open` + `initial.project_id` ignores the polling churn.
   useEffect(() => {
     if (!open) return
     setName(initial.name)
@@ -102,7 +106,8 @@ export function EditProjectModal({ open, initial, onClose, onSaved }: Props) {
     setDefaultTeam(initial.default_team || "")
     setTargetDate(initial.target_date ? initial.target_date.slice(0, 10) : "")
     setError("")
-  }, [open, initial])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initial.project_id])
 
   // Lazy-load the user list so we can populate the lead-user picker.
   useEffect(() => {
