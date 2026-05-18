@@ -65,6 +65,10 @@ async def lifespan(app: FastAPI):
     # devops_specialist) can read deployment_states without opening a
     # parallel SQLite connection.
     agent_executor = AgentSystemExecutor(config, state=state)
+    # Stash on app.state so routes (e.g. /projects/:id/prd/generate via
+    # PDB-05's single_agent_call) can reach the executor directly without
+    # going through the workflow runner.
+    app.state.agent_executor = agent_executor
     if agent_executor.client:
         orchestrator.set_agent_executor(agent_executor)
         logger.info("agent_system_connected", mode="real_llm")

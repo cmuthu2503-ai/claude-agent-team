@@ -10,6 +10,9 @@ import aiosqlite
 from src.models.base import (
     AcceptanceCriterion,
     AgentTrace,
+    ArtifactKind,
+    ArtifactStatus,
+    BuildMessage,
     DeploymentState,
     Document,
     Artifact,
@@ -17,7 +20,9 @@ from src.models.base import (
     Metric,
     Notification,
     Project,
+    ProjectArtifact,
     ProjectStatus,
+    ProjectTask,
     PromptSession,
     PromptVariant,
     Request,
@@ -25,6 +30,7 @@ from src.models.base import (
     Story,
     Subtask,
     SubtaskStatus,
+    TaskStatus,
     TestCase,
     TokenUsage,
     User,
@@ -270,6 +276,68 @@ CREATE TABLE IF NOT EXISTS projects (
     updated_at      TIMESTAMP
 );
 
+-- Project-driven Build (PDB-01) — versioned brief + PRD per project.
+-- Tasks list lives in its own structured table (added in Phase B).
+CREATE TABLE IF NOT EXISTS project_artifacts (
+    artifact_id     TEXT PRIMARY KEY,                   -- 'art-<uuid>'
+    project_id      TEXT NOT NULL,                       -- FK projects(project_id)
+    kind            TEXT NOT NULL,                       -- 'brief' | 'prd'
+    version         INTEGER NOT NULL,                    -- monotonic within (project_id, kind)
+    status          TEXT NOT NULL DEFAULT 'draft',       -- 'draft' | 'finalized' | 'archived'
+    content         TEXT NOT NULL DEFAULT '',
+    created_by      TEXT,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP,                           -- last content mutation (PDB-43)
+    finalized_at    TIMESTAMP,
+    finalized_by    TEXT,
+    UNIQUE (project_id, kind, version)
+);
+CREATE INDEX IF NOT EXISTS idx_artifacts_project_kind_status
+    ON project_artifacts(project_id, kind, status);
+
+-- Project-driven Build (PDB-13) — structured task list per project.
+-- A project has one active list_version at a time; older versions flip to
+-- list_status='archived' when a new list is finalized. task_status tracks
+-- the per-task lifecycle once dispatched: backlog → dispatched →
+-- in_progress → review → testing → deployed | failed | cancelled.
+CREATE TABLE IF NOT EXISTS project_tasks (
+    task_id          TEXT PRIMARY KEY,                  -- 'T-<uuid>'
+    project_id       TEXT NOT NULL,                      -- FK projects(project_id)
+    list_version     INTEGER NOT NULL,                   -- which generation of the task list this belongs to
+    list_status      TEXT NOT NULL DEFAULT 'draft',      -- 'draft' | 'finalized' | 'archived'
+    ordinal          INTEGER NOT NULL,                   -- display order within the list
+    title            TEXT NOT NULL,
+    description      TEXT NOT NULL DEFAULT '',
+    task_type        TEXT NOT NULL DEFAULT 'feature_request',
+    priority         TEXT NOT NULL DEFAULT 'medium',     -- 'low' | 'medium' | 'high'
+    estimated_agent  TEXT,                                -- e.g. 'backend_specialist', 'frontend_specialist'
+    task_status      TEXT NOT NULL DEFAULT 'backlog',    -- backlog | dispatched | in_progress | review | testing | deployed | failed | cancelled
+    request_id       TEXT,                                -- set when dispatched (Phase C)
+    amended          INTEGER NOT NULL DEFAULT 0,         -- 1 if added/modified by chat after finalize (Phase D)
+    created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_project_status
+    ON project_tasks(project_id, list_status, task_status);
+CREATE INDEX IF NOT EXISTS idx_tasks_request
+    ON project_tasks(request_id);
+
+-- Project-driven Build (PDB-33) — chat with project_orchestrator agent.
+-- One row per turn (user message, assistant message, or tool result).
+-- tool_calls JSON column carries structured summaries the UI renders as chips
+-- ("Dispatched T-001 → REQ-A1B2C3", "Modified T-007 priority …").
+CREATE TABLE IF NOT EXISTS build_session_messages (
+    message_id    TEXT PRIMARY KEY,
+    project_id    TEXT NOT NULL,
+    role          TEXT NOT NULL,                     -- 'user' | 'assistant' | 'tool'
+    content       TEXT NOT NULL DEFAULT '',
+    tool_calls    TEXT,                               -- JSON array of {tool, input, result_summary} or NULL
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_msgs_project_time
+    ON build_session_messages(project_id, created_at);
+
 -- Prompt Studio
 CREATE TABLE IF NOT EXISTS prompt_sessions (
     session_id TEXT PRIMARY KEY,
@@ -359,6 +427,21 @@ class SQLiteStateStore(StateStore):
             # Project management (PM-02). project_id is nullable; app layer
             # defaults missing values to 'proj-unassigned' (seeded by PM-12).
             "ALTER TABLE requests ADD COLUMN project_id TEXT",
+            # Project-driven Build (PDB-08). Cost attribution for single-agent
+            # calls that produce a brief / PRD / tasks list — no Request gets
+            # created in those paths so request_id is empty; project_artifact_id
+            # carries the rollup link. Cost dashboard UNIONs across both keys.
+            "ALTER TABLE token_usage ADD COLUMN project_artifact_id TEXT",
+            # Project-driven Build (PDB-23). NULL = one-off Submit Request
+            # (today's flow); set to T-XXXX when the dispatcher created this
+            # Request from a project's finalized tasks list. The per-project
+            # Story Board reads this back-link to display task ↔ request.
+            "ALTER TABLE requests ADD COLUMN source_task_id TEXT",
+            # Project-driven Build (PDB-43). Track when the artifact's
+            # content was last mutated so the UI can show a banner when a
+            # brief is edited AFTER the PRD has been finalized (i.e.
+            # "your finalized PRD may be stale — regenerate?").
+            "ALTER TABLE project_artifacts ADD COLUMN updated_at TIMESTAMP",
         ]
         for stmt in migrations:
             try:
@@ -411,8 +494,9 @@ class SQLiteStateStore(StateStore):
             """INSERT INTO requests
                (request_id, description, task_type, priority, status, tags,
                 created_by, created_at, estimated_cost_usd, provider,
-                published_files, commit_sha, commit_url, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                published_files, commit_sha, commit_url, project_id,
+                source_task_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 request.request_id,
                 request.description,
@@ -428,6 +512,7 @@ class SQLiteStateStore(StateStore):
                 request.commit_sha,
                 request.commit_url,
                 request.project_id,
+                request.source_task_id,
             ),
         )
         await db.commit()
@@ -551,6 +636,7 @@ class SQLiteStateStore(StateStore):
             commit_url=_safe_get("commit_url"),
             code_commit_error=_safe_get("code_commit_error"),
             project_id=_safe_get("project_id"),
+            source_task_id=_safe_get("source_task_id"),
         )
 
     # ── Subtasks ─────────────────────────────────
@@ -1161,12 +1247,14 @@ class SQLiteStateStore(StateStore):
         await db.execute(
             """INSERT INTO token_usage
                (usage_id, request_id, subtask_id, agent_id, model,
-                input_tokens, output_tokens, cost_usd, recorded_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                input_tokens, output_tokens, cost_usd, recorded_at,
+                project_artifact_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 usage.usage_id, usage.request_id, usage.subtask_id,
                 usage.agent_id, usage.model, usage.input_tokens,
                 usage.output_tokens, usage.cost_usd, usage.recorded_at.isoformat(),
+                usage.project_artifact_id,
             ),
         )
         await db.commit()
@@ -1493,6 +1581,438 @@ class SQLiteStateStore(StateStore):
             updated_at=(
                 datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
             ),
+        )
+
+    # ── Project Artifacts (PDB-04) ───────────────
+
+    async def create_artifact(self, artifact: ProjectArtifact) -> str:
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO project_artifacts
+               (artifact_id, project_id, kind, version, status, content,
+                created_by, created_at, finalized_at, finalized_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                artifact.artifact_id,
+                artifact.project_id,
+                str(artifact.kind),
+                artifact.version,
+                str(artifact.status),
+                artifact.content,
+                artifact.created_by,
+                artifact.created_at.isoformat(),
+                artifact.finalized_at.isoformat() if artifact.finalized_at else None,
+                artifact.finalized_by,
+            ),
+        )
+        await db.commit()
+        return artifact.artifact_id
+
+    async def get_artifact(
+        self,
+        project_id: str,
+        kind: ArtifactKind,
+        version: int | None = None,
+    ) -> ProjectArtifact | None:
+        db = await self._get_db()
+        if version is None:
+            # Latest by version. Ties impossible per UNIQUE constraint.
+            sql = (
+                "SELECT * FROM project_artifacts "
+                "WHERE project_id = ? AND kind = ? "
+                "ORDER BY version DESC LIMIT 1"
+            )
+            params: tuple = (project_id, str(kind))
+        else:
+            sql = (
+                "SELECT * FROM project_artifacts "
+                "WHERE project_id = ? AND kind = ? AND version = ?"
+            )
+            params = (project_id, str(kind), version)
+        async with db.execute(sql, params) as cursor:
+            row = await cursor.fetchone()
+        return self._row_to_artifact(row) if row else None
+
+    async def list_artifacts(
+        self, project_id: str, kind: ArtifactKind
+    ) -> list[ProjectArtifact]:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM project_artifacts "
+            "WHERE project_id = ? AND kind = ? "
+            "ORDER BY version DESC",
+            (project_id, str(kind)),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_artifact(r) for r in rows]
+
+    async def update_artifact_content(self, artifact_id: str, content: str) -> None:
+        db = await self._get_db()
+        await db.execute(
+            "UPDATE project_artifacts SET content = ?, updated_at = ? WHERE artifact_id = ?",
+            (content, datetime.utcnow().isoformat(), artifact_id),
+        )
+        await db.commit()
+
+    async def finalize_artifact(
+        self, artifact_id: str, finalized_by: str | None = None
+    ) -> ProjectArtifact:
+        """Atomic flip: any other finalized row for the same (project_id, kind)
+        gets archived, then this row is marked finalized with timestamps."""
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT project_id, kind FROM project_artifacts WHERE artifact_id = ?",
+            (artifact_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            raise ValueError(f"Artifact {artifact_id!r} not found.")
+        project_id, kind = row["project_id"], row["kind"]
+
+        now_iso = datetime.utcnow().isoformat()
+        await db.execute("BEGIN")
+        try:
+            await db.execute(
+                "UPDATE project_artifacts SET status = ? "
+                "WHERE project_id = ? AND kind = ? AND status = ? AND artifact_id != ?",
+                (
+                    str(ArtifactStatus.ARCHIVED),
+                    project_id,
+                    kind,
+                    str(ArtifactStatus.FINALIZED),
+                    artifact_id,
+                ),
+            )
+            await db.execute(
+                "UPDATE project_artifacts SET status = ?, finalized_at = ?, finalized_by = ? "
+                "WHERE artifact_id = ?",
+                (str(ArtifactStatus.FINALIZED), now_iso, finalized_by, artifact_id),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+
+        result = await self.get_artifact_by_id(artifact_id)
+        if result is None:
+            # Shouldn't happen — we just updated it.
+            raise RuntimeError(f"Artifact {artifact_id!r} vanished after finalize.")
+        return result
+
+    async def get_artifact_by_id(self, artifact_id: str) -> ProjectArtifact | None:
+        """Lookup by primary key. Used by routes that already know the
+        artifact_id and don't need the (project_id, kind) shape."""
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM project_artifacts WHERE artifact_id = ?",
+            (artifact_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return self._row_to_artifact(row) if row else None
+
+    def _row_to_artifact(self, row: aiosqlite.Row) -> ProjectArtifact:
+        # `updated_at` may be missing on rows from before the PDB-43 migration —
+        # _safe_get pattern would be heavy here, just try/except.
+        try:
+            updated_at_raw = row["updated_at"]
+        except (IndexError, KeyError):
+            updated_at_raw = None
+        return ProjectArtifact(
+            artifact_id=row["artifact_id"],
+            project_id=row["project_id"],
+            kind=ArtifactKind(row["kind"]),
+            version=int(row["version"]),
+            status=ArtifactStatus(row["status"]),
+            content=row["content"] or "",
+            created_by=row["created_by"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=(
+                datetime.fromisoformat(updated_at_raw) if updated_at_raw else None
+            ),
+            finalized_at=(
+                datetime.fromisoformat(row["finalized_at"]) if row["finalized_at"] else None
+            ),
+            finalized_by=row["finalized_by"],
+        )
+
+    # ── Project Tasks (PDB-15) ───────────────────
+
+    async def create_task(self, task: ProjectTask) -> str:
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO project_tasks
+               (task_id, project_id, list_version, list_status, ordinal,
+                title, description, task_type, priority, estimated_agent,
+                task_status, request_id, amended, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                task.task_id, task.project_id, task.list_version,
+                str(task.list_status), task.ordinal, task.title,
+                task.description, task.task_type, task.priority,
+                task.estimated_agent, str(task.task_status),
+                task.request_id, 1 if task.amended else 0,
+                task.created_at.isoformat(),
+                task.updated_at.isoformat() if task.updated_at else None,
+            ),
+        )
+        await db.commit()
+        return task.task_id
+
+    async def list_tasks_for_project(
+        self,
+        project_id: str,
+        list_status: ArtifactStatus | None = None,
+        list_version: int | None = None,
+    ) -> list[ProjectTask]:
+        db = await self._get_db()
+
+        # When neither filter is supplied, default to "latest version" so
+        # the UI doesn't have to pull a mixed bag of archived + current
+        # rows. Pick the max(list_version) for this project that ISN'T
+        # archived if any non-archived versions exist; otherwise fall back
+        # to overall max.
+        if list_version is None and list_status is None:
+            async with db.execute(
+                "SELECT COALESCE(MAX(list_version), 0) AS v FROM project_tasks "
+                "WHERE project_id = ? AND list_status != ?",
+                (project_id, str(ArtifactStatus.ARCHIVED)),
+            ) as cursor:
+                row = await cursor.fetchone()
+                v = int(row["v"]) if row and row["v"] else 0
+            if v == 0:
+                # No non-archived rows — return empty rather than serving
+                # archived data the UI doesn't ask for.
+                return []
+            list_version = v
+
+        where = ["project_id = ?"]
+        params: list = [project_id]
+        if list_version is not None:
+            where.append("list_version = ?")
+            params.append(list_version)
+        if list_status is not None:
+            where.append("list_status = ?")
+            params.append(str(list_status))
+
+        sql = (
+            "SELECT * FROM project_tasks WHERE "
+            + " AND ".join(where)
+            + " ORDER BY ordinal ASC"
+        )
+        async with db.execute(sql, tuple(params)) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_task(r) for r in rows]
+
+    async def get_task(self, task_id: str) -> ProjectTask | None:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM project_tasks WHERE task_id = ?", (task_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return self._row_to_task(row) if row else None
+
+    async def update_task(self, task_id: str, fields: dict) -> ProjectTask:
+        """Whitelisted PATCH — silently ignores unknown keys to keep the
+        route layer free of awkward field-by-field plumbing."""
+        allowed = {
+            "title", "description", "task_type", "priority",
+            "estimated_agent", "ordinal", "amended",
+        }
+        sets = []
+        params: list = []
+        for k, v in fields.items():
+            if k not in allowed:
+                continue
+            if k == "amended":
+                params.append(1 if v else 0)
+            else:
+                params.append(v)
+            sets.append(f"{k} = ?")
+        if not sets:
+            existing = await self.get_task(task_id)
+            if existing is None:
+                raise ValueError(f"Task {task_id!r} not found.")
+            return existing
+        sets.append("updated_at = ?")
+        params.append(datetime.utcnow().isoformat())
+        params.append(task_id)
+
+        db = await self._get_db()
+        await db.execute(
+            f"UPDATE project_tasks SET {', '.join(sets)} WHERE task_id = ?",
+            tuple(params),
+        )
+        await db.commit()
+        updated = await self.get_task(task_id)
+        if updated is None:
+            raise ValueError(f"Task {task_id!r} not found after update.")
+        return updated
+
+    async def set_task_status(
+        self,
+        task_id: str,
+        task_status: TaskStatus,
+        request_id: str | None = None,
+    ) -> None:
+        db = await self._get_db()
+        now_iso = datetime.utcnow().isoformat()
+        if request_id is not None:
+            await db.execute(
+                "UPDATE project_tasks "
+                "SET task_status = ?, request_id = ?, updated_at = ? "
+                "WHERE task_id = ?",
+                (str(task_status), request_id, now_iso, task_id),
+            )
+        else:
+            await db.execute(
+                "UPDATE project_tasks "
+                "SET task_status = ?, updated_at = ? "
+                "WHERE task_id = ?",
+                (str(task_status), now_iso, task_id),
+            )
+        await db.commit()
+
+    async def finalize_task_list(
+        self, project_id: str, list_version: int
+    ) -> None:
+        """Atomic flip per PDB-15: archive any other finalized list_version
+        for this project, then mark every row of `list_version` as finalized."""
+        db = await self._get_db()
+        await db.execute("BEGIN")
+        try:
+            await db.execute(
+                "UPDATE project_tasks SET list_status = ? "
+                "WHERE project_id = ? AND list_status = ? AND list_version != ?",
+                (str(ArtifactStatus.ARCHIVED), project_id,
+                 str(ArtifactStatus.FINALIZED), list_version),
+            )
+            await db.execute(
+                "UPDATE project_tasks SET list_status = ? "
+                "WHERE project_id = ? AND list_version = ?",
+                (str(ArtifactStatus.FINALIZED), project_id, list_version),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+
+    async def archive_task_list(
+        self, project_id: str, list_version: int
+    ) -> None:
+        db = await self._get_db()
+        await db.execute(
+            "UPDATE project_tasks SET list_status = ? "
+            "WHERE project_id = ? AND list_version = ?",
+            (str(ArtifactStatus.ARCHIVED), project_id, list_version),
+        )
+        await db.commit()
+
+    async def delete_task_list_draft(
+        self, project_id: str, list_version: int
+    ) -> None:
+        db = await self._get_db()
+        await db.execute(
+            "DELETE FROM project_tasks "
+            "WHERE project_id = ? AND list_version = ? AND list_status = ?",
+            (project_id, list_version, str(ArtifactStatus.DRAFT)),
+        )
+        await db.commit()
+
+    def _row_to_task(self, row: aiosqlite.Row) -> ProjectTask:
+        return ProjectTask(
+            task_id=row["task_id"],
+            project_id=row["project_id"],
+            list_version=int(row["list_version"]),
+            list_status=ArtifactStatus(row["list_status"]),
+            ordinal=int(row["ordinal"]),
+            title=row["title"],
+            description=row["description"] or "",
+            task_type=row["task_type"] or "feature_request",
+            priority=row["priority"] or "medium",
+            estimated_agent=row["estimated_agent"],
+            task_status=TaskStatus(row["task_status"]),
+            request_id=row["request_id"],
+            amended=bool(row["amended"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=(
+                datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
+            ),
+        )
+
+    # ── Build Session Messages (PDB-33) ──────────
+
+    async def create_message(self, message: BuildMessage) -> str:
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO build_session_messages
+               (message_id, project_id, role, content, tool_calls,
+                created_at, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                message.message_id,
+                message.project_id,
+                message.role,
+                message.content,
+                json.dumps(message.tool_calls) if message.tool_calls else None,
+                message.created_at.isoformat(),
+                message.created_by,
+            ),
+        )
+        await db.commit()
+        return message.message_id
+
+    async def list_messages_for_project(
+        self,
+        project_id: str,
+        limit: int = 200,
+        before: str | None = None,
+    ) -> list[BuildMessage]:
+        db = await self._get_db()
+        # Pull the most recent `limit` rows; reverse to chronological so
+        # the UI can append in order.
+        if before:
+            # Cursor-based pagination — fetch the timestamp of the cursor
+            # row, then ask for older messages.
+            async with db.execute(
+                "SELECT created_at FROM build_session_messages WHERE message_id = ?",
+                (before,),
+            ) as cursor:
+                cursor_row = await cursor.fetchone()
+            if not cursor_row:
+                return []
+            cursor_ts = cursor_row["created_at"]
+            async with db.execute(
+                "SELECT * FROM build_session_messages "
+                "WHERE project_id = ? AND created_at < ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (project_id, cursor_ts, limit),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        else:
+            async with db.execute(
+                "SELECT * FROM build_session_messages "
+                "WHERE project_id = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (project_id, limit),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        # Reverse for chronological order.
+        return [self._row_to_message(r) for r in reversed(rows)]
+
+    def _row_to_message(self, row: aiosqlite.Row) -> BuildMessage:
+        tool_calls_raw = row["tool_calls"]
+        try:
+            tool_calls = json.loads(tool_calls_raw) if tool_calls_raw else None
+        except Exception:
+            tool_calls = None
+        return BuildMessage(
+            message_id=row["message_id"],
+            project_id=row["project_id"],
+            role=row["role"],
+            content=row["content"] or "",
+            tool_calls=tool_calls,
+            created_at=datetime.fromisoformat(row["created_at"]),
+            created_by=row["created_by"],
         )
 
     # ── Deployment State Machine ─────────────────

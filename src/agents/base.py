@@ -129,6 +129,33 @@ class BaseAgent(ABC):
             total_input_tokens, total_output_tokens,
         )
 
+    async def single_call(self, prompt: str) -> dict[str, Any]:
+        """One-shot LLM call: no tool-use loop, no `inputs` formatting.
+
+        Used by Project-driven Build (PDB-05) for generating per-project
+        artifacts like a PRD or tasks list. The agent's `system_prompt` is
+        applied; `prompt` becomes the single user message; the response is
+        returned as `{text, input_tokens, output_tokens, model}` so the
+        caller can persist content + cost.
+
+        Returns a stub result in mock mode (no LLM client configured) so
+        dev environments still exercise the wire-up.
+        """
+        if not self._llm_client:
+            return {
+                "text": f"(mock {self.agent_id} output for prompt: {prompt[:80]}...)",
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "model": self.model,
+            }
+        response = await self._call_anthropic(messages=[{"role": "user", "content": prompt}], tool_schemas=[])
+        return {
+            "text": response.get("text", ""),
+            "input_tokens": response.get("input_tokens", 0),
+            "output_tokens": response.get("output_tokens", 0),
+            "model": self.model,
+        }
+
     def _build_result(
         self, text: str, llm_calls: int, tool_calls: int,
         input_tokens: int, output_tokens: int

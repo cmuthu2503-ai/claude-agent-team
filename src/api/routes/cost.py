@@ -20,14 +20,20 @@ async def cost_dashboard(
     # Get all token usage records for breakdowns
     db = await state._get_db()
 
-    # PM-17 — when scoped to a project, restrict every aggregation to that
-    # project's requests via a subquery. The non-scoped path stays exactly
-    # as before (no perf hit when project_id is omitted).
+    # PM-17 / PDB-08 — when scoped to a project, restrict every aggregation
+    # to either (a) that project's requests OR (b) that project's artifacts.
+    # The artifact branch picks up single-agent calls from Project-driven Build
+    # (brief / PRD / tasks generation) that don't have a request_id but DO
+    # have a project_artifact_id pointing back to one of this project's rows.
+    # The non-scoped path stays exactly as before (no perf hit when omitted).
     where_proj = ""
     params_proj: tuple = ()
     if project_id:
-        where_proj = "WHERE request_id IN (SELECT request_id FROM requests WHERE project_id = ?)"
-        params_proj = (project_id,)
+        where_proj = (
+            "WHERE request_id IN (SELECT request_id FROM requests WHERE project_id = ?) "
+            "OR project_artifact_id IN (SELECT artifact_id FROM project_artifacts WHERE project_id = ?)"
+        )
+        params_proj = (project_id, project_id)
 
     # PM-17 fix: Daily/monthly totals also need to respect the project filter,
     # otherwise the "Today"/"This Month" cards stay global while the breakdown
@@ -37,17 +43,22 @@ async def cost_dashboard(
     if project_id:
         today_iso = datetime.utcnow().date().isoformat()
         first_of_month_iso = datetime.utcnow().replace(day=1).date().isoformat()
-        proj_filter = "request_id IN (SELECT request_id FROM requests WHERE project_id = ?)"
+        # Same OR-shape as the where_proj clause above so the daily/monthly
+        # cards stay consistent with the breakdown tables.
+        proj_filter = (
+            "(request_id IN (SELECT request_id FROM requests WHERE project_id = ?) "
+            "OR project_artifact_id IN (SELECT artifact_id FROM project_artifacts WHERE project_id = ?))"
+        )
         async with db.execute(
             f"SELECT COALESCE(SUM(cost_usd), 0) AS total FROM token_usage "
             f"WHERE {proj_filter} AND recorded_at >= ?",
-            (project_id, today_iso),
+            (project_id, project_id, today_iso),
         ) as cur:
             daily = float((await cur.fetchone())["total"])
         async with db.execute(
             f"SELECT COALESCE(SUM(cost_usd), 0) AS total FROM token_usage "
             f"WHERE {proj_filter} AND recorded_at >= ?",
-            (project_id, first_of_month_iso),
+            (project_id, project_id, first_of_month_iso),
         ) as cur:
             monthly = float((await cur.fetchone())["total"])
     else:

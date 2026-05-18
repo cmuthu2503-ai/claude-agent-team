@@ -174,3 +174,56 @@ class AgentSystemExecutor:
             inference_geo=self.inference_geo or "global",
         )
         return await agent.process_task(request_id, inputs)
+
+    async def single_agent_call(
+        self,
+        agent_id: str,
+        prompt: str,
+        project_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        """One-shot agent call for Project-driven Build (PDB-05).
+
+        Unlike `execute()`, this:
+        - does NOT create a Request, Subtask, or emit `request.*` events;
+        - does NOT run the tool-use loop (no file_read, git, etc.);
+        - records token usage attributed to `project_artifact_id` rather
+          than a request_id, so the cost dashboard can scope per-project
+          spend across both Requests and artifact-generation calls.
+
+        Returns `{text, input_tokens, output_tokens, model}`. Caller
+        persists `text` into the artifact's `content` column.
+        """
+        agent = self.registry.get(agent_id)
+        if not agent:
+            logger.error("single_agent_not_found", agent_id=agent_id)
+            return {"text": "", "input_tokens": 0, "output_tokens": 0, "model": None, "error": "agent_not_found"}
+
+        logger.info(
+            "single_agent_call",
+            agent_id=agent_id, artifact_id=project_artifact_id,
+            inference_geo=self.inference_geo or "global",
+        )
+        result = await agent.single_call(prompt)
+
+        # Persist token usage so the cost dashboard's project filter picks
+        # this call up. In mock mode (no client → both counts 0) we still
+        # record the row so the wiring is observable.
+        if self.state is not None:
+            import uuid as _uuid
+            from src.models.base import TokenUsage as _TokenUsage
+            try:
+                await self.state.record_token_usage(_TokenUsage(
+                    usage_id=f"usage-{_uuid.uuid4().hex[:12]}",
+                    request_id="",
+                    subtask_id="",
+                    agent_id=agent_id,
+                    model=str(result.get("model") or agent.model or ""),
+                    input_tokens=int(result.get("input_tokens") or 0),
+                    output_tokens=int(result.get("output_tokens") or 0),
+                    cost_usd=0.0,  # pricing lookup is out of scope here; supervisor cost reports already cover this
+                    project_artifact_id=project_artifact_id,
+                ))
+            except Exception as e:
+                logger.warning("token_usage_record_failed", error=str(e), agent=agent_id)
+
+        return result

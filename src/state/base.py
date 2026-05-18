@@ -6,16 +6,22 @@ from src.models.base import (
     AcceptanceCriterion,
     AgentTrace,
     Artifact,
+    ArtifactKind,
+    ArtifactStatus,
+    BuildMessage,
     Deployment,
     Document,
     Metric,
     Notification,
     Project,
+    ProjectArtifact,
+    ProjectTask,
     PromptSession,
     PromptVariant,
     Request,
     Story,
     Subtask,
+    TaskStatus,
     TestCase,
     TokenUsage,
     User,
@@ -241,6 +247,144 @@ class StateStore(ABC):
     async def count_requests_for_project(self, project_id: str) -> dict[str, int]:
         """Returns {'total': N, 'active': N, 'completed': N, 'failed': N} for
         the project detail page stat cards."""
+        ...
+
+    # ── Project Artifacts (PDB-03) ───────────────
+    # Versioned brief + PRD per project. Tasks live in their own structured
+    # table (Phase B). At most one row per (project_id, kind) has
+    # status='finalized' at any time; enforced by the application during
+    # finalize_artifact() (transaction: flip current finalized → archived,
+    # then set new row to finalized).
+
+    @abstractmethod
+    async def create_artifact(self, artifact: ProjectArtifact) -> str: ...
+
+    @abstractmethod
+    async def get_artifact(
+        self,
+        project_id: str,
+        kind: ArtifactKind,
+        version: int | None = None,
+    ) -> ProjectArtifact | None:
+        """When version is None, returns the row with the highest version
+        for this (project_id, kind). Used by routes to load "the current"
+        artifact regardless of draft / finalized state."""
+        ...
+
+    @abstractmethod
+    async def list_artifacts(
+        self, project_id: str, kind: ArtifactKind
+    ) -> list[ProjectArtifact]:
+        """Full version history for one (project_id, kind), newest first.
+        Mainly for an audit-log view we haven't built yet."""
+        ...
+
+    @abstractmethod
+    async def update_artifact_content(self, artifact_id: str, content: str) -> None:
+        """Save-draft path. Only mutates content; does NOT touch status or
+        version. Caller must ensure the artifact is still in 'draft' status
+        (we won't enforce here so finalize-then-amend flows stay possible)."""
+        ...
+
+    @abstractmethod
+    async def finalize_artifact(
+        self, artifact_id: str, finalized_by: str | None = None
+    ) -> ProjectArtifact:
+        """Transaction: archive any other finalized row for the same
+        (project_id, kind), then mark THIS row finalized with timestamps.
+        Returns the updated artifact."""
+        ...
+
+    # ── Project Tasks (PDB-15) ───────────────────
+    # Structured rows for a project's task list. A project has at most one
+    # `list_status='finalized'` version at a time; older versions flip to
+    # 'archived' when a new list is finalized. The dispatcher in Phase C
+    # reads task_type / priority / estimated_agent to create Requests.
+
+    @abstractmethod
+    async def create_task(self, task: ProjectTask) -> str: ...
+
+    @abstractmethod
+    async def list_tasks_for_project(
+        self,
+        project_id: str,
+        list_status: ArtifactStatus | None = None,
+        list_version: int | None = None,
+    ) -> list[ProjectTask]:
+        """When list_status is None, returns tasks from the latest version
+        (regardless of draft/finalized). When list_status is supplied,
+        filters to rows with that list_status. When list_version is
+        supplied, only that version is returned."""
+        ...
+
+    @abstractmethod
+    async def get_task(self, task_id: str) -> ProjectTask | None: ...
+
+    @abstractmethod
+    async def update_task(self, task_id: str, fields: dict) -> ProjectTask:
+        """Partial update — only mutates keys present in `fields`. Returns
+        the updated row. Stamps `updated_at`."""
+        ...
+
+    @abstractmethod
+    async def set_task_status(
+        self,
+        task_id: str,
+        task_status: TaskStatus,
+        request_id: str | None = None,
+    ) -> None:
+        """Used by the Phase C dispatcher and by the request.status_changed
+        handler. Set request_id only when transitioning to 'dispatched';
+        on subsequent transitions pass None to leave the existing value
+        alone."""
+        ...
+
+    @abstractmethod
+    async def finalize_task_list(
+        self, project_id: str, list_version: int
+    ) -> None:
+        """Atomic flip: archive any other finalized list_version for this
+        project, then mark every row of `list_version` as finalized."""
+        ...
+
+    @abstractmethod
+    async def archive_task_list(
+        self, project_id: str, list_version: int
+    ) -> None:
+        """Flip every row of `list_version` to list_status='archived'.
+        Used when the user wants to regenerate after a finalize: archive
+        the current finalized version first, then a new generation can
+        proceed."""
+        ...
+
+    @abstractmethod
+    async def delete_task_list_draft(
+        self, project_id: str, list_version: int
+    ) -> None:
+        """Hard-delete every row of a draft list_version. Used when the
+        user regenerates a draft — the old draft is discarded entirely
+        (versions are only kept after they've been finalized at least once)."""
+        ...
+
+    # ── Build Session Messages (PDB-33) ──────────
+    # Chat history between the user and the project_orchestrator agent.
+    # Each row is one conversation turn; tool_calls captures structured
+    # summaries of what the agent did during an assistant turn.
+
+    @abstractmethod
+    async def create_message(self, message: BuildMessage) -> str: ...
+
+    @abstractmethod
+    async def list_messages_for_project(
+        self,
+        project_id: str,
+        limit: int = 200,
+        before: str | None = None,
+    ) -> list[BuildMessage]:
+        """Returns the most-recent `limit` messages in chronological order
+        (oldest first, so the UI can append directly). When `before` is a
+        message_id, returns messages strictly older than that one — used
+        for pagination by infinite scroll."""
         ...
 
     # ── Token Usage ──────────────────────────────

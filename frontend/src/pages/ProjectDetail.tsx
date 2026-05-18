@@ -21,6 +21,7 @@ import {
 import { api } from "../lib/api"
 import { StatusBadge } from "../components/ui/StatusBadge"
 import { EditProjectModal } from "../components/projects/EditProjectModal"
+import { BuildWorkspace } from "../components/projects/BuildWorkspace"
 
 const ICON_MAP: Record<string, React.ComponentType<{ size?: number; color?: string }>> = {
   folder: Folder, rocket: Rocket, layers: Layers, code: Code,
@@ -242,6 +243,11 @@ export function ProjectDetailPage() {
         <StatCard label="Completed" value={String(data.stats.completed)} color="var(--success)" />
         <StatCard label="Failed" value={String(data.stats.failed)} color={data.stats.failed > 0 ? "var(--danger)" : "var(--text-muted)"} />
       </div>
+
+      {/* ── Build Workspace (PDB-09 → PDB-12) — Brief → PRD ── */}
+      {data.project_id !== "proj-unassigned" && (
+        <BuildWorkspace projectId={data.project_id} />
+      )}
 
       {/* ── Next Steps (PM-34) — only when template was selected ── */}
       {data.template && data.template.starter_checklist.length > 0 && (

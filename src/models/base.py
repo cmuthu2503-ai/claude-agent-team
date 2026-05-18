@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -89,6 +89,10 @@ class Request(BaseModel):
     # Parent project. Defaults to the immutable Unassigned project at the
     # API layer when not supplied; see docs/prd-projects-feature.md.
     project_id: str | None = None
+    # Project-driven Build (PDB-23): when this Request was created by the
+    # dispatcher from a finalized project task, this back-links to that task.
+    # NULL for one-off Submit Request flow.
+    source_task_id: str | None = None
     created_by: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
     completed_at: datetime | None = None
@@ -289,6 +293,87 @@ class Project(BaseModel):
     updated_at: datetime | None = None
 
 
+# ── Project-driven Build (PDB-02) ──────────────────
+# Versioned per-project artifacts (brief, PRD) authored by the user with
+# agent assistance. Tasks list lives in its own structured table (Phase B).
+# PRD: docs/prd-project-driven-build.md.
+
+
+class ArtifactKind(StrEnum):
+    BRIEF = "brief"
+    PRD = "prd"
+
+
+class ArtifactStatus(StrEnum):
+    DRAFT = "draft"
+    FINALIZED = "finalized"
+    ARCHIVED = "archived"
+
+
+class ProjectArtifact(BaseModel):
+    artifact_id: str
+    project_id: str
+    kind: ArtifactKind
+    version: int
+    status: ArtifactStatus = ArtifactStatus.DRAFT
+    content: str = ""
+    created_by: str | None = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime | None = None  # PDB-43: last content mutation
+    finalized_at: datetime | None = None
+    finalized_by: str | None = None
+
+
+# ── Project-driven Build: task list (PDB-14) ─────────
+# Structured rows (not a markdown blob) so the build dispatcher can read
+# task_type / priority / estimated_agent directly when creating Requests.
+
+
+class TaskStatus(StrEnum):
+    BACKLOG = "backlog"
+    DISPATCHED = "dispatched"
+    IN_PROGRESS = "in_progress"
+    REVIEW = "review"
+    TESTING = "testing"
+    DEPLOYED = "deployed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ProjectTask(BaseModel):
+    task_id: str
+    project_id: str
+    list_version: int
+    list_status: ArtifactStatus = ArtifactStatus.DRAFT  # reuses draft/finalized/archived
+    ordinal: int
+    title: str
+    description: str = ""
+    task_type: str = "feature_request"
+    priority: str = "medium"
+    estimated_agent: str | None = None
+    task_status: TaskStatus = TaskStatus.BACKLOG
+    request_id: str | None = None
+    amended: bool = False
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime | None = None
+
+
+# ── Project-driven Build: chat with project_orchestrator (PDB-33) ────
+# One row per conversation turn. `tool_calls` is a JSON array of
+# {tool, input, result_summary} describing what the agent did during
+# that assistant turn — rendered inline as chips in the UI.
+
+
+class BuildMessage(BaseModel):
+    message_id: str
+    project_id: str
+    role: Literal["user", "assistant", "tool"]
+    content: str = ""
+    tool_calls: list[dict[str, Any]] | None = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_by: str | None = None
+
+
 # ── Deployment State Machine ─────────────────────
 
 
@@ -369,17 +454,25 @@ class Notification(BaseModel):
 
 
 class TokenUsage(BaseModel):
-    """Token usage record for a single LLM call."""
+    """Token usage record for a single LLM call.
+
+    Most rows attach to a Request via `request_id`. Project-driven Build
+    (PDB-08) introduces single-agent calls that produce per-project
+    artifacts (brief/PRD/tasks) without creating a Request — those rows
+    leave `request_id` empty and set `project_artifact_id` instead. The
+    cost dashboard UNIONs across both keys when scoping by project.
+    """
 
     usage_id: str
-    request_id: str
-    subtask_id: str
+    request_id: str = ""
+    subtask_id: str = ""
     agent_id: str
     model: str
     input_tokens: int
     output_tokens: int
     cost_usd: float
     recorded_at: datetime = Field(default_factory=datetime.utcnow)
+    project_artifact_id: str | None = None
 
 
 class AgentTrace(BaseModel):

@@ -1,0 +1,661 @@
+# Product Requirements Document (PRD)
+# Project-Driven Build — PRD → Tasks → Chat → Story Board
+
+---
+
+## Document Information
+
+| Field | Value |
+|-------|-------|
+| Document Version | 1.0 |
+| Created Date | 2026-05-18 |
+| Last Updated | 2026-05-18 |
+| Status | Draft |
+| Product Owner | Chandramouli |
+
+---
+
+## Table of Contents
+
+| # | Section |
+|---|---------|
+| 0 | [Context](#0-context) — what exists today, what this PRD adds |
+| 1 | [Executive Summary](#1-executive-summary) — Vision, Problem, Users |
+| 2 | [Goals & Non-Goals](#2-goals--non-goals) |
+| 3 | [User Stories](#3-user-stories) — US-001 through US-009 |
+| 4 | [Functional Requirements](#4-functional-requirements) |
+| 4.1 | &nbsp;&nbsp;[Project Brief](#41-project-brief) — PB-001 through PB-004 |
+| 4.2 | &nbsp;&nbsp;[PRD Generation](#42-prd-generation) — PRG-001 through PRG-008 |
+| 4.3 | &nbsp;&nbsp;[Task List Generation](#43-task-list-generation) — TSK-001 through TSK-009 |
+| 4.4 | &nbsp;&nbsp;[Build Dispatch](#44-build-dispatch) — BLD-001 through BLD-007 |
+| 4.5 | &nbsp;&nbsp;[Build Chat](#45-build-chat) — CHT-001 through CHT-008 |
+| 4.6 | &nbsp;&nbsp;[Story Board (Project Mode)](#46-story-board-project-mode) — BRD-001 through BRD-007 |
+| 5 | [Data Model](#5-data-model) |
+| 5.1 | &nbsp;&nbsp;[New `project_artifacts` table](#51-new-project_artifacts-table) |
+| 5.2 | &nbsp;&nbsp;[New `project_tasks` table](#52-new-project_tasks-table) |
+| 5.3 | &nbsp;&nbsp;[New `build_session_messages` table](#53-new-build_session_messages-table) |
+| 5.4 | &nbsp;&nbsp;[`requests` table — new column](#54-requests-table--new-column) |
+| 5.5 | &nbsp;&nbsp;[Pydantic models](#55-pydantic-models) |
+| 6 | [API Surface](#6-api-surface) |
+| 7 | [UI Design](#7-ui-design) |
+| 7.1 | &nbsp;&nbsp;[Project Detail — state-driven panel](#71-project-detail--state-driven-panel) |
+| 7.2 | &nbsp;&nbsp;[Build Chat panel](#72-build-chat-panel) |
+| 7.3 | &nbsp;&nbsp;[Story Board — Project mode](#73-story-board--project-mode) |
+| 8 | [Agent & Workflow Integration](#8-agent--workflow-integration) |
+| 9 | [Permissions (RBAC)](#9-permissions-rbac) |
+| 10 | [Edge Cases](#10-edge-cases) |
+| 11 | [Out of Scope (v1)](#11-out-of-scope-v1) |
+| 12 | [Open Questions](#12-open-questions) |
+| 13 | [Implementation Phases](#13-implementation-phases) |
+| 14 | [Revision History](#14-revision-history) |
+
+---
+
+## 0. Context
+
+The platform already has:
+
+- **Project Management v1** (shipped 2026-05-17): users create projects,
+  every request belongs to one, rollup stats per project. Detailed PRD:
+  `docs/prd-projects-feature.md`.
+- **One-off Request flow**: Submit Request on Command Center →
+  `feature_request` runs the full 6-stage workflow (PRD → user stories
+  → backend → frontend → review → testing → deploy) end-to-end with no
+  human pauses.
+- **Per-Request Story Board** at `/stories/:requestId`: Kanban view of
+  the stories inside one request.
+- **Agents**: `prd_author` and `user_story_author` already exist and work.
+- **Deployment Supervisor** on the host already drives staging → dev
+  rollouts on every `code_committed` row.
+
+What's missing — and what this PRD adds: a **project-driven, human-gated**
+build flow where the user iterates on a PRD, finalizes it, generates a
+tasks list, iterates on that, then chats with the system to dispatch tasks
+into the existing workflows. The Story Board is extended to render
+project-level task progression alongside its existing per-request view.
+
+**The one-off Submit Request flow stays exactly as it is today.** This is
+strictly additive.
+
+---
+
+## 1. Executive Summary
+
+### 1.1 Vision
+
+Turn a project from a passive container into an active workspace where
+the user collaborates with the system to define what to build (PRD),
+how to break it down (tasks), and when to ship each piece (chat-driven
+dispatch). The Story Board becomes the single place to watch any piece
+of work — whether it came from a one-off request or from a project's
+finalized tasks list.
+
+### 1.2 Problem Statement
+
+Today, kicking off real work means filing a one-off Request. The agent
+team will:
+
+- Auto-generate a PRD inside that request (user can't iterate before
+  it's frozen).
+- Auto-generate stories from that PRD (user can't iterate before code
+  starts).
+- Push through code → review → test → deploy with no pause.
+
+For exploratory features ("I want to build a knowledge base, but I'm not
+sure what's in scope yet"), the user wants to **see the PRD, edit it,
+finalize it**, then **see the task breakdown, edit it, finalize it**,
+then **dispatch tasks one at a time** instead of firing the whole pipeline.
+
+### 1.3 Target Users
+
+Same three roles as the rest of the platform — viewers, developers, admins
+— with the added expectation that the project lead (set when the project
+was created) is the primary user of this flow.
+
+---
+
+## 2. Goals & Non-Goals
+
+### Goals
+
+- Every project can hold one **brief**, one **PRD**, and one **tasks
+  list** as first-class versioned artifacts.
+- PRD and tasks list are **generated by existing agents** (`prd_author`,
+  `user_story_author`) — no new agent prompts for v1.
+- The user can **regenerate, edit, and finalize** each artifact. Finalize
+  is a gate, not a deletion — old versions are kept.
+- A finalized tasks list **dispatches into existing per-request workflows**.
+  Each dispatched task becomes a Request; the project tracks its outcomes.
+- The user can **chat with a `project_orchestrator` agent** to dispatch,
+  pause, or re-prioritize tasks during the build.
+- The existing **Story Board** renders project-level task progression at
+  `/stories/project/:projectId`. Per-request mode at `/stories/:requestId`
+  is unchanged.
+
+### Non-Goals
+
+- Replacing the one-off Submit Request flow. Both paths coexist.
+- Multi-PRD per project. v1 is one PRD per project (regenerate creates a
+  new version, but only the latest is "live").
+- A "fork project" or "merge two projects" feature.
+- A separate Project Board page distinct from Story Board.
+- Mid-build PRD edits being silently propagated into in-flight Requests
+  (see Edge Cases).
+- AI-generated test plans or deployment plans as standalone artifacts —
+  the existing per-request workflow already covers those inside each task.
+
+---
+
+## 3. User Stories
+
+| ID | As a... | I want to... | So that... |
+|----|---------|--------------|------------|
+| US-001 | project lead | write a short brief (1–3 paragraphs) on a project | the system has enough context to generate a PRD |
+| US-002 | project lead | click "Generate PRD" and get a draft in 60s | I don't write the boilerplate myself |
+| US-003 | project lead | edit the generated PRD in a markdown editor | I can correct misses before locking it in |
+| US-004 | project lead | regenerate the PRD with the same or amended brief | iteration is cheap |
+| US-005 | project lead | finalize the PRD when I'm happy | downstream stages have a stable input |
+| US-006 | project lead | generate a tasks list from the finalized PRD | the breakdown matches what was agreed |
+| US-007 | project lead | edit and finalize the tasks list | I can drop nice-to-haves before they're built |
+| US-008 | project lead | dispatch tasks one at a time and chat to ask "what's the status of T-3?" or "skip T-5" | I stay in control of the build cadence |
+| US-009 | any user | open the Story Board for a project and see all tasks across the columns | I have one place to check progress |
+
+---
+
+## 4. Functional Requirements
+
+### 4.1 Project Brief
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| PB-001 | Each project has zero or one current brief. Stored as `project_artifacts(kind='brief')`. | P0 |
+| PB-002 | Brief content is plain text or markdown, max 4000 chars, validated server-side. | P0 |
+| PB-003 | Brief is editable until the PRD is generated; after PRD generation, edits create a new brief version and require user confirmation ("re-derive PRD from updated brief?"). | P1 |
+| PB-004 | UI shows the brief as a textarea at the top of the Project Detail page until the PRD draft exists. | P0 |
+
+### 4.2 PRD Generation
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| PRG-001 | `POST /projects/:id/prd/generate` invokes the existing `prd_author` agent with the brief + project metadata as the user message. Returns the generated PRD as a new `project_artifacts(kind='prd', status='draft')` row. | P0 |
+| PRG-002 | Generation runs **synchronously** (max 90s) and returns the artifact directly. If it exceeds 90s, fall back to async with a polling endpoint. | P0 |
+| PRG-003 | PRD content is markdown, max 50,000 chars. | P0 |
+| PRG-004 | UI shows a markdown editor preloaded with the draft, with **Regenerate**, **Save Draft**, and **Finalize PRD** buttons. | P0 |
+| PRG-005 | Regenerate creates a new version (version+1, status='draft'). Old versions stay in the table but are not displayed by default. | P0 |
+| PRG-006 | Finalize sets status='finalized' on the current version and stamps `finalized_at` + `finalized_by`. Only one finalized PRD per project at a time. | P0 |
+| PRG-007 | Finalizing emits a `project.prd_finalized` event over the WebSocket. | P1 |
+| PRG-008 | While generation is in-flight, the Generate button shows a spinner and is disabled; the API returns 409 Conflict if a second generation is requested before the first completes. | P1 |
+
+### 4.3 Task List Generation
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| TSK-001 | `POST /projects/:id/tasks/generate` invokes the existing `user_story_author` agent with the finalized PRD as input. Returns a structured list of tasks. | P0 |
+| TSK-002 | Each task has: `task_id` (T-001, T-002…), `title`, `description`, `task_type` (one of: feature_request, bug_report, doc_request, research_request, content_request), `priority` (low/medium/high), `estimated_agent` (e.g. backend_specialist, frontend_specialist). | P0 |
+| TSK-003 | Tasks are stored in a new `project_tasks` table (not as a free-form artifact blob — they need to be queryable for dispatch). | P0 |
+| TSK-004 | The first `POST /tasks/generate` requires `prd.status='finalized'`. Returns 409 if no finalized PRD. | P0 |
+| TSK-005 | Generating a task list when one already exists in `draft` REPLACES the draft (with confirmation prompt in the UI). | P0 |
+| TSK-006 | Generating a task list when one is `finalized` is BLOCKED in the API; user must explicitly archive the current list first via `POST /tasks/archive`. | P1 |
+| TSK-007 | The UI is a table editor: each row is a task with editable cells (title, description, type, priority, estimated agent). Add Row / Remove Row controls. | P0 |
+| TSK-008 | Finalize Tasks marks the whole list as `status='finalized'`, snapshots each row to `project_tasks` with `task_status='backlog'`. | P0 |
+| TSK-009 | Finalizing emits `project.tasks_finalized`. | P1 |
+
+### 4.4 Build Dispatch
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| BLD-001 | `POST /projects/:id/build/dispatch` accepts `task_ids[]` and creates one Request per task. Returns the created `request_id`s. | P0 |
+| BLD-002 | Each dispatch sets `project_tasks.request_id` to link the task ↔ request. The task's `task_status` transitions `backlog` → `dispatched`. | P0 |
+| BLD-003 | The Request inherits the project_id, picks the workflow from `task.task_type` (same dispatcher logic as one-off Submit Request), and uses the task's `description` as the request `description`. | P0 |
+| BLD-004 | Dispatch is **idempotent per task**: re-dispatching an already-`dispatched` task is a no-op and returns the existing request_id. | P0 |
+| BLD-005 | A "Dispatch All" action is gated behind a user preference (`dispatch_mode='all' | 'one_at_a_time'`, default `one_at_a_time`) set on the project. | P1 |
+| BLD-006 | Dispatched tasks track their request's lifecycle: WebSocket `request.status_changed` updates `project_tasks.task_status` (`dispatched → in_progress → review → testing → deployed | failed`). | P0 |
+| BLD-007 | Dispatching is admin OR project_lead OR the project's creator. | P0 |
+
+### 4.5 Build Chat
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| CHT-001 | A new `project_orchestrator` agent is defined in `config/agents/project_orchestrator.yaml`. Single LLM with tool access to project state. | P0 |
+| CHT-002 | Tools granted: `list_tasks`, `dispatch_task(task_id)`, `cancel_task(task_id)`, `get_project_status`, `modify_task(task_id, fields)`, `add_task(...)`. | P0 |
+| CHT-003 | `POST /projects/:id/build/chat` accepts `{ message: string }`, appends to `build_session_messages`, runs one orchestrator turn, returns the assistant message + any tool call summaries. | P0 |
+| CHT-004 | Messages persist in `build_session_messages(message_id, project_id, role, content, tool_calls JSON, created_at)`. | P0 |
+| CHT-005 | Chat history is bounded — the orchestrator receives the last 20 messages + a fresh tool-derived "project state summary" each turn. Older history is truncated from context but stays in the DB. | P0 |
+| CHT-006 | Modifying tasks via chat is allowed only when `tasks.status='finalized'`. The chat agent's modify/add tools create a NEW task version with `amended=true`; in-flight Requests are not retroactively changed. | P1 |
+| CHT-007 | Chat panel renders inline tool-call summaries (e.g. "🚀 Dispatched T-003 → REQ-A1B2C3") as system-styled messages. | P1 |
+| CHT-008 | Chat is rate-limited at 30 messages per minute per user. | P2 |
+
+### 4.6 Story Board (Project Mode)
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| BRD-001 | New route `/stories/project/:projectId` renders the existing StoryBoard component in **project mode**. | P0 |
+| BRD-002 | In project mode, rows = `project_tasks`, columns = Backlog / In Progress / Review / Testing / Deployed / Failed. | P0 |
+| BRD-003 | Each task card shows: `task_id`, title, current request_id (if dispatched), assigned agent (from estimated_agent), deployment commit SHA (if deployed), failure reason (if failed). | P0 |
+| BRD-004 | Clicking a task card with a `request_id` navigates to `/stories/:requestId` (the existing per-request StoryBoard) — drill-down is just a route change. | P0 |
+| BRD-005 | Task cards animate column transitions on `request.status_changed` WebSocket events. | P1 |
+| BRD-006 | A breadcrumb above the board: `Command Center ▸ <project chip> ▸ Build`. The project chip links to `/projects/:id`. | P0 |
+| BRD-007 | An entry point: the Project Detail page gains a "View Board →" button (visible only when tasks are finalized) that opens `/stories/project/:projectId`. | P0 |
+
+---
+
+## 5. Data Model
+
+### 5.1 New `project_artifacts` table
+
+```sql
+CREATE TABLE project_artifacts (
+  artifact_id   TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+  kind          TEXT NOT NULL CHECK (kind IN ('brief', 'prd')),
+  version       INTEGER NOT NULL,
+  status        TEXT NOT NULL CHECK (status IN ('draft', 'finalized', 'archived')),
+  content       TEXT NOT NULL,
+  created_by    TEXT,
+  created_at    TEXT NOT NULL,
+  finalized_at  TEXT,
+  finalized_by  TEXT,
+  UNIQUE (project_id, kind, version)
+);
+CREATE INDEX idx_artifacts_project_kind_status ON project_artifacts(project_id, kind, status);
+```
+
+Notes:
+- Task list lives in its own structured table (5.2), not here.
+- `version` lets us keep history without showing it by default.
+- At most one row per `(project_id, kind)` has `status='finalized'` at any time;
+  enforced by the application, not a partial index (SQLite quirks).
+
+### 5.2 New `project_tasks` table
+
+```sql
+CREATE TABLE project_tasks (
+  task_id          TEXT PRIMARY KEY,                  -- e.g. "T-001"
+  project_id       TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+  list_version     INTEGER NOT NULL,                  -- which generation of the task list this belongs to
+  list_status      TEXT NOT NULL CHECK (list_status IN ('draft','finalized','archived')),
+  ordinal          INTEGER NOT NULL,                  -- display order within the list
+  title            TEXT NOT NULL,
+  description      TEXT NOT NULL,
+  task_type        TEXT NOT NULL,                     -- feature_request / bug_report / ...
+  priority         TEXT NOT NULL,                     -- low / medium / high
+  estimated_agent  TEXT,                              -- backend_specialist / frontend_specialist / ...
+  task_status      TEXT NOT NULL DEFAULT 'backlog',   -- backlog / dispatched / in_progress / review / testing / deployed / failed / cancelled
+  request_id       TEXT,                              -- set when dispatched
+  amended          INTEGER NOT NULL DEFAULT 0,        -- 1 if added/modified by chat after finalize
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT
+);
+CREATE INDEX idx_tasks_project_status ON project_tasks(project_id, task_status);
+CREATE INDEX idx_tasks_request ON project_tasks(request_id);
+```
+
+Notes:
+- Story Board (project mode) reads from this table directly.
+- A project has at most one `finalized` list at a time; older versions
+  flip to `archived` when a new list is finalized.
+
+### 5.3 New `build_session_messages` table
+
+```sql
+CREATE TABLE build_session_messages (
+  message_id   TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+  role         TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
+  content      TEXT NOT NULL,
+  tool_calls   TEXT,                  -- JSON array of tool invocations from this turn
+  created_at   TEXT NOT NULL,
+  created_by   TEXT
+);
+CREATE INDEX idx_msgs_project_time ON build_session_messages(project_id, created_at);
+```
+
+### 5.4 `requests` table — new column
+
+```sql
+ALTER TABLE requests ADD COLUMN source_task_id TEXT REFERENCES project_tasks(task_id);
+```
+
+So a Request knows whether it came from a one-off Submit (NULL) or from a
+dispatched task. Used by the Story Board to render the project chip's
+"task" pill on per-request views.
+
+### 5.5 Pydantic models
+
+```python
+# src/models/base.py additions
+
+class ArtifactKind(StrEnum):
+    BRIEF = "brief"
+    PRD   = "prd"
+
+class ArtifactStatus(StrEnum):
+    DRAFT     = "draft"
+    FINALIZED = "finalized"
+    ARCHIVED  = "archived"
+
+class ProjectArtifact(BaseModel):
+    artifact_id:  str
+    project_id:   str
+    kind:         ArtifactKind
+    version:      int
+    status:       ArtifactStatus
+    content:      str
+    created_by:   str | None
+    created_at:   datetime
+    finalized_at: datetime | None
+    finalized_by: str | None
+
+class TaskStatus(StrEnum):
+    BACKLOG     = "backlog"
+    DISPATCHED  = "dispatched"
+    IN_PROGRESS = "in_progress"
+    REVIEW      = "review"
+    TESTING     = "testing"
+    DEPLOYED    = "deployed"
+    FAILED      = "failed"
+    CANCELLED   = "cancelled"
+
+class ProjectTask(BaseModel):
+    task_id:         str
+    project_id:      str
+    list_version:    int
+    list_status:     ArtifactStatus
+    ordinal:         int
+    title:           str
+    description:     str
+    task_type:       str
+    priority:        str
+    estimated_agent: str | None
+    task_status:     TaskStatus
+    request_id:      str | None
+    amended:         bool
+    created_at:      datetime
+    updated_at:      datetime | None
+
+class BuildMessage(BaseModel):
+    message_id:  str
+    project_id:  str
+    role:        Literal["user", "assistant", "tool"]
+    content:     str
+    tool_calls:  list[dict[str, Any]] | None
+    created_at:  datetime
+    created_by:  str | None
+```
+
+---
+
+## 6. API Surface
+
+All routes under `/api/v1`. RBAC notes in §9.
+
+| Method | Path | Body | Returns |
+|--------|------|------|---------|
+| GET    | `/projects/:id/brief` | — | current brief artifact or 404 |
+| PUT    | `/projects/:id/brief` | `{ content }` | upsert brief artifact (always one current row) |
+| GET    | `/projects/:id/prd` | — | current PRD artifact (latest version) or 404 |
+| POST   | `/projects/:id/prd/generate` | — | new draft PRD (201) |
+| PATCH  | `/projects/:id/prd` | `{ content }` or `{ status: "finalized" }` | updated artifact |
+| GET    | `/projects/:id/tasks` | `?version=` (default latest) | list of `ProjectTask` |
+| POST   | `/projects/:id/tasks/generate` | — | new draft task list |
+| PATCH  | `/projects/:id/tasks/:task_id` | partial fields | updated task |
+| POST   | `/projects/:id/tasks/finalize` | — | flips draft → finalized |
+| POST   | `/projects/:id/tasks/archive` | — | flips current finalized → archived (frees the slot for a new generation) |
+| POST   | `/projects/:id/build/dispatch` | `{ task_ids: string[] }` | `{ dispatched: [{task_id, request_id}] }` |
+| GET    | `/projects/:id/build/messages` | `?limit=&before=` | recent build chat messages |
+| POST   | `/projects/:id/build/chat` | `{ message }` | assistant turn (incl. tool_calls summary) |
+
+WebSocket events added: `project.prd_finalized`, `project.tasks_finalized`,
+`project.task.status_changed`, `project.build.message`.
+
+---
+
+## 7. UI Design
+
+### 7.1 Project Detail — state-driven panel
+
+The Project Detail page (`/projects/:id`) gains a new section above the
+existing Requests list, called **Build Workspace**. It's a single panel
+whose content swaps based on artifact state. Existing sections (header,
+stats, Next Steps, Requests, Recent Documents) are preserved.
+
+| Artifact state | Workspace content |
+|---|---|
+| No brief | Big textarea labeled "Project Brief"; **Generate PRD** button (disabled until brief has ≥ 50 chars) |
+| Brief exists, no PRD | Brief shown read-only with **Edit Brief** + **Generate PRD** buttons |
+| PRD draft | Markdown editor + preview tabs, preloaded with PRD; **Regenerate**, **Save Draft**, **Finalize PRD** |
+| PRD finalized, no tasks | PRD shown read-only (collapsible); **Generate Task List** button |
+| Tasks draft | Table editor (Title / Description / Type / Priority / Agent / actions); **Add Row**, **Regenerate**, **Save Draft**, **Finalize Tasks** |
+| Tasks finalized, no build | Read-only task list; **Start Build** primary button + **View Board →** secondary |
+| Build active | Two-column: chat panel (left, ~40%) + task list with live status pills (right, ~60%); **View Board →** opens Story Board |
+
+State transitions are atomic — the UI re-renders from the latest artifact
+fetch, no client-side state machine.
+
+### 7.2 Build Chat panel
+
+- Standard chat shape: scrollable message list on top, textarea + Send on
+  bottom.
+- User messages: right-aligned, accent background.
+- Assistant messages: left-aligned, card background, markdown-rendered.
+- Tool-call summaries: inline system-styled chips between assistant turns
+  (e.g. `🚀 Dispatched T-003 → REQ-A1B2C3`, `⏸️ Paused T-005`,
+  `✏️ Modified T-007 priority: medium → high`).
+- Empty state: short prompt suggesting starter commands ("dispatch all
+  P0 tasks", "show me failed tasks").
+
+### 7.3 Story Board — Project mode
+
+The existing Story Board component is extended with a `mode` prop.
+
+| Mode | Trigger | Rows | Drill-in |
+|---|---|---|---|
+| `request` (today) | `/stories/:requestId` | stories in that request | n/a |
+| `project` (new) | `/stories/project/:projectId` | `project_tasks` rows where `list_status='finalized'` and not `archived` | click card → `/stories/:requestId` if request_id present, else opens task detail drawer |
+
+Visual differences in project mode:
+- Card body shows `task_id` (e.g. T-003) + title; cyberpunk theme keeps
+  the existing card chrome.
+- A "Deployed" column color-codes by deploy outcome (green = deployed,
+  red = failed, gray = not yet shipped).
+- Top breadcrumb: `Command Center ▸ <project chip> ▸ Build`.
+
+---
+
+## 8. Agent & Workflow Integration
+
+### 8.1 Reused agents
+
+- **`prd_author`** — called by `POST /prd/generate`. Input: project name,
+  description, brief content. Output: full PRD markdown matching the
+  existing PRD style (docs/prd.md format).
+- **`user_story_author`** — called by `POST /tasks/generate`. Input:
+  finalized PRD. Output: structured task list (parsed server-side into
+  rows; agent prompt is updated to emit a fenced JSON block alongside the
+  markdown).
+
+Both agents are invoked as **single-shot calls** via the existing
+`AgentSystemExecutor.execute_agent()` path. They do NOT trigger the
+full `feature_development` workflow when called this way — we add a new
+`single_agent_call()` method on the executor that:
+- Doesn't create a Request row.
+- Doesn't emit `request.*` events.
+- Logs token usage against a new `project_artifact_id` foreign key on
+  `token_usage` (so cost dashboard still scopes per-project correctly).
+
+### 8.2 New agent
+
+- **`project_orchestrator`** — `config/agents/project_orchestrator.yaml`.
+  Model: same default `claude-opus-4-7`. Tools listed in CHT-002.
+  System prompt frames it as "the build coordinator — concise, action-oriented,
+  always reflects the latest project state via tools before answering."
+
+### 8.3 Dispatch path
+
+When BLD-001 fires for a task:
+
+1. Look up the task; refuse if `task_status != 'backlog'`.
+2. Build a Request via the same orchestrator path as one-off Submit:
+   `request.task_type = task.task_type`, `description = task.description`,
+   `project_id = task.project_id`, `source_task_id = task.task_id`.
+3. The Request runs its workflow as today — no special "project task"
+   workflow exists. This is by design: per-task behavior should match
+   per-one-off behavior so users can't accidentally observe two different
+   outcomes from the same task_type.
+4. On `request.status_changed` events, a new event handler maps the
+   request's status to the task's `task_status` (mapping table below)
+   and persists.
+
+| Request status | Task status |
+|---|---|
+| created, queued | dispatched |
+| in_progress | in_progress |
+| review_pending | review |
+| testing | testing |
+| completed (with deployment success) | deployed |
+| completed (no deployment) | deployed |
+| failed | failed |
+| cancelled | cancelled |
+
+---
+
+## 9. Permissions (RBAC)
+
+| Action | viewer | developer | admin |
+|---|---|---|---|
+| View brief, PRD, tasks, board | ✅ | ✅ | ✅ |
+| Edit brief, generate/edit PRD, generate/edit tasks | ❌ | ✅ (if lead or member) | ✅ |
+| Finalize PRD or tasks | ❌ | ✅ (if lead) | ✅ |
+| Dispatch tasks | ❌ | ✅ (if lead) | ✅ |
+| Send chat message | ❌ | ✅ (if lead) | ✅ |
+
+"Lead" = the project's `lead_user_id` matches the current user, OR
+`created_by` matches if no lead is set. Falling back to "developer +
+project member" once memberships exist (out of scope for v1).
+
+---
+
+## 10. Edge Cases
+
+| # | Scenario | Behavior |
+|---|----------|----------|
+| 1 | User regenerates PRD while a draft is open with unsaved local edits | UI warns "unsaved edits will be lost"; user confirms or cancels. |
+| 2 | User edits brief AFTER finalizing PRD | Brief edit creates a new brief version; banner on the PRD reads "Brief has been updated since this PRD was finalized — regenerate?" Non-blocking. |
+| 3 | Two users hit "Generate PRD" concurrently | Second request returns 409 with the in-flight artifact_id; UI shows "generation already in progress, polling for result." |
+| 4 | Tasks generation produces an empty list | API returns the empty draft; UI shows "the agent returned no tasks — try refining the PRD." |
+| 5 | User dispatches a task, then deletes/archives the project | DELETE is already blocked by PRJ-006 if requests exist. Archived projects keep dispatched tasks visible on the board read-only. |
+| 6 | Chat agent calls `dispatch_task` for an already-dispatched task | Tool returns the existing request_id; chat surface renders a "ℹ️ Already dispatched" pill instead of a 🚀. |
+| 7 | A request that was dispatched from a task is cancelled via the existing /requests/:id/cancel endpoint | Existing handler emits `request.status_changed: cancelled` → task_status flips to `cancelled` automatically. |
+| 8 | The orchestrator agent hallucinates a task_id that doesn't exist | Tool implementation returns a structured error; agent's system prompt instructs it to first call `list_tasks` if unsure. |
+| 9 | Brief is empty when "Generate PRD" is clicked | Button is disabled client-side; server validates min 50 chars and returns 400. |
+| 10 | Finalizing tasks when no tasks have been added (empty draft) | Server returns 400 — "tasks list must contain at least one task." |
+| 11 | One-off Submit Request against a project that has a finalized tasks list | Allowed. The one-off Request just lacks a `source_task_id`; it shows up in the project's Requests list but NOT on the project Story Board. (Board strictly shows `project_tasks`.) |
+
+---
+
+## 11. Out of Scope (v1)
+
+- Forking, merging, or duplicating projects (including their PRD/tasks).
+- Multiple finalized PRDs per project.
+- AI-driven task estimation (story points, hours) — only `priority` for v1.
+- Diffing two PRD versions side-by-side.
+- Exporting PRD or tasks list to PDF/DOCX/Excel.
+- Importing an externally-authored PRD as the starting point (paste into
+  the editor works, but no "Import .md" button).
+- Real-time multi-user collaborative editing on the PRD or tasks (last
+  write wins; UI shows the `updated_at` so users can spot conflicts).
+- Mid-build PRD edits propagating into in-flight Requests.
+- A separate Project Board page distinct from Story Board.
+- Slack / email notifications on `project.tasks_finalized` or
+  deployment events.
+- Granular sub-task dependencies (T-003 depends on T-001). Tasks are flat in v1.
+
+---
+
+## 12. Open Questions
+
+1. **Agent prompt amendments needed?** The existing `user_story_author`
+   emits markdown. Do we update its prompt to ALSO emit a fenced
+   ```json``` block we can parse for `project_tasks`, or do we add a
+   server-side markdown-to-task parser? Recommendation: update the agent
+   prompt — cleaner, less brittle.
+2. **PRD editor library** — react-md-editor (small bundle) vs.
+   monaco-editor (heavier, IDE-grade) vs. a plain textarea + side-by-side
+   preview. Recommendation: react-md-editor or similar; we already render
+   markdown elsewhere via MarkdownRenderer.
+3. **Chat history pagination** — load all messages or paginate? For v1,
+   load the last 200 client-side; paginate later if it bites.
+4. **What happens if the orchestrator agent crashes mid-turn** (e.g.
+   provider timeout)? Recommendation: store the partial result with
+   `role='assistant', content='', tool_calls=null`, surface in UI as a
+   ⚠️ "agent failed to respond, retry?" affordance.
+5. **Do we let chat dispatch tasks in **parallel** (e.g. "dispatch all P0
+   tasks")?** Recommendation: yes for v1, but capped at 5 concurrent
+   dispatches per project to keep the queue legible.
+6. **Should the brief itself live in `project_artifacts` or as a column on
+   `projects`?** Picked `project_artifacts` for consistency (versioned,
+   same API shape as PRD), but it's a coin-flip. Could move to
+   `projects.brief TEXT` if simpler.
+7. **Permission to read PRD/tasks** — defaults to all roles per §9. Should
+   archived/sensitive projects be restricted to lead-only? Out of scope
+   for v1 unless requirement surfaces.
+
+---
+
+## 13. Implementation Phases
+
+Five phases, each independently shippable. Phase IDs are placeholders
+for the task-list breakdown (`PDB-XX` = Project-Driven Build task XX).
+
+### Phase A — Brief + PRD (PDB-01 → PDB-12, ~3 days)
+
+- Backend: `project_artifacts` table + migrations; brief and PRD
+  endpoints; `single_agent_call()` on executor; cost-attribution path.
+- Frontend: Build Workspace panel skeleton; brief textarea state; PRD
+  editor (react-md-editor); Regenerate / Save Draft / Finalize buttons.
+- Tests: backend artifact CRUD + version pinning; finalize idempotency;
+  RBAC.
+
+### Phase B — Task list (PDB-13 → PDB-22, ~2 days)
+
+- Backend: `project_tasks` table; tasks endpoints; updated
+  `user_story_author` prompt + parser; finalize endpoint.
+- Frontend: tasks table editor; Add/Remove rows; finalize gate.
+- Tests: parser handles malformed agent output gracefully; finalize
+  requires non-empty list.
+
+### Phase C — Dispatch + Story Board project mode (PDB-23 → PDB-32, ~2.5 days)
+
+- Backend: `BLD-*` endpoints; `request.status_changed` → `task_status`
+  handler; `source_task_id` column.
+- Frontend: dispatch button + per-task dispatch chip; extend Story Board
+  with `mode='project'`; route `/stories/project/:projectId`.
+- Tests: dispatch idempotency; status mapping; one-off requests stay off
+  the project board.
+
+### Phase D — Build chat (PDB-33 → PDB-42, ~2.5 days)
+
+- Backend: `project_orchestrator` agent definition; tool implementations;
+  `build_session_messages` table + endpoints; WebSocket event.
+- Frontend: chat panel; tool-call chips; rate-limit-aware UI.
+- Tests: tool calls produce correct DB writes; chat doesn't bypass RBAC.
+
+### Phase E — Polish (PDB-43 → PDB-50, ~1.5 days)
+
+- Brief-changed banner on PRD page (PB-003 / Edge 2).
+- Cost attribution to project artifacts shows up on Cost Dashboard.
+- WebSocket event smoke test.
+- PRD revision history entry, task-list Post-Release Changes row,
+  smoke test script.
+
+**Total: ~11.5 days of focused work.** Phase A alone is demo-able as
+"AI-assisted PRD authoring per project," which is the biggest perceived
+jump from today's state.
+
+---
+
+## 14. Revision History
+
+| Version | Date | Author | Changes |
+|---------|------|--------|---------|
+| 1.0 | 2026-05-18 | Chandramouli | Initial draft — REQ groups PB-001 through BRD-007, data model for `project_artifacts`/`project_tasks`/`build_session_messages`, API surface, 5 implementation phases, Story Board extended (NOT replaced) with project mode. Existing one-off Submit Request flow preserved. |
