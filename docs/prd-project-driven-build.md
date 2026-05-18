@@ -659,3 +659,150 @@ jump from today's state.
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 2026-05-18 | Chandramouli | Initial draft — REQ groups PB-001 through BRD-007, data model for `project_artifacts`/`project_tasks`/`build_session_messages`, API surface, 5 implementation phases, Story Board extended (NOT replaced) with project mode. Existing one-off Submit Request flow preserved. |
+| 1.1 | 2026-05-18 | Chandramouli | All 50 PDB tasks shipped. Implementation deviations from spec: Story Board "project mode" became a sibling page `ProjectStoryBoard.tsx` instead of a `mode` prop on the existing component (existing per-request StoryBoard is ~500 lines with heavy coupling; cleaner to fork). `project_orchestrator` tools are bound per-call via `BuildTools` instead of being registered in the global `ToolRegistry` (needed `project_id` from the URL, not from LLM input). Section 15 added — manual smoke checklist. |
+
+---
+
+## 15. Manual Smoke Checklist
+
+Use after every Phase E ship and before declaring a release. The
+automated suite at `scripts/smoke_test_pdb.py` covers the happy path
+end-to-end via the API; this checklist covers the UI surface area and
+WebSocket behavior that the script can't observe.
+
+### 15.1 Build Workspace state machine
+
+1. Open any non-Unassigned project.
+2. **No brief state:** verify a "Project Brief" textarea appears with a
+   character counter and a disabled "Save Brief" button. Type <50 chars
+   → button stays disabled. Type ≥50 → button enables.
+3. Save the brief. The panel should switch to **Brief Ready** showing
+   the brief read-only with "Edit Brief" and "Generate PRD →" buttons.
+4. Click "Generate PRD →". Button shows "Generating PRD… (up to 90s)".
+5. **PRD draft state:** when the call returns the panel shows a 3-tab
+   editor (Edit / Split / Preview). Confirm the markdown renders in
+   preview and the textarea contains it.
+6. Edit the markdown. "Save Draft" enables, "Saved" badge shows after
+   click.
+7. Click "Regenerate" with unsaved edits — verify the confirm dialog
+   warns about losing edits.
+8. Click "Finalize PRD" with unsaved edits — verify it offers to
+   save-and-finalize first.
+9. **PRD finalized state:** panel shows collapsed PRD + the task list
+   editor and (only on this state) the build chat panel side-by-side.
+10. **Brief-changed banner (PDB-43):** open "Edit Brief" → save a
+    change. Reload the page. A yellow banner appears: *"The brief has
+    been edited since this PRD was finalized — the PRD may be stale."*
+
+### 15.2 Task list flow
+
+1. Under a finalized PRD, click "Generate Task List". Wait for the
+   draft rows to appear (5–15 tasks).
+2. Click into any cell — title, description, type, priority, agent —
+   and edit it. On blur the row should optimistically update; refresh
+   should confirm the value persisted.
+3. Try an invalid task_type (impossible via the dropdown, but PATCH
+   directly via curl) — the API must 400.
+4. Click "Finalize Tasks" with no rows → button disabled. With ≥1 row
+   → confirm dialog → list becomes read-only with "Dispatch" chips per
+   row.
+5. **Parse-fallback warning:** if `meta.parse_mode` returned
+   `markdown` or `json_malformed_used_markdown`, a yellow chip should
+   appear above the table reading *"Agent output had to be reparsed
+   from markdown — review carefully."*
+
+### 15.3 Dispatch + Project Story Board
+
+1. From the read-only task list, click "Dispatch" on a backlog row.
+   Chip becomes "…" briefly; row's status pill changes to a request_id
+   link.
+2. Click "View Board →". A new tab/route opens at
+   `/stories/project/:id` showing 6 columns (Backlog / In Progress /
+   Review / Testing / Deployed / Failed).
+3. Cards appear in the right column. Click any card with a request_id
+   → drills into `/stories/:requestId` (the existing per-request
+   StoryBoard).
+4. Open the same board in two browser tabs. Dispatch a task in tab A;
+   tab B's card should transition columns within ~5s (driven by the
+   `request.status_changed` WS event).
+5. Click "Dispatch All (N)" with multiple backlog rows → confirm
+   dialog → all dispatch in one call.
+6. **Idempotency:** click Dispatch on an already-dispatched row (won't
+   appear in UI, but via the chat agent's `dispatch_task` tool) → must
+   return `status: 'already_dispatched'` with the existing request_id.
+
+### 15.4 Build chat
+
+1. With finalized tasks, the chat panel sits to the left of the task
+   list on viewports ≥900px, and stacks below on narrower.
+2. **Empty state:** chips show 3 starter prompts. Click "What's the
+   status?" → message sends; assistant returns a 1–2 line status.
+3. Send "Dispatch the first backlog task" → assistant runs
+   `list_tasks` + `dispatch_task` → chips appear inline:
+   `📋 Listed N tasks` and `🚀 Dispatched T-… → REQ-…`.
+4. Send "Change T-… priority to high" → chip
+   `✏️ Modified T-… (priority)`. Open the task list → row should show
+   `priority=high` and `amended=true` (visible in the GET response if
+   not surfaced in the UI).
+5. Send "Cancel T-…" → chip `⏸️ Cancelled T-…`. Row's `task_status`
+   becomes `cancelled`.
+6. Send an invalid action like "Delete the PRD" → assistant refuses;
+   verify no `modify_task` or destructive tool calls happened.
+7. **History persistence:** reload the page. The full conversation
+   should reappear in chronological order.
+8. **Multi-tab live updates:** open the same project in two tabs. Send
+   a message from tab A → tab B's chat list should refresh within ~1s
+   via the `project.build.message` WS event.
+
+### 15.5 Cost Dashboard
+
+1. Open `/cost` (no filter). Note the totals.
+2. Apply the **Project** filter dropdown → scope to the same project.
+   Totals shrink; the breakdown tables narrow to this project only.
+3. After generating a PRD (which uses tokens but creates no Request),
+   filter again. The `prd_specialist` row in `by_agent` should show
+   non-zero input/output tokens for this project (PDB-08 + PDB-44 —
+   artifact-attributed usage is UNION'd via `project_artifact_id`).
+
+### 15.6 RBAC matrix (PDB-46)
+
+Sanity-check each role against §9. Easiest path: log in as each test
+user (`viewer` / `developer` / `admin` from the fixture) and try:
+
+| Role | Read PRD / tasks / chat | Edit brief / PRD content | Finalize PRD/tasks | Dispatch | Send chat | Archive / Delete |
+|------|-------------------------|---------------------------|---------------------|----------|-----------|------------------|
+| viewer | ✅ 200 on GETs | ❌ 403 on PUT/PATCH/POST | ❌ | ❌ | ❌ | ❌ |
+| developer (not lead) | ✅ | ✅ on PUT brief / PATCH PRD | ❌ on finalize | ❌ | ❌ | ❌ |
+| developer (lead) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ on delete project |
+| admin | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+Lead = `project.lead_user_id` matches current user, OR `project.created_by`
+matches when no lead is set.
+
+### 15.7 Hard regressions to watch for
+
+- Old per-request StoryBoard at `/stories/:requestId` MUST still work
+  unchanged — Project-driven Build added a sibling page, didn't refactor
+  the existing one.
+- One-off Submit Request flow MUST still work — Phase A only added
+  `app.state.agent_executor`; the orchestrator path is otherwise
+  untouched.
+- Existing `request.*` events still fire — Phase D added `on(handler)`
+  to EventEmitter but doesn't replace queue-based WebSocket delivery.
+- The PM v1 sidebar entry, Projects list, and ProjectDetail page MUST
+  render — Phase A grafted onto ProjectDetail rather than replacing it.
+
+### 15.8 Bug-catch reminders
+
+These bugs surfaced during the original ship — re-verify after any
+refactor:
+
+- `prd_specialist` (not `prd_author`) is the agent_id in the YAML.
+- `app.state.agent_executor` must be assigned in `main.py` lifespan or
+  PDB-07 returns 503.
+- `run_chat_turn` requires the orchestrator passed explicitly — does
+  NOT pull it off the executor object.
+- `api.delete()` must handle 204 No Content (does not parse JSON on
+  empty body) — caught when wiring the Project delete trash icon.
+- DELETE routes that return 204 confuse the api client if it tries
+  `res.json()` — always test the cleanup path during smoke.

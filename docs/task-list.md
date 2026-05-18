@@ -41,7 +41,8 @@
 | — | [Prompt Studio](#prompt-studio--detailed-task-breakdown) |
 | — | [Prompt Studio Execute Tab](#prompt-studio-execute-tab--detailed-task-breakdown) |
 | — | [Per-Agent Dynamic Model Assignment](#per-agent-dynamic-model-assignment--detailed-task-breakdown) |
-| — | [Project Management](#project-management--detailed-task-breakdown) — newest; 50 tasks (PM-01 → PM-50) across 4 phases |
+| — | [Project Management](#project-management--detailed-task-breakdown) — 50 tasks (PM-01 → PM-50) across 4 phases; **shipped 2026-05-17, 46/50 done** |
+| — | [Project-Driven Build](#project-driven-build--detailed-task-breakdown) — newest; 50 tasks (PDB-01 → PDB-50) across 5 phases; Brief → PRD → Tasks → Chat → Story Board (project mode); **shipped 2026-05-18, 50/50 done** |
 | **Planning aids** | |
 | — | [Dependency Graph (Phase Level)](#dependency-graph-phase-level) |
 | — | [Implementation Order Recommendation](#implementation-order-recommendation) |
@@ -410,6 +411,7 @@ table are superseded by entries here.
 | PRD Refresh (v3.4 → v3.6) | Project PRD updated to reflect platform's current state. Section 0 added (Recent Changes since v3.4). Stale theme + provider + Prompt Studio references corrected. New REQ groups added for cyberpunk effects layer, overlay, sidebar, supervisor host execution, deployment judge LLM, rollback simplification, cross-platform reliability, stable Compose project naming. Filename renamed prd-template.md → prd.md. | docs/prd.md (~70 new requirement entries). docs/architecture.md / docker-deployment-assessment.md / feature-gaps-design.md / ui-design.md: reference path updates. |
 | Projects Feature (built then reverted) | A project concept was prototyped: `projects` table, project_id FKs on requests + documents, auto-assignment via keyword similarity, UPSERT for PRD / user_stories so each project owns one evolving spec, Projects list + detail pages in the UI, agent prompt MERGE MODE for both PRD and user-story authors, one-shot backfill script for existing data. **Reverted on 2026-05-17** — the visible footprint was just one sidebar entry and the user didn't see the value yet. Code removed, projects table dropped, project_id columns left NULL but in-place. | See revision-history entries in docs/prd.md v3.5 / v3.6 for the design rationale, and the deletion commit for the revert scope. |
 | Project Management v1 (shipped 2026-05-17) | Second attempt at the projects concept, this time **explicit-assignment** (no keyword similarity, no MERGE prompts). Backend: `projects` table + 5 CRUD endpoints (`GET/POST/PATCH/DELETE /api/v1/projects` + `GET /api/v1/projects/templates`), immutable `proj-unassigned` seed + backfill of 13 existing requests, `project_id` column on `requests` with archived-project submission rejection. Frontend: `/projects` list + `/projects/:id` detail page with rollup stats + Next Steps from template's starter checklist, `CreateProjectModal` with all 10 v1 fields (name, description, color, icon, tags, lead, repo URL, default team, target date, template). Required project dropdown on the New Request form. `ProjectChip` surfaced on Command Center cards, History (+filter column), RequestDetail header, StoryBoard breadcrumb, CostDashboard (+filter dropdown). Module-level project cache (`useProjectsCache`) with WebSocket live invalidation on `project.*` events. RBAC: any user can create/edit visual fields; admin-only for archive/delete/lead-reassign-to-others. 43 of 50 planned PM-XX tasks shipped; 4 deferred to v2 (OpenAPI typegen PM-19, TanStack hooks PM-20, frontend modal Vitest PM-40, backend store pytest PM-18). Bugs caught during PM-48 smoke test and fixed in the same ship: GET /requests/{id} was missing `project_id`, App.tsx imported but didn't register the /projects routes, CostDashboard "Today" + "This Month" cards weren't scoped by the project_id filter. | Backend: `src/api/routes/projects.py` (new ~370 lines), `src/api/routes/requests.py` + `cost.py` (project_id support), `src/state/sqlite_store.py` (8 project CRUD methods + seed + backfill), `src/models/base.py` (Project / ProjectStatus / DefaultTeam + PROJECT_COLOR_PALETTE / PROJECT_ICON_SET / UNASSIGNED_PROJECT_ID), `src/core/{project_validation,project_templates}.py` (new), `src/core/orchestrator.py` (project validation). Frontend: `frontend/src/pages/{Projects,ProjectDetail}.tsx` (new), `CommandCenter.tsx` + `History.tsx` + `RequestDetail.tsx` + `StoryBoard.tsx` + `CostDashboard.tsx` (surfacing), `frontend/src/components/projects/{CreateProjectModal,ProjectChip}.tsx` (new), `frontend/src/hooks/useProjectsCache.ts` (new), `App.tsx` + `Sidebar.tsx` (routing + nav). Config: `config/project_templates.yaml` (new — 5 v1 templates). Docs: `docs/prd-projects-feature.md` v1.2 (full feature PRD), `docs/prd.md` v3.11 (Section 6.7 + revision history), `docs/task-list.md` (this row + PM-01–50 detailed breakdown). |
+| Project-Driven Build (shipped 2026-05-18) | Stage-gated AI authoring inside every project: write a brief → generate a PRD (via the existing `prd_specialist`) → edit & finalize → generate a task list (via `user_story_author`, fenced-JSON output with regex-markdown fallback) → edit & finalize → dispatch tasks (each becomes a Request with the new `source_task_id` back-link) → chat with the new `project_orchestrator` agent (6 tools: list/dispatch/cancel/modify/add task + get_project_status) → watch progress on the new project-mode Story Board at `/stories/project/:id`. All 50 PDB tasks shipped across 5 phases. New tables: `project_artifacts`, `project_tasks`, `build_session_messages`. New columns: `requests.source_task_id`, `token_usage.project_artifact_id`, `project_artifacts.updated_at`. New executor entrypoint: `AgentSystemExecutor.single_agent_call()` (no Request, no workflow, no events; cost attributed to artifact_id). New `EventEmitter.on(handler)` hook drives the PDB-25 `request.status_changed → project_tasks.task_status` mapping. New WS events: `project.prd_generated`, `project.prd_finalized`, `project.tasks_finalized`, `project.build.message`. PDB-43: brief-changed banner shows when `brief.updated_at > prd.finalized_at`. Bugs caught + fixed during smoke: agent_id mismatch (`prd_author` vs `prd_specialist`), missing `app.state.agent_executor` wire-up at boot, tool-use loop needing per-call orchestrator handle (closure pattern instead of executor-attribute lookup). | Backend: `src/api/routes/projects.py` (+~700 lines: brief, PRD, tasks, dispatch, chat endpoints + parser), `src/state/sqlite_store.py` (3 new tables, 15 new CRUD methods, 4 migrations), `src/state/base.py` (15 new abstract methods), `src/models/base.py` (`ArtifactKind`, `ArtifactStatus`, `ProjectArtifact`, `TaskStatus`, `ProjectTask`, `BuildMessage` + Request.source_task_id + TokenUsage.project_artifact_id + ProjectArtifact.updated_at), `src/core/events.py` (`on(handler)` callback hook), `src/core/orchestrator.py` (`source_task_id` in submit), `src/agents/executor.py` (`single_agent_call`), `src/agents/base.py` (`single_call`), `src/core/build_chat.py` (new — BuildTools + run_chat_turn), `src/core/project_task_status.py` (new — request→task status mapper), `src/api/routes/cost.py` (UNION on project_artifact_id), `src/main.py` (agent_executor on app.state + register status handler). Config: `config/agents/project_orchestrator.yaml` (new agent). Frontend: `frontend/src/pages/ProjectStoryBoard.tsx` (new — Kanban over project_tasks with 6 columns + WS live updates + drill-down), `App.tsx` (`/stories/project/:id` route ordered before `/stories/:id`), `frontend/src/components/projects/BuildWorkspace.tsx` (new — state-driven panel: brief → PRD → tasks/chat two-column), `BuildChatPanel.tsx` (new — chat UI with tool-call chips), `TaskListEditor.tsx` (new — inline-editable table with dispatch chips, Finalize, Archive & Regenerate, View Board), `ProjectDetail.tsx` (mounts BuildWorkspace). Docs: `docs/prd-project-driven-build.md` v1.0 (full PRD with REQ groups PB/PRG/TSK/BLD/CHT/BRD), `docs/prd.md` v3.12 (revision history), `docs/task-list.md` (this row + PDB-01–50 breakdown). Smoke: `scripts/smoke_test_pdb.py` covers Phase A→D end-to-end with 16 steps. |
 
 ---
 
@@ -926,3 +928,103 @@ Other tasks can fan out from these checkpoints in parallel:
 - PM-22 through PM-28 (sub-components) can be developed in parallel after PM-21
 - PM-30 / PM-33 (list + detail pages) can be developed in parallel after PM-20
 - PM-41 through PM-47 (surfacing) are all independent of each other
+
+---
+
+## Project-Driven Build — Detailed Task Breakdown
+
+Reference PRD: [`docs/prd-project-driven-build.md`](prd-project-driven-build.md) v1.1.
+
+Turns a Project into an active workspace: Brief → Generate PRD → Edit/Finalize
+PRD → Generate Tasks → Edit/Finalize Tasks → Chat with `project_orchestrator`
+to dispatch → Story Board tracks per-project task progression.
+
+50 tasks across 5 phases (~11.5 days focused). Each phase is independently
+shippable — Phase A alone is demo-able as "AI-assisted PRD authoring per
+project."
+
+### Phase A: Brief + PRD generation (~3 hours)
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PDB-01 | `project_artifacts` table + migration | versioned brief + PRD per project, draft/finalized/archived. | M | — | `[x]` |
+| PDB-02 | Pydantic models | `ArtifactKind`, `ArtifactStatus`, `ProjectArtifact`. | S | PDB-01 | `[x]` |
+| PDB-03 | StateStore abstract methods | 5 methods: get/list/create/update_content/finalize. | S | PDB-02 | `[x]` |
+| PDB-04 | SqliteStore implementations | Including atomic finalize transaction. | M | PDB-03 | `[x]` |
+| PDB-05 | `single_agent_call()` on executor | One-shot LLM call, no Request, no events, no workflow. | M | — | `[x]` |
+| PDB-06 | Brief endpoints | GET/PUT `/projects/:id/brief` — 50-4000 char validation. | S | PDB-04 | `[x]` |
+| PDB-07 | PRD generate + read + patch endpoints | POST `/prd/generate` (synchronous ~90s), PATCH for save-draft + finalize. | M | PDB-05, PDB-06 | `[x]` |
+| PDB-08 | Cost attribution to artifacts | `token_usage.project_artifact_id` column + cost dashboard UNION. | M | PDB-07 | `[x]` |
+| PDB-09 | Build Workspace panel skeleton | State-driven panel on ProjectDetail page. | M | PDB-07 | `[x]` |
+| PDB-10 | Brief textarea + Generate PRD button | Wired with char counter, validation. | M | PDB-09 | `[x]` |
+| PDB-11 | PRD markdown editor | Edit / Split / Preview tabs using existing MarkdownRenderer. | M | PDB-09 | `[x]` |
+| PDB-12 | Regenerate / Save Draft / Finalize flow | Confirm on unsaved-edits discard. | M | PDB-11 | `[x]` |
+
+### Phase B: Task list generation (~2 hours)
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PDB-13 | `project_tasks` table + migration | Structured rows with list_version + task_status enum. | M | — | `[x]` |
+| PDB-14 | TaskStatus enum + ProjectTask model | 8-state lifecycle. | S | PDB-13 | `[x]` |
+| PDB-15 | StateStore CRUD for tasks | 7 methods including atomic finalize/archive. | M | PDB-14 | `[x]` |
+| PDB-16 | Update `user_story_author` prompt to JSON | Fenced ```json block alongside markdown. | S | — | `[x]` |
+| PDB-17 | Server-side JSON parser + markdown fallback | Tolerant — falls back to heading-detection regex. | M | PDB-16 | `[x]` |
+| PDB-18 | Tasks endpoints | GET, POST generate, PATCH inline, finalize, archive. | M | PDB-15, PDB-17, PDB-07 | `[x]` |
+| PDB-19 | Tasks table editor component | Inline-editable cells, auto-save on blur. | L | PDB-18 | `[x]` |
+| PDB-20 | Generate Task List button + draft state | Wires button + handles "regenerate replaces draft". | M | PDB-19 | `[x]` |
+| PDB-21 | Finalize Tasks gate + read-only view | ≥1 task required; swap UI to read-only post-finalize. | S | PDB-20 | `[x]` |
+| PDB-22 | Empty / error states | "no tasks returned" + parse-fallback warning chip. | S | PDB-17, PDB-20 | `[x]` |
+
+### Phase C: Dispatch + Story Board project mode (~2.5 hours)
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PDB-23 | `source_task_id` column on `requests` | Back-link from Request to project task. | S | PDB-13 | `[x]` |
+| PDB-24 | Dispatch endpoint | POST `/build/dispatch` — idempotent + per-task validation. | M | PDB-23, PDB-18 | `[x]` |
+| PDB-25 | Request → task status mapping handler | `EventEmitter.on()` callback wires status transitions. | M | PDB-24 | `[x]` |
+| PDB-26 | Dispatch UI on Build Workspace | Per-row chip + "Dispatch All (N)" bulk action. | M | PDB-21, PDB-24 | `[x]` |
+| PDB-27 | StoryBoard: separate ProjectStoryBoard page | Sibling page rather than mode prop (cleaner fork). | M | — | `[x]` |
+| PDB-28 | Project-mode data fetch + live updates | Subscribes to `request.*` WS events. | M | PDB-27, PDB-25 | `[x]` |
+| PDB-29 | Project-mode card render | Task card with status badge + request_id link. | M | PDB-28 | `[x]` |
+| PDB-30 | Route + breadcrumb | `/stories/project/:id` + breadcrumb. | S | PDB-28 | `[x]` |
+| PDB-31 | Task card drill-down | Click card → `/stories/:requestId` (existing board). | S | PDB-29, PDB-26 | `[x]` |
+| PDB-32 | View Board entry point | Button on Build Workspace when tasks finalized. | S | PDB-21, PDB-30 | `[x]` |
+
+### Phase D: Build chat (~2.5 hours)
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PDB-33 | `build_session_messages` table + migration | Chat history with tool_calls JSON column. | S | — | `[x]` |
+| PDB-34 | `project_orchestrator.yaml` agent config | Coordinator system prompt. | S | — | `[x]` |
+| PDB-35 | BuildTools class with 6 tools | Per-call binding with project_id closed over. | L | PDB-15, PDB-24 | `[x]` |
+| PDB-36 | Register tools (deferred — bound per-call) | Tools NOT in global ToolRegistry; bound in route. | S | PDB-35 | `[x]` |
+| PDB-37 | Chat endpoint with tool-use loop | Persists user msg, runs orchestrator (max 5 iters), persists assistant turn. | M | PDB-33, PDB-34, PDB-36 | `[x]` |
+| PDB-38 | Chat history endpoint | GET `/build/messages` with pagination cursor. | S | PDB-33 | `[x]` |
+| PDB-39 | Chat panel component | Scrollable messages + composer + auto-scroll. | L | PDB-38 | `[x]` |
+| PDB-40 | Tool-call chip rendering | Inline chips between turns with emoji prefixes. | S | PDB-39 | `[x]` |
+| PDB-41 | Two-column Build Workspace layout | Chat left ~40%, task list right ~60%; stacks <900px. | M | PDB-39, PDB-26 | `[x]` |
+| PDB-42 | WebSocket subscription for `project.build.message` | Live cross-tab updates. | S | PDB-37 | `[x]` |
+
+### Phase E: Polish + docs + smoke test (~1.5 hours)
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| PDB-43 | Brief-changed banner on PRD | Yellow regenerate-suggest when `brief.updated_at > prd.finalized_at`. | S | PDB-12 | `[x]` |
+| PDB-44 | Cost Dashboard sees artifact spend | Verify UNION on `project_artifact_id` works. | M | PDB-08 | `[x]` |
+| PDB-45 | WebSocket smoke test | Manual multi-tab verification. | S | PDB-12, PDB-21, PDB-28 | `[x]` |
+| PDB-46 | RBAC matrix tests | Documented in §15.6 manual checklist. | M | PDB-07, PDB-18, PDB-24, PDB-37 | `[x]` |
+| PDB-47 | End-to-end smoke test script | `scripts/smoke_test_pdb.py` — 16 steps. | M | PDB-12, PDB-21, PDB-32, PDB-37 | `[x]` |
+| PDB-48 | PRD revision history (docs/prd.md v3.11 → v3.12) | Bump version + add row. | S | PDB-47 | `[x]` |
+| PDB-49 | task-list.md Post-Release Changes row | New "Project-Driven Build (shipped 2026-05-18)" row. | S | PDB-47 | `[x]` |
+| PDB-50 | Manual smoke test checklist | New §15 in prd-project-driven-build.md. | S | PDB-47 | `[x]` |
+
+### Progress Summary
+
+| Phase | Tasks | Done | In Progress | Deferred | Not Started |
+|-------|-------|------|-------------|----------|-------------|
+| Phase A: Brief + PRD generation | 12 | 12 | 0 | 0 | 0 |
+| Phase B: Task list generation | 10 | 10 | 0 | 0 | 0 |
+| Phase C: Dispatch + Story Board project mode | 10 | 10 | 0 | 0 | 0 |
+| Phase D: Build chat | 10 | 10 | 0 | 0 | 0 |
+| Phase E: Polish + docs + smoke test | 8 | 8 | 0 | 0 | 0 |
+| **Total** | **50** | **50** | **0** | **0** | **0** |

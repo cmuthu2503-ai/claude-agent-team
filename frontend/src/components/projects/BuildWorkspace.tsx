@@ -30,6 +30,7 @@ interface Artifact {
   status: "draft" | "finalized" | "archived"
   content: string
   created_at: string
+  updated_at: string | null
   finalized_at: string | null
 }
 
@@ -403,11 +404,43 @@ function PRDEditor({
 // ── Sub-view 4: PRD finalized — read-only + placeholder for Phase B ──
 
 function PRDFinalized({
-  prd, brief: _brief, projectId, reload,
+  prd, brief, projectId, reload,
 }: { prd: Artifact; brief: Artifact; projectId: string; reload: () => void }) {
   const [collapsed, setCollapsed] = useState(true)
+  // PDB-43: brief-changed-since-PRD-finalized banner. Fires only when both
+  // timestamps exist AND the brief was touched strictly later than the
+  // finalize timestamp. Non-blocking — just a hint to regenerate.
+  const briefStale =
+    brief.updated_at != null &&
+    prd.finalized_at != null &&
+    new Date(brief.updated_at) > new Date(prd.finalized_at)
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {briefStale && (
+        <div style={{
+          padding: "10px 14px", borderRadius: "var(--radius)",
+          background: "var(--warning-subtle, rgba(255, 200, 0, 0.1))",
+          border: "1px solid var(--warning, #d4a017)",
+          color: "var(--warning, #d4a017)",
+          display: "flex", alignItems: "center", gap: 10, fontSize: 12,
+        }}>
+          <Sparkles size={14} />
+          <span style={{ flex: 1, color: "var(--text-primary)" }}>
+            The brief has been edited since this PRD was finalized — the PRD may be stale.
+          </span>
+          <a
+            href={`/projects/${projectId}`}
+            onClick={(e) => { e.preventDefault(); window.location.reload() }}
+            style={{
+              fontSize: 11, color: "var(--accent)", textDecoration: "none",
+              padding: "3px 10px", border: "1px solid var(--accent)",
+              borderRadius: "var(--radius)",
+            }}
+          >
+            Refresh
+          </a>
+        </div>
+      )}
       {/* PRD section (full-width, collapsible). */}
       <Card>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
