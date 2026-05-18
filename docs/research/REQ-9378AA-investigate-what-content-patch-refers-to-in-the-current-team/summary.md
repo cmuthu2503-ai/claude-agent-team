@@ -1,0 +1,11 @@
+# Executive Summary
+
+**Topic.** This investigation set out to determine what "content patch" refers to in the Agent Team platform — specifically, whether it means a backend content update, a frontend copy change, or a DB seed update.
+
+**Key finding.** The term is internal jargon. It is not documented in any public source, and targeted web searches returned zero results. Without access to the internal repository, issue tracker, or team glossary, the exact meaning cannot be confirmed from outside the organization. However, standard software conventions strongly indicate that "content patch" denotes a **non-code change** — the word "content" is industry shorthand for copy, configuration, or data, as distinct from application logic.
+
+**Most likely interpretation.** Given that the Agent Team platform is an agent-orchestration product, the dominant "content" artifact is almost certainly agent prompts, system messages, tool descriptions, and role templates. These are typically stored as data rows in a database in modern agent platforms (LangSmith, Langfuse, Vellum-style architectures), which makes a **DB seed / prompt-table update (Option C)** the highest-probability interpretation, scoring 8.7/10 in a weighted comparison. A file-based **backend content update (Option A)** scores 6.6/10 as a secondary possibility. A pure **frontend copy change (Option B)** scores only 4.6/10 and is unlikely unless the platform has a substantial end-user UI.
+
+**Recommendation.** Treat "content patch = DB seed / prompt-table update" as the working hypothesis, but **do not act on it without verification**. The risk of misrouted engineering work (wrong file tree, wrong reviewer, wrong QA surface) is real and avoidable. A definitive answer is almost always one `grep` away.
+
+**Next steps.** (1) Grep the main repo and recent PR titles for the literal string "content patch." (2) Inspect the file diff of the 3–5 most recent "content patch" PRs — the file extensions and paths conclusively reveal which option applies (`.sql` / seeds → C; `.md` / `.yaml` under a content directory → A; `.tsx` / `i18n` files → B). (3) Once confirmed, codify the definition in `CONTRIBUTING.md` or the team glossary in a single sentence to prevent this ambiguity from recurring.

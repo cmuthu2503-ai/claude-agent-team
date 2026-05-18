@@ -1,0 +1,16 @@
+flowchart TD
+    Q["Ticket: 'Content Patch' requested"] --> G["Grep repo & PR titles<br/>for 'content patch'"]
+    G --> H{Hit found?}
+    H -->|No| D["Inspect tell-tale directories"]
+    H -->|Yes| P["Inspect file diffs of<br/>recent 'content patch' PRs"]
+    D --> P
+    P --> E{What file types changed?}
+    E -->|".sql / seeds / migrations"| C["Option C:<br/>DB seed / prompt-table update"]
+    E -->|".md / .yaml / .json<br/>in content or prompts dir"| A["Option A:<br/>Backend content update<br/>(file-based)"]
+    E -->|".tsx / .jsx / locale files"| B["Option B:<br/>Frontend copy change"]
+    C --> X["Route to: Backend / Data eng<br/>Ship via seed script or admin UI"]
+    A --> Y["Route to: Backend eng<br/>Ship via PR, no logic review needed"]
+    B --> Z["Route to: Frontend eng<br/>Ship via PR + visual QA"]
+    X --> F["Codify definition in<br/>CONTRIBUTING.md / glossary"]
+    Y --> F
+    Z --> F
