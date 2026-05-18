@@ -20,6 +20,7 @@ import { ChevronDown, ChevronRight, FileText, Sparkles, CheckCircle2 } from "luc
 import { api } from "../../lib/api"
 import { MarkdownRenderer } from "../ui/MarkdownRenderer"
 import { TaskListEditor } from "./TaskListEditor"
+import { BuildChatPanel } from "./BuildChatPanel"
 
 interface Artifact {
   artifact_id: string
@@ -406,38 +407,64 @@ function PRDFinalized({
 }: { prd: Artifact; brief: Artifact; projectId: string; reload: () => void }) {
   const [collapsed, setCollapsed] = useState(true)
   return (
-    <Card>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        <Heading icon={<CheckCircle2 size={16} color="var(--success)" />}>
-          Build Workspace · PRD Finalized (v{prd.version})
-        </Heading>
-        <button
-          type="button"
-          onClick={() => setCollapsed(!collapsed)}
-          style={{
-            display: "inline-flex", alignItems: "center", gap: 4,
-            padding: "4px 10px", fontSize: 11,
-            background: "transparent", color: "var(--text-muted)",
-            border: "1px solid var(--border)", borderRadius: "var(--radius)",
-            cursor: "pointer", fontFamily: "var(--font)",
-          }}
-        >
-          {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
-          {collapsed ? "Show PRD" : "Hide PRD"}
-        </button>
-      </div>
-      {!collapsed && (
-        <div style={{
-          marginTop: 10, padding: "12px 16px",
-          background: "var(--bg-hover)", border: "1px solid var(--border)",
-          borderRadius: "var(--radius)", maxHeight: 500, overflow: "auto",
-        }}>
-          <MarkdownRenderer content={prd.content} />
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {/* PRD section (full-width, collapsible). */}
+      <Card>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <Heading icon={<CheckCircle2 size={16} color="var(--success)" />}>
+            Build Workspace · PRD Finalized (v{prd.version})
+          </Heading>
+          <button
+            type="button"
+            onClick={() => setCollapsed(!collapsed)}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 4,
+              padding: "4px 10px", fontSize: 11,
+              background: "transparent", color: "var(--text-muted)",
+              border: "1px solid var(--border)", borderRadius: "var(--radius)",
+              cursor: "pointer", fontFamily: "var(--font)",
+            }}
+          >
+            {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+            {collapsed ? "Show PRD" : "Hide PRD"}
+          </button>
         </div>
-      )}
-      {/* PDB-19/20/21/22 — task list editor lives under the PRD section. */}
-      <TaskListEditor projectId={projectId} onFinalized={reload} />
-    </Card>
+        {!collapsed && (
+          <div style={{
+            marginTop: 10, padding: "12px 16px",
+            background: "var(--bg-hover)", border: "1px solid var(--border)",
+            borderRadius: "var(--radius)", maxHeight: 500, overflow: "auto",
+          }}>
+            <MarkdownRenderer content={prd.content} />
+          </div>
+        )}
+      </Card>
+
+      {/* PDB-41 — two-column layout: chat (~40%) on the left, task list
+          (~60%) on the right. Grid collapses to a single column under
+          ~900px so narrow viewports stack cleanly. */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 2fr) minmax(0, 3fr)",
+        gap: 12,
+      }} className="pdb-workspace-grid">
+        <div style={{ minWidth: 0 }}>
+          <BuildChatPanel projectId={projectId} />
+        </div>
+        <div style={{ minWidth: 0 }}>
+          {/* TaskListEditor renders its own card chrome (the inner Stub),
+              so we don't wrap it in another Card. */}
+          <TaskListEditor projectId={projectId} onFinalized={reload} />
+        </div>
+      </div>
+      {/* Stack on narrow viewports. Inline <style> keeps the rule local to
+          this surface so it doesn't bleed into other pages. */}
+      <style>{`
+        @media (max-width: 900px) {
+          .pdb-workspace-grid { grid-template-columns: 1fr !important; }
+        }
+      `}</style>
+    </div>
   )
 }
 
