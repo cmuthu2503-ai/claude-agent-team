@@ -19,6 +19,7 @@ import { useEffect, useState } from "react"
 import { ChevronDown, ChevronRight, FileText, Sparkles, CheckCircle2 } from "lucide-react"
 import { api } from "../../lib/api"
 import { MarkdownRenderer } from "../ui/MarkdownRenderer"
+import { TaskListEditor } from "./TaskListEditor"
 
 interface Artifact {
   artifact_id: string
@@ -92,11 +93,11 @@ export function BuildWorkspace({ projectId }: Props) {
     return <PRDEditor prd={prd} projectId={projectId} onUpdated={load} />
   }
   if (prd.status === "finalized") {
-    return <PRDFinalized prd={prd} brief={brief} />
+    return <PRDFinalized prd={prd} brief={brief} projectId={projectId} reload={load} />
   }
   // Archived PRD with no current draft — shouldn't normally happen since we
   // always create a new draft when re-generating; show a regen affordance.
-  return <PRDFinalized prd={prd} brief={brief} />
+  return <PRDFinalized prd={prd} brief={brief} projectId={projectId} reload={load} />
 }
 
 // ── Sub-view 1: brief editor (no brief yet OR explicit "Edit Brief") ──
@@ -400,7 +401,9 @@ function PRDEditor({
 
 // ── Sub-view 4: PRD finalized — read-only + placeholder for Phase B ──
 
-function PRDFinalized({ prd, brief: _brief }: { prd: Artifact; brief: Artifact }) {
+function PRDFinalized({
+  prd, brief: _brief, projectId, reload,
+}: { prd: Artifact; brief: Artifact; projectId: string; reload: () => void }) {
   const [collapsed, setCollapsed] = useState(true)
   return (
     <Card>
@@ -432,9 +435,8 @@ function PRDFinalized({ prd, brief: _brief }: { prd: Artifact; brief: Artifact }
           <MarkdownRenderer content={prd.content} />
         </div>
       )}
-      <div style={{ marginTop: 12, padding: "10px 12px", background: "var(--bg-hover)", border: "1px dashed var(--border)", borderRadius: "var(--radius)", fontSize: 12, color: "var(--text-muted)" }}>
-        Phase B (task-list generation) lands next. Once shipped, a "Generate Task List" button will appear here.
-      </div>
+      {/* PDB-19/20/21/22 — task list editor lives under the PRD section. */}
+      <TaskListEditor projectId={projectId} onFinalized={reload} />
     </Card>
   )
 }
