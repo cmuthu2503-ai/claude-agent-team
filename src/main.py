@@ -75,6 +75,13 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("agent_system_connected", mode="mock")
 
+    # PDB-25 — server-side handler that maps `request.*` events to
+    # `project_tasks.task_status` updates whenever a Request was created
+    # from a project task (i.e. source_task_id is set).
+    from src.core.project_task_status import make_project_task_status_handler
+    events.on(make_project_task_status_handler(state))
+    logger.info("project_task_status_handler_registered")
+
     logger.info("backend_started", environment=ENVIRONMENT)
     yield
 

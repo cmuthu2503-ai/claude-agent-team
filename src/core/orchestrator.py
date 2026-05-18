@@ -79,7 +79,8 @@ class Orchestrator(AgentExecutor):
 
     async def submit(self, description: str, task_type: str = "feature_request",
                      priority: str = "medium", created_by: str = "",
-                     project_id: str | None = None) -> Request:
+                     project_id: str | None = None,
+                     source_task_id: str | None = None) -> Request:
         request_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
 
         # PM-11 — project assignment. Default to the immutable Unassigned
@@ -102,14 +103,16 @@ class Orchestrator(AgentExecutor):
             priority=priority,
             created_by=created_by,
             project_id=project_id,
+            source_task_id=source_task_id,  # PDB-23 — back-link for project-mode Story Board
         )
         await self.state.create_request(request)
         await self.events.emit("request.created", {
             "request_id": request_id, "description": description, "task_type": task_type,
             "project_id": project_id,
+            "source_task_id": source_task_id,
         })
         logger.info("request_submitted", request_id=request_id, task_type=task_type,
-                   project_id=project_id)
+                   project_id=project_id, source_task_id=source_task_id)
 
         # Check for existing documents (duplicate detection)
         skip_stages: list[str] = []

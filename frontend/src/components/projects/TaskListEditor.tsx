@@ -11,7 +11,8 @@
  */
 
 import { useCallback, useEffect, useState } from "react"
-import { ListChecks, Plus, RefreshCw, CheckCircle2, AlertTriangle } from "lucide-react"
+import { Link } from "react-router-dom"
+import { ListChecks, Plus, RefreshCw, CheckCircle2, AlertTriangle, Rocket, ExternalLink } from "lucide-react"
 import { api } from "../../lib/api"
 
 interface Task {
@@ -48,9 +49,10 @@ const AGENTS = [
 
 export function TaskListEditor({ projectId, onFinalized }: Props) {
   const [tasks, setTasks] = useState<Task[] | null>(null)
-  const [busy, setBusy] = useState<"loading" | "generating" | "finalizing" | "archiving" | null>("loading")
+  const [busy, setBusy] = useState<"loading" | "generating" | "finalizing" | "archiving" | "dispatching" | null>("loading")
   const [error, setError] = useState("")
   const [parseWarning, setParseWarning] = useState<string | null>(null)
+  const [dispatchingTaskId, setDispatchingTaskId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -130,6 +132,37 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
     }
   }
 
+  const dispatchOne = async (task_id: string) => {
+    setDispatchingTaskId(task_id)
+    setError("")
+    try {
+      await api.post(`/projects/${projectId}/build/dispatch`, { task_ids: [task_id] })
+      await load()
+    } catch (e: any) {
+      setError(parseDetail(e?.message) || "Dispatch failed")
+    } finally {
+      setDispatchingTaskId(null)
+    }
+  }
+
+  const dispatchAllBacklog = async () => {
+    if (!tasks) return
+    const backlogIds = tasks
+      .filter((t) => t.task_status === "backlog" && t.list_status === "finalized")
+      .map((t) => t.task_id)
+    if (backlogIds.length === 0) return
+    if (!window.confirm(`Dispatch all ${backlogIds.length} backlog task${backlogIds.length === 1 ? "" : "s"}? Each becomes a Request — the workflows will run in parallel.`)) return
+    setBusy("dispatching")
+    setError("")
+    try {
+      await api.post(`/projects/${projectId}/build/dispatch`, { task_ids: backlogIds })
+      await load()
+    } catch (e: any) {
+      setError(parseDetail(e?.message) || "Dispatch failed")
+      setBusy(null)
+    }
+  }
+
   // ── Empty / loading / error states ──────────────────────────────────
   if (busy === "loading") {
     return <Stub><span style={{ color: "var(--text-muted)", fontSize: 13 }}>Loading tasks…</span></Stub>
@@ -159,6 +192,7 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
   }
 
   const isFinalized = tasks.every((t) => t.list_status === "finalized")
+  const backlogCount = tasks.filter((t) => t.task_status === "backlog").length
 
   // ── Table ────────────────────────────────────────────────────────────
   return (
@@ -182,10 +216,34 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
             </button>
           )}
           {isFinalized && (
-            <button type="button" onClick={generate} disabled={busy === "generating"} style={secondaryBtn(busy === "generating")}>
-              <RefreshCw size={12} />
-              <span>{busy === "generating" ? "Archiving & regenerating…" : "Archive & Regenerate"}</span>
-            </button>
+            <>
+              <Link
+                to={`/stories/project/${projectId}`}
+                style={{ ...secondaryBtn(false), textDecoration: "none" }}
+              >
+                <ExternalLink size={12} />
+                <span>View Board →</span>
+              </Link>
+              {backlogCount > 0 && (
+                <button
+                  type="button"
+                  onClick={dispatchAllBacklog}
+                  disabled={busy === "dispatching"}
+                  style={primaryBtn(busy === "dispatching")}
+                >
+                  <Rocket size={12} />
+                  <span>
+                    {busy === "dispatching"
+                      ? "Dispatching…"
+                      : `Dispatch All (${backlogCount})`}
+                  </span>
+                </button>
+              )}
+              <button type="button" onClick={generate} disabled={busy === "generating"} style={secondaryBtn(busy === "generating")}>
+                <RefreshCw size={12} />
+                <span>{busy === "generating" ? "Archiving & regenerating…" : "Archive & Regenerate"}</span>
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -282,8 +340,39 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
                     />
                   )}
                 </Td>
-                <Td width={100}>
-                  <Badge>{t.task_status}</Badge>
+                <Td width={isFinalized ? 170 : 100}>
+                  {/* Backlog rows in a finalized list get a Dispatch chip;
+                      already-dispatched rows show a link to /stories/:requestId. */}
+                  {isFinalized && t.task_status === "backlog" && (
+                    <button
+                      type="button"
+                      onClick={() => dispatchOne(t.task_id)}
+                      disabled={dispatchingTaskId === t.task_id}
+                      style={dispatchBtn(dispatchingTaskId === t.task_id)}
+                      title="Dispatch this task — creates a Request that runs the workflow"
+                    >
+                      <Rocket size={10} />
+                      <span>{dispatchingTaskId === t.task_id ? "…" : "Dispatch"}</span>
+                    </button>
+                  )}
+                  {isFinalized && t.task_status !== "backlog" && t.request_id && (
+                    <Link
+                      to={`/stories/${t.request_id}`}
+                      style={{
+                        display: "inline-flex", alignItems: "center", gap: 4,
+                        fontSize: 10, fontFamily: "var(--font-mono)",
+                        color: "var(--accent)", textDecoration: "none",
+                        padding: "2px 6px", borderRadius: 3,
+                        background: "var(--bg-card)", border: "1px solid var(--border)",
+                      }}
+                      title="Open per-request Story Board"
+                    >
+                      {t.task_status} · {t.request_id}
+                    </Link>
+                  )}
+                  {(!isFinalized || (!t.request_id && t.task_status !== "backlog")) && (
+                    <Badge>{t.task_status}</Badge>
+                  )}
                 </Td>
               </tr>
             ))}
@@ -297,7 +386,7 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
           background: "var(--bg-hover)", border: "1px dashed var(--border)",
           borderRadius: "var(--radius)", fontSize: 12, color: "var(--text-muted)",
         }}>
-          Phase C (dispatch) lands next. A "Dispatch" action per task and a project-mode Story Board will appear here.
+          Phase D (chat) lands next. For now, dispatch tasks individually or all at once — each becomes a Request that runs the per-task workflow. Open the Build Board for a live Kanban view.
         </div>
       )}
 
@@ -443,6 +532,19 @@ function secondaryBtn(disabled: boolean): React.CSSProperties {
     cursor: disabled ? "not-allowed" : "pointer",
     whiteSpace: "nowrap", lineHeight: 1, fontFamily: "var(--font)",
     opacity: disabled ? 0.6 : 1,
+  }
+}
+
+function dispatchBtn(disabled: boolean): React.CSSProperties {
+  return {
+    display: "inline-flex", alignItems: "center", gap: 4,
+    padding: "3px 8px", fontSize: 10, fontWeight: 700,
+    background: disabled ? "var(--bg-card)" : "var(--accent-subtle, color-mix(in srgb, var(--accent) 15%, transparent))",
+    color: disabled ? "var(--text-muted)" : "var(--accent)",
+    border: `1px solid var(--accent)`,
+    borderRadius: 3, cursor: disabled ? "wait" : "pointer",
+    whiteSpace: "nowrap", lineHeight: 1, fontFamily: "var(--font-mono)",
+    textTransform: "uppercase", letterSpacing: 0.5,
   }
 }
 
