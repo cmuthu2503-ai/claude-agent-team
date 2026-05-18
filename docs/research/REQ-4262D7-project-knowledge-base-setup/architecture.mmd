@@ -1,0 +1,31 @@
+graph TD
+    A[Project KB Setup] --> B{Existing tooling?}
+    B -->|Atlassian/Jira shop| C[Confluence + Rovo AI]
+    B -->|M365 + Copilot shop| D[SharePoint + OneNote]
+    B -->|Cross-functional team| E[Notion + AI]
+    B -->|Solo / privacy-critical| F[Obsidian + Git]
+
+    C --> G[Information Architecture]
+    D --> G
+    E --> G
+    F --> G
+
+    G --> H[5-8 top-level categories<br/>organized by TASK]
+    H --> I[Max 3 levels deep<br/>3-click rule]
+    I --> J[Article template:<br/>title-as-question, prereqs,<br/>steps, owner, last-reviewed]
+
+    J --> K[Named Curator<br/>one per category]
+    K --> L[Quarterly Review<br/>on calendar]
+
+    L --> M[Seed: 10-20 articles<br/>covering top questions]
+    M --> N[Launch + internal marketing]
+    N --> O{AI agents<br/>consume KB}
+    O --> P[Copilot / Claude / Glean<br/>RAG quality improves]
+    O --> Q[Humans<br/>find answers in <3 clicks]
+
+    L -.->|gap-fill from<br/>Slack questions| M
+
+    style A fill:#4A90E2,color:#fff
+    style G fill:#F5A623,color:#fff
+    style K fill:#D0021B,color:#fff
+    style O fill:#7ED321,color:#fff
