@@ -403,44 +403,25 @@ class SQLiteStateStore(StateStore):
             Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
             self._db = await aiosqlite.connect(self.db_path)
             self._db.row_factory = aiosqlite.Row
-            await self._db.execute("PRAGMA journal_mode=WAL")
+            # DELETE (rollback-journal) mode rather than WAL. Reasoning:
+            # this DB is bind-mounted into the container from the host
+            # so the host supervisor (a separate process) can read +
+            # write the same file. Docker Desktop's bind-mount layer
+            # on Windows breaks WAL's shared-memory mmap — a second
+            # connection (from another process OR even from a separate
+            # in-process aiosqlite instance) fails with "unable to
+            # open database file" while the first connection is alive.
+            # The primary connection ALSO holds a stale read snapshot
+            # for external writes, with no reliable way to advance it.
+            # DELETE mode sidesteps both problems: each query gets a
+            # fresh view of the committed data. Trade-off is that
+            # writers briefly block readers, but at our load (single
+            # backend + supervisor polling every 5s + UI polling every
+            # 5s) the contention is negligible.
+            await self._db.execute("PRAGMA journal_mode=DELETE")
             await self._db.execute("PRAGMA foreign_keys=ON")
-            # Cross-process WAL visibility — without an aggressive
-            # checkpoint, this connection's writes stay in its own
-            # WAL file until the default 1000-page threshold, and
-            # external readers (e.g. the host supervisor doing per-
-            # project deploys) see stale data. ``wal_autocheckpoint=1``
-            # forces the WAL to flush into the main DB after every
-            # commit, so subsequent sqlite3 connections (from other
-            # processes) see fresh data immediately. Tiny perf cost
-            # for the visibility guarantee we need.
-            await self._db.execute("PRAGMA wal_autocheckpoint=1")
         return self._db
 
-    async def _refresh_read_snapshot(self) -> None:
-        """Drop and reopen the aiosqlite connection so the next query
-        starts from a fresh WAL snapshot — picks up writes from OTHER
-        processes (e.g. the host supervisor updating
-        ``projects.deploy_status``).
-
-        Why so aggressive: in WAL mode, a long-lived connection pins
-        a snapshot that only advances on its OWN writes. Neither
-        ``commit()``, ``BEGIN IMMEDIATE; COMMIT;``, nor
-        ``PRAGMA wal_checkpoint`` reliably forces the snapshot to
-        re-read after external writes — they affect the WAL file but
-        not the in-memory frame index this connection holds. The only
-        deterministic fix is to close and reopen the connection.
-
-        Cost: ~1ms per call to reopen. Called from project-read paths
-        that race against the supervisor; not from every query."""
-        if self._db is None:
-            return
-        try:
-            await self._db.close()
-        except Exception:
-            pass
-        self._db = None
-        # Subsequent _get_db() call rebuilds the connection.
 
     async def initialize(self) -> None:
         db = await self._get_db()
@@ -1584,10 +1565,10 @@ class SQLiteStateStore(StateStore):
         return backend_port, frontend_port
 
     async def get_project(self, project_id: str) -> Project | None:
-        # Drop the cached connection so the next query sees the
-        # supervisor's latest write (cross-process WAL visibility).
-        # See _refresh_read_snapshot for why this is needed.
-        await self._refresh_read_snapshot()
+        # Cross-process freshness: handled by DELETE journal mode at
+        # the connection level (see _get_db). No per-call ceremony
+        # required — the next query naturally sees the supervisor's
+        # most recent committed deploy_status write.
         db = await self._get_db()
         async with db.execute(
             "SELECT * FROM projects WHERE project_id = ?", (project_id,)
