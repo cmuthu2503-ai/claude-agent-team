@@ -225,6 +225,15 @@ class BaseAgent(ABC):
     # failed subtask, request is marked failed cleanly.
     _LLM_CALL_TIMEOUT_SECONDS = 180
 
+    # Longer timeout for streaming calls (long-form generators). The
+    # Anthropic SDK refuses non-streaming requests with max_tokens >
+    # ~21 000 because "operations that may take longer than 10 minutes
+    # require streaming." Above _STREAMING_MAX_TOKENS_THRESHOLD we
+    # switch to messages.stream() and grant a 15-minute wall-clock
+    # ceiling — enough headroom for 32K-token outputs.
+    _LLM_STREAMING_TIMEOUT_SECONDS = 900
+    _STREAMING_MAX_TOKENS_THRESHOLD = 16_000
+
     async def _call_anthropic(
         self,
         messages: list[dict],
@@ -237,10 +246,22 @@ class BaseAgent(ABC):
         ``max_tokens`` defaults to 8192 (the safe value for tool-use
         loops where each turn is bounded). Long-form one-shot generators
         (PRD, API spec, tasks) pass a higher value here — Claude Opus
-        4.7 supports up to 32K output tokens."""
+        4.7 supports up to 32K output tokens.
+
+        Above ``_STREAMING_MAX_TOKENS_THRESHOLD`` the call uses
+        ``messages.stream()`` (the SDK refuses non-streaming requests
+        with very high max_tokens because they may exceed the 10-minute
+        cap). The text + tool_calls are collected from the streamed
+        events; the final Message object provides the usage counts.
+        """
         import asyncio as _asyncio
 
         effective_max_tokens = max_tokens if max_tokens is not None else 8192
+        use_streaming = effective_max_tokens > self._STREAMING_MAX_TOKENS_THRESHOLD
+        timeout_seconds = (
+            self._LLM_STREAMING_TIMEOUT_SECONDS
+            if use_streaming else self._LLM_CALL_TIMEOUT_SECONDS
+        )
 
         max_retries = 5
         for attempt in range(max_retries):
@@ -258,13 +279,19 @@ class BaseAgent(ABC):
                     # claude-opus-4-7 supports it; legacy YAML overrides do not.
                     kwargs["inference_geo"] = self._inference_geo
 
-                # Wrap the LLM call in asyncio.wait_for so a hung connection
-                # raises TimeoutError after _LLM_CALL_TIMEOUT_SECONDS instead of
-                # blocking the workflow indefinitely.
-                response = await _asyncio.wait_for(
-                    self._llm_client.messages.create(**kwargs),
-                    timeout=self._LLM_CALL_TIMEOUT_SECONDS,
-                )
+                if use_streaming:
+                    response = await _asyncio.wait_for(
+                        self._stream_messages(kwargs),
+                        timeout=timeout_seconds,
+                    )
+                else:
+                    # Wrap the LLM call in asyncio.wait_for so a hung connection
+                    # raises TimeoutError after _LLM_CALL_TIMEOUT_SECONDS instead of
+                    # blocking the workflow indefinitely.
+                    response = await _asyncio.wait_for(
+                        self._llm_client.messages.create(**kwargs),
+                        timeout=timeout_seconds,
+                    )
 
                 text_parts = []
                 tool_calls = []
@@ -319,6 +346,31 @@ class BaseAgent(ABC):
                 raise
 
         raise RuntimeError(f"Rate limit exceeded after {max_retries} retries")
+
+    async def _stream_messages(self, kwargs: dict[str, Any]) -> Any:
+        """Run a streamed messages.create() call and return a Message-
+        shaped object compatible with the non-streaming response.
+
+        Why streaming: the Anthropic SDK refuses non-streaming requests
+        when ``max_tokens`` is large enough that the response could
+        exceed 10 minutes ("Streaming is required for operations that
+        may take longer than 10 minutes"). The long-form generators
+        (PRD, API spec, tasks) need 32K-token outputs and trip this
+        check; streaming is the supported escape hatch.
+
+        We collect chunks and let the SDK accumulate them; ``await
+        stream.get_final_message()`` returns the same Message shape as
+        ``messages.create()`` (with ``.content``, ``.usage``, etc.) so
+        the caller doesn't need a separate code path."""
+        async with self._llm_client.messages.stream(**kwargs) as stream:
+            # Iterate the stream so the SDK accumulates content blocks
+            # and usage counters. We don't need per-chunk handling here
+            # — the platform's downstream UX is "give me the full
+            # text" not "live token stream". For a streaming UI we'd
+            # forward `event` over a WebSocket inside this loop.
+            async for _event in stream:
+                pass
+            return await stream.get_final_message()
 
     async def _execute_tool(self, tool_name: str, tool_input: dict) -> str:
         if not self._tool_registry:
