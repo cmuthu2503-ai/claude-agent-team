@@ -129,7 +129,11 @@ class BaseAgent(ABC):
             total_input_tokens, total_output_tokens,
         )
 
-    async def single_call(self, prompt: str) -> dict[str, Any]:
+    async def single_call(
+        self,
+        prompt: str,
+        max_tokens: int | None = None,
+    ) -> dict[str, Any]:
         """One-shot LLM call: no tool-use loop, no `inputs` formatting.
 
         Used by Project-driven Build (PDB-05) for generating per-project
@@ -137,6 +141,10 @@ class BaseAgent(ABC):
         applied; `prompt` becomes the single user message; the response is
         returned as `{text, input_tokens, output_tokens, model}` so the
         caller can persist content + cost.
+
+        ``max_tokens`` overrides the default 8192-token cap. Long-form
+        generators (PRD ≥ 60 KB, API spec ≥ 30 KB) need 32 000+ here so
+        the output doesn't get truncated mid-document.
 
         Returns a stub result in mock mode (no LLM client configured) so
         dev environments still exercise the wire-up.
@@ -148,7 +156,11 @@ class BaseAgent(ABC):
                 "output_tokens": 0,
                 "model": self.model,
             }
-        response = await self._call_anthropic(messages=[{"role": "user", "content": prompt}], tool_schemas=[])
+        response = await self._call_anthropic(
+            messages=[{"role": "user", "content": prompt}],
+            tool_schemas=[],
+            max_tokens=max_tokens,
+        )
         return {
             "text": response.get("text", ""),
             "input_tokens": response.get("input_tokens", 0),
@@ -214,17 +226,28 @@ class BaseAgent(ABC):
     _LLM_CALL_TIMEOUT_SECONDS = 180
 
     async def _call_anthropic(
-        self, messages: list[dict], tool_schemas: list[dict]
+        self,
+        messages: list[dict],
+        tool_schemas: list[dict],
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
-        """Call the Messages API on Claude Platform on AWS with retry on rate limits."""
+        """Call the Messages API on Claude Platform on AWS with retry
+        on rate limits.
+
+        ``max_tokens`` defaults to 8192 (the safe value for tool-use
+        loops where each turn is bounded). Long-form one-shot generators
+        (PRD, API spec, tasks) pass a higher value here — Claude Opus
+        4.7 supports up to 32K output tokens."""
         import asyncio as _asyncio
+
+        effective_max_tokens = max_tokens if max_tokens is not None else 8192
 
         max_retries = 5
         for attempt in range(max_retries):
             try:
                 kwargs: dict[str, Any] = {
                     "model": self.model,
-                    "max_tokens": 8192,
+                    "max_tokens": effective_max_tokens,
                     "system": self._build_system_prompt(),
                     "messages": messages,
                 }

@@ -1187,6 +1187,11 @@ async def generate_prd(
             agent_id="prd_specialist",
             prompt=prompt,
             project_artifact_id=new_art.artifact_id,
+            # Atlas-style PRDs run ~60 KB / ~15-25K tokens. The default
+            # 8192-token cap truncates the output mid-document. 32 000
+            # gives healthy headroom on Claude Opus 4.7 without hitting
+            # provider-side limits.
+            max_tokens=32_000,
         )
     except Exception as e:
         # Generation failed — the empty draft row remains, with the failure
@@ -1595,6 +1600,9 @@ async def generate_api_spec(
             agent_id="backend_specialist",
             prompt=prompt,
             project_artifact_id=new_art.artifact_id,
+            # API specs run 30-60 KB (OpenAPI YAML + narrative). Same
+            # rationale as the PRD path — 8192-token default truncates.
+            max_tokens=32_000,
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"API spec generation failed: {e}")
@@ -2145,6 +2153,11 @@ async def generate_tasks(
             agent_id="user_story_author",
             prompt=prompt,
             project_artifact_id=None,  # tasks aren't an artifact row; cost is unattributed
+            # The phased task list with multi-line descriptions runs
+            # 25-50 KB (15-40 tasks × 4-8 sub-tasks). Default 8192 cuts
+            # off around task 10 — easy to miss because the JSON parser
+            # silently truncates.
+            max_tokens=32_000,
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Task generation failed: {e}")

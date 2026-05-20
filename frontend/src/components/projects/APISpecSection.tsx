@@ -21,7 +21,7 @@ import {
   FileText, Sparkles, ChevronRight, ChevronDown, CheckCircle2,
 } from "lucide-react"
 import { api } from "../../lib/api"
-import { MarkdownRenderer } from "../markdown/MarkdownRenderer"
+import { MarkdownRenderer } from "../ui/MarkdownRenderer"
 
 interface APISpec {
   artifact_id: string
