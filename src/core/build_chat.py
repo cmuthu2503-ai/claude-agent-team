@@ -158,8 +158,21 @@ class BuildTools:
         if task is None or task.project_id != self.project_id:
             return json.dumps({"error": f"Task {task_id!r} not found in this project."})
         if task.list_status != ArtifactStatus.FINALIZED:
+            # !s on the StrEnum yields the plain "draft" / "archived"
+            # value; bare !r would render the Python repr
+            # ("<ArtifactStatus.DRAFT: 'draft'>") which leaks internals
+            # into the chat surface. Same applies to task_id — quoted
+            # bare value reads cleaner than a Python string repr.
             return json.dumps({
-                "error": f"Task {task_id!r} is in a {task.list_status!r} list — only finalized tasks can be dispatched.",
+                "error": (
+                    f"Task '{task_id}' is in a {task.list_status} list — only "
+                    f"finalized tasks can be dispatched. Ask the user to click "
+                    f"'Finalize Tasks' in the task list panel first; do NOT "
+                    f"retry dispatch_task on other tasks in the same list — "
+                    f"they will all fail the same way."
+                ),
+                "list_status": str(task.list_status),
+                "remedy": "finalize_task_list",
             })
         # Idempotency (matches the BLD-004 contract on the dispatch route).
         if task.task_status != TaskStatus.BACKLOG and task.request_id:
@@ -300,8 +313,20 @@ class BuildTools:
             if tool_name == "dispatch_task":
                 raw = await self.dispatch_task(tool_input.get("task_id", ""))
                 parsed = json.loads(raw)
+                task_id = tool_input.get("task_id", "") or parsed.get("task_id", "")
                 if parsed.get("error"):
-                    summary = f"❌ Dispatch failed: {parsed['error']}"
+                    # Special-case the "list still in draft" failure with a
+                    # tight, readable chip. The verbose error+remedy stays
+                    # in the JSON for the agent to read.
+                    if parsed.get("remedy") == "finalize_task_list":
+                        summary = f"❌ {task_id} — list in draft (finalize first)"
+                    else:
+                        # Cap the chip text length so a long error doesn't
+                        # blow up the chat layout.
+                        msg = parsed["error"]
+                        if len(msg) > 90:
+                            msg = msg[:87] + "…"
+                        summary = f"❌ Dispatch failed: {msg}"
                 elif parsed.get("status") == "already_dispatched":
                     summary = f"ℹ️ {parsed['task_id']} already dispatched → {parsed['request_id']}"
                 else:
