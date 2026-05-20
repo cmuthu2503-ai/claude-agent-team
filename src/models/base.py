@@ -355,6 +355,10 @@ class Project(BaseModel):
 class ArtifactKind(StrEnum):
     BRIEF = "brief"
     PRD = "prd"
+    # Generated after the PRD is finalized. Enterprise-grade REST API
+    # specification (OpenAPI 3.1 + narrative). Same versioning /
+    # draft-finalized lifecycle as PRD.
+    API_SPEC = "api_spec"
 
 
 class ArtifactStatus(StrEnum):

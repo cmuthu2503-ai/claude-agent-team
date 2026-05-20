@@ -15,6 +15,7 @@ import json
 import re
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal
 
 import structlog
@@ -46,6 +47,7 @@ from src.core.project_workspace import (
     delete_host_file,
     project_root_dir,
     render_tasks_markdown,
+    write_finalized_api_spec,
     write_finalized_prd,
     write_finalized_tasks,
 )
@@ -62,6 +64,35 @@ from src.models.base import (
 )
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
+
+
+# ─────────────────────────────── Reference-format loader ──────────────────
+# PRD / Tasks generation prompts include a literal copy of a sample
+# document as "here's the format I want". Those samples live in
+# docs/reference-formats/ inside the repo so they're version-controlled
+# alongside the prompts but editable WITHOUT redeploying — the next
+# generate-PRD / generate-tasks call reads the latest file content.
+
+_REFERENCE_FORMATS_DIR = Path(__file__).resolve().parents[3] / "docs" / "reference-formats"
+
+
+def _load_reference_format(name: str, fallback: str = "") -> str:
+    """Read a reference-format markdown file from docs/reference-formats/.
+
+    ``name`` is the file basename (e.g. 'prd-template.md'). Returns the
+    file contents as a string, or ``fallback`` if the file is missing /
+    unreadable so a single bad file doesn't kill generation."""
+    try:
+        path = _REFERENCE_FORMATS_DIR / name
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        logger.warning("reference_format.missing path=%s", _REFERENCE_FORMATS_DIR / name)
+        return fallback
+    except Exception as e:  # noqa: BLE001 — soft-fail; generation should still work
+        logger.warning(
+            "reference_format.read_failed name=%s error=%s", name, e,
+        )
+        return fallback
 
 
 # ─────────────────────────────── Request bodies ───────────────────────────
@@ -872,7 +903,13 @@ class PRDGenerateBody(BaseModel):
 
 _BRIEF_MIN = 50
 _BRIEF_MAX = 4000
-_PRD_MAX = 50_000
+# Cap on PRD markdown size. Raised from 50K to 100K because the
+# Atlas-reference-style prompts now produce structured, detailed PRDs
+# (Document Information, numbered sections, ID-tagged Functional
+# Requirements tables, ASCII UI mockups, ERDs) that legitimately run
+# to 60-90 KB. Hitting 100K means the agent went off-spec or duplicated
+# content; that's the right time to reject.
+_PRD_MAX = 100_000
 _REVIEW_COMMENTS_MAX = 2000  # 2000 chars caps the regen prompt overhead
 
 
@@ -1065,21 +1102,84 @@ async def generate_prd(
             f"draft. No commentary before or after."
         )
     else:
+        # The prompt below loads docs/reference-formats/prd-template.md
+        # at request time. Anyone can edit that file to refine the
+        # PRD format — no code change required. The template lives
+        # in the repo so the format is version-controlled alongside
+        # the prompt that uses it.
+        today_iso = datetime.utcnow().strftime("%Y-%m-%d")
+        template_md = _load_reference_format("prd-template.md")
+        if template_md:
+            template_block = (
+                "## Reference format\n"
+                "The following document is a complete real-world example PRD.\n"
+                "Your output MUST match its structure section-for-section —\n"
+                "Document Information table, numbered sections, ID-tagged\n"
+                "Functional Requirements tables (e.g. CALL-001), ASCII UI\n"
+                "mockups, ERD + per-table column definitions when persistence\n"
+                "is in scope, Future Enhancements table, Success Metrics\n"
+                "table, Appendix with Glossary and Revision History. Copy\n"
+                "the STRUCTURE (section names, table columns, mockup style),\n"
+                "not the CONTENT. Your project is different; the layout is\n"
+                "the same.\n\n"
+                "<reference_prd>\n"
+                f"{template_md}\n"
+                "</reference_prd>\n\n"
+            )
+        else:
+            # Fallback if the reference file is missing — a tight
+            # structural outline so generation still works.
+            template_block = (
+                "## Required structure\n"
+                "Produce sections in order: # Title + tagline · Document\n"
+                "Information table · ## 1. Executive Summary (Vision /\n"
+                "Problem / Target Users) · ## 2. Goals (G1..Gn) · ## 3.\n"
+                "Product Overview (Core Features + ASCII architecture) ·\n"
+                "## 4. Detailed Feature Requirements (per feature: Overview\n"
+                "+ ID-tagged Functional Requirements table + ASCII UI\n"
+                "mockups) · ## 5. Non-Functional Requirements · ## 6. User\n"
+                "Flows · ## 7. UI Design · ## 8. Technical Considerations\n"
+                "(Tech Stack table + ERD + table definitions + Integration\n"
+                "Points + Constraints) · ## 9. Future Enhancements · ## 10.\n"
+                "Success Metrics · ## 11. Appendix (Glossary, Open\n"
+                "Questions, Revision History).\n\n"
+            )
         prompt = (
-            f"You are drafting a Product Requirements Document for a project named "
-            f"{project.name!r}.\n\n"
+            f"You are drafting a Product Requirements Document for the project "
+            f"named {project.name!r}.\n\n"
             f"Project description: {project.description or '(none provided)'}\n\n"
             f"Project brief from the lead:\n"
             f"---\n{brief.content}\n---\n\n"
-            f"Write a complete PRD in markdown following the existing project "
-            f"convention: top-level title, Document Information table, Table of "
-            f"Contents, numbered sections (Context, Executive Summary, Goals & "
-            f"Non-Goals, User Stories, Functional Requirements with REQ-XXX IDs, "
-            f"Data Model, API Surface, UI Design, Permissions, Edge Cases, Out of "
-            f"Scope, Open Questions, Implementation Phases, Revision History). "
-            f"Be specific and avoid placeholder text. The user will edit before "
-            f"finalizing — so it's OK to lean opinionated. Output the markdown "
-            f"only, no commentary before or after."
+            "## Output rules\n"
+            "- Write a SINGLE markdown document. No prose before or after\n"
+            "  the markdown. No code fences around the document itself.\n"
+            "- Be SPECIFIC. Every requirement is actionable and testable.\n"
+            "  If a detail is genuinely unknown, write `TBD` and flag it\n"
+            "  under Open Questions in the Appendix.\n"
+            "- Be DETAILED but CRISP — no filler sentences, no apologies,\n"
+            "  no 'this section will cover…' meta-prose. Every paragraph\n"
+            "  carries information.\n"
+            "- Tone: opinionated, decisive, technical. The reader is a\n"
+            "  technical lead who can implement directly from this doc.\n"
+            "- Today's date is "
+            f"{today_iso} — use it in the Document Information table\n"
+            "  (Created Date and Last Updated) and in the Revision History\n"
+            "  v1.0 row.\n"
+            f"- Use {project.name!r} as the project name in the title.\n\n"
+            f"{template_block}"
+            "## Style guidance for this specific project\n"
+            "- Skip sections 7 (UI Design) and 8.2 (Database Design) if\n"
+            "  the project is clearly a backend service / CLI / library\n"
+            "  with no user-facing UI or data persistence. State the\n"
+            "  skip explicitly:  `## 7. UI Design — Not applicable (CLI\n"
+            "  tool).`  so the numbering stays consistent.\n"
+            "- The brief is the ground truth for product intent. Don't\n"
+            "  invent goals not implied by it; do flesh out the natural\n"
+            "  consequences and edge cases.\n"
+            "- Functional Requirements tables are the most important\n"
+            "  artifact downstream — the task list is built from them.\n"
+            "  Make IDs stable and requirements unambiguous.\n\n"
+            "Output the markdown only, no commentary before or after."
         )
 
     try:
@@ -1304,6 +1404,329 @@ async def _push_finalized_doc_to_repo(
         return {"ok": False, "skipped": "unexpected_error", "error": str(e)}
 
 
+# ─────────────────────── Project-driven Build: API Specification ─────────────
+# Generated AFTER the PRD is finalized. The agent (backend_specialist)
+# turns the PRD's Functional Requirements + Database Design into an
+# enterprise-grade REST API spec following the format in
+# docs/reference-formats/api-spec-template.md.
+#
+# Lifecycle mirrors the PRD: draft → finalize → archive. On finalize
+# the markdown is written to C:/ai-projects/<Project>/docs/api-spec.md
+# and pushed to the project's GitHub repo.
+
+
+_API_SPEC_MAX = 200_000  # OpenAPI YAML + narrative — generous, larger than PRD
+
+
+class APISpecGenerateBody(BaseModel):
+    # Optional reviewer feedback to apply to the PREVIOUS version
+    # rather than starting from scratch. Same shape as PRDGenerateBody.
+    review_comments: str | None = None
+
+
+class APISpecPatchBody(BaseModel):
+    content: str | None = None
+    status: Literal["finalized"] | None = None
+
+
+@router.get("/{project_id}/api-spec")
+async def get_api_spec(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Return the latest API spec artifact (any status). 404 if none yet."""
+    state = request.app.state.state_store
+    await _require_project(state, project_id)
+    art = await state.get_artifact(project_id, ArtifactKind.API_SPEC)
+    if art is None:
+        raise HTTPException(status_code=404, detail="No API spec yet.")
+    return {"data": _artifact_to_dict(art), "meta": None, "error": None}
+
+
+@router.post("/{project_id}/api-spec/generate", status_code=201)
+async def generate_api_spec(
+    project_id: str,
+    request: Request,
+    body: APISpecGenerateBody | None = None,
+    user: dict = Depends(get_current_user),
+):
+    """Run `backend_specialist` (single-shot) on the finalized PRD to
+    produce an enterprise-grade REST API specification. Creates a NEW
+    artifact version each time — previous versions become accessible
+    through ``list_artifacts`` but aren't shown in the default view.
+
+    When ``body.review_comments`` is provided AND a previous API spec
+    exists, the agent REVISES the previous version using the comments;
+    otherwise drafts a fresh spec from the PRD."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    project = await _require_project(state, project_id)
+
+    prd = await state.get_artifact(project_id, ArtifactKind.PRD)
+    if prd is None or prd.status != ArtifactStatus.FINALIZED:
+        raise HTTPException(
+            status_code=409,
+            detail="Finalize the PRD before generating an API spec.",
+        )
+
+    review_comments = (body.review_comments or "").strip() if body else ""
+
+    # Get the most recent API spec to learn its version (for revisions
+    # AND for the version number we mint here).
+    existing = await state.list_artifacts(project_id, ArtifactKind.API_SPEC)
+    existing.sort(key=lambda a: a.version, reverse=True)
+    previous_spec = existing[0] if existing else None
+    next_version = (previous_spec.version + 1) if previous_spec else 1
+
+    new_art = ProjectArtifact(
+        artifact_id=f"art-{uuid.uuid4().hex[:12]}",
+        project_id=project_id,
+        kind=ArtifactKind.API_SPEC,
+        version=next_version,
+        status=ArtifactStatus.DRAFT,
+        content="",
+        created_by=user.get("user_id"),
+        review_input=review_comments or None,
+    )
+    await state.create_artifact(new_art)
+
+    executor = getattr(request.app.state, "agent_executor", None)
+    if executor is None:
+        raise HTTPException(status_code=503, detail="Agent executor unavailable.")
+
+    revising = (
+        bool(review_comments)
+        and previous_spec is not None
+        and previous_spec.content.strip()
+    )
+    if revising:
+        prompt = (
+            f"You are REVISING an existing API specification for the project "
+            f"{project.name!r}. DO NOT start from scratch — apply the "
+            f"reviewer's feedback to the existing draft and keep the rest "
+            f"intact.\n\n"
+            f"## PRD (for reference)\n{prd.content}\n\n"
+            f"## Current API spec (revise this)\n{previous_spec.content}\n\n"
+            f"## Reviewer comments to address\n{review_comments}\n\n"
+            f"Output the FULL revised API spec in markdown — same structure "
+            f"and sections as before. Apply the comments precisely; keep "
+            f"unaffected sections word-for-word identical. No commentary "
+            f"before or after."
+        )
+    else:
+        # Load the enterprise-grade reference template at request time.
+        template_md = _load_reference_format("api-spec-template.md")
+        if template_md:
+            template_block = (
+                "## Reference format\n"
+                "The following is a complete real-world example API spec.\n"
+                "Your output MUST match its structure section-for-section.\n"
+                "Copy the STRUCTURE (section names, table columns, response\n"
+                "envelope, error format, OpenAPI shape) — not the CONTENT.\n"
+                "Your project is different; the layout and conventions are\n"
+                "the same.\n\n"
+                "<reference_api_spec>\n"
+                f"{template_md}\n"
+                "</reference_api_spec>\n\n"
+            )
+        else:
+            template_block = (
+                "## Required structure\n"
+                "1. Document Information table · 2. Overview · 3. Conventions\n"
+                "(Base URL, Auth, Headers, Envelope, RFC 7807 errors,\n"
+                "Pagination, Rate limits, Idempotency, ETag, Webhooks) ·\n"
+                "4. Resources · 5. Endpoints (per endpoint: method+path,\n"
+                "auth, params, request body, response 2xx + errors,\n"
+                "examples) · 6. Data Models · 7. Status Code Reference ·\n"
+                "8. Versioning & Deprecation · 9. Security · 10. OpenAPI\n"
+                "3.1 YAML block · 11. Changelog · 12. Appendix.\n\n"
+            )
+        today_iso = datetime.utcnow().strftime("%Y-%m-%d")
+        prompt = (
+            f"You are drafting an enterprise-grade REST API specification "
+            f"for the project named {project.name!r}.\n\n"
+            f"Project description: {project.description or '(none provided)'}\n\n"
+            f"## PRD (source of truth for what the API must support)\n"
+            f"---\n{prd.content}\n---\n\n"
+            "## Output rules\n"
+            "- Write a SINGLE markdown document. No prose before or after.\n"
+            "  No code fences around the document itself.\n"
+            "- Be SPECIFIC. Every endpoint has a path, method, auth\n"
+            "  requirement, request schema (where applicable), response\n"
+            "  examples for 2xx AND the 4xx/5xx the endpoint actually emits.\n"
+            "- Be DETAILED but CRISP. No filler. Every paragraph carries\n"
+            "  information.\n"
+            "- DO include §9 (OpenAPI Specification) — the YAML block is\n"
+            "  the machine-readable contract. Cover at minimum the\n"
+            "  schemas, security schemes, and a few paths showing the\n"
+            "  full pattern. The narrative §4 (Endpoints) can carry the\n"
+            "  rest without exhaustive YAML duplication.\n"
+            "- Tone: opinionated, decisive, technical. The reader is a\n"
+            "  senior backend engineer who will implement directly.\n"
+            "- Today's date is "
+            f"{today_iso} — use it in the Document Information table\n"
+            "  and the Changelog v1.0 row.\n"
+            f"- Use {project.name!r} as the project name.\n\n"
+            "## Industry standards to follow\n"
+            "- REST resource modeling (nouns + HTTP verbs)\n"
+            "- OpenAPI 3.1 for the machine-readable contract\n"
+            "- RFC 7807 (`application/problem+json`) for error responses\n"
+            "- RFC 8594 (`Deprecation` / `Sunset` headers) for deprecation\n"
+            "- Cursor-based pagination (NOT offset/page) for scalability\n"
+            "- `X-Request-ID` trace propagation\n"
+            "- Per-token rate limits with `X-RateLimit-*` + `Retry-After`\n"
+            "- Idempotency-Key for non-idempotent POSTs\n"
+            "- ETag + If-None-Match for resource caching\n"
+            "- HMAC-signed webhooks with replay protection\n"
+            "- Path-prefix versioning (/v1)\n"
+            "- HSTS, TLS 1.2+, no PII in logs\n"
+            "- OWASP API Top 10 alignment\n\n"
+            f"{template_block}"
+            "Now produce the full API spec. Output ONLY the markdown — no\n"
+            "commentary before or after."
+        )
+
+    try:
+        result = await executor.single_agent_call(
+            agent_id="backend_specialist",
+            prompt=prompt,
+            project_artifact_id=new_art.artifact_id,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"API spec generation failed: {e}")
+
+    text = (result.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=502, detail="Agent returned an empty API spec.")
+    if len(text) > _API_SPEC_MAX:
+        text = text[:_API_SPEC_MAX]
+
+    await state.update_artifact_content(new_art.artifact_id, text)
+    saved = await state.get_artifact(project_id, ArtifactKind.API_SPEC)
+
+    events = request.app.state.events
+    await events.emit("project.api_spec_generated", {
+        "project_id": project_id,
+        "artifact_id": saved.artifact_id,
+        "version": saved.version,
+    })
+    return {"data": _artifact_to_dict(saved), "meta": None, "error": None}
+
+
+@router.patch("/{project_id}/api-spec")
+async def patch_api_spec(
+    project_id: str,
+    body: APISpecPatchBody,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Either save-draft (`content`) or finalize (`status='finalized'`).
+
+    On finalize, also writes the markdown to
+    ``C:/ai-projects/<ProjectName>/docs/api-spec.md`` and pushes it to
+    the project's GitHub repo. Both side effects are soft-fail."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    project = await _require_project(state, project_id)
+
+    art = await state.get_artifact(project_id, ArtifactKind.API_SPEC)
+    if art is None:
+        raise HTTPException(status_code=404, detail="No API spec to update.")
+
+    if body.content is not None:
+        content = body.content
+        if len(content) > _API_SPEC_MAX:
+            raise HTTPException(
+                status_code=400,
+                detail=f"API spec must be at most {_API_SPEC_MAX} characters "
+                       f"(got {len(content)}).",
+            )
+        await state.update_artifact_content(art.artifact_id, content)
+
+    meta: dict[str, Any] = {}
+
+    if body.status == "finalized":
+        art = await state.finalize_artifact(
+            art.artifact_id, finalized_by=user.get("user_id"),
+        )
+        events = request.app.state.events
+        await events.emit("project.api_spec_finalized", {
+            "project_id": project_id,
+            "artifact_id": art.artifact_id,
+            "version": art.version,
+        })
+
+        host_result = write_finalized_api_spec(project.name, art.content)
+        meta["host_write"] = host_result.as_dict()
+        if not host_result.ok:
+            logger.warning(
+                "api_spec_finalize.host_write_failed",
+                project_id=project_id, project_name=project.name,
+                error=host_result.error,
+            )
+
+        meta["github_push"] = await _push_finalized_doc_to_repo(
+            project=project,
+            repo_path="docs/api-spec.md",
+            content=art.content,
+            commit_subject=f"docs: finalize API spec v{art.version}",
+            descriptor=f"API spec v{art.version}",
+            actor=user.get("username") or user.get("user_id") or "unknown",
+        )
+    else:
+        art = await state.get_artifact(project_id, ArtifactKind.API_SPEC)
+
+    return {"data": _artifact_to_dict(art), "meta": meta or None, "error": None}
+
+
+@router.delete("/{project_id}/api-spec")
+async def delete_api_spec(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Hard-delete the API spec for this project — all versions. Also
+    removes the host-side ``docs/api-spec.md`` file. Tasks already
+    generated against this spec are NOT touched (no FK)."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    project = await _require_project(state, project_id)
+
+    deleted = await state.delete_artifacts(project_id, ArtifactKind.API_SPEC)
+    host_result = delete_host_file(project.name, "api-spec.md")
+
+    events = request.app.state.events
+    await events.emit("project.api_spec_deleted", {
+        "project_id": project_id,
+        "deleted_versions": deleted,
+        "by": user.get("user_id"),
+    })
+
+    logger.info(
+        "api_spec.deleted",
+        project_id=project_id, project_name=project.name,
+        deleted_versions=deleted, host_ok=host_result.ok,
+    )
+    return {
+        "data": None,
+        "meta": {
+            "deleted_versions": deleted,
+            "host_delete": host_result.as_dict(),
+        },
+        "error": None,
+    }
+
+
 # ─────────────────────── Project-driven Build: Task List ─────────────────────
 # PDB-16 / PDB-17 / PDB-18. Generates a structured task list from the finalized
 # PRD via user_story_author (single-shot, no workflow). Output is parsed into
@@ -1435,9 +1858,15 @@ def _normalize_task_dicts(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if agent and str(agent) not in _KNOWN_AGENTS:
             # keep the value, just don't validate strictly — see _KNOWN_AGENTS comment
             agent = str(agent)
+        # Generous caps — the Atlas-reference style prompts emit
+        # "Phase N: Theme — Task" titles (often 80-130 chars) and
+        # multi-line descriptions with `**Rules**:` + `**Sub-tasks:**`
+        # blocks that easily run to 1-3 KB. The DB columns are TEXT
+        # with no length constraint; these caps just keep a runaway
+        # response from blowing up the row.
         out.append({
-            "title": title[:200],
-            "description": str(item.get("description") or "")[:2000],
+            "title": title[:300],
+            "description": str(item.get("description") or "")[:6000],
             "task_type": tt,
             "priority": pr,
             "estimated_agent": agent,
@@ -1499,6 +1928,17 @@ async def generate_tasks(
             status_code=409,
             detail="Finalize the PRD before generating a task list.",
         )
+    # Optional but highly useful — when an API spec has been finalized,
+    # we include it in the Tasks prompt so the generated sub-tasks
+    # reference REAL endpoints (`POST /api/v1/users`, schemas, etc.)
+    # instead of inventing them. Tasks generation does NOT require an
+    # API spec — projects without one still work.
+    api_spec = await state.get_artifact(project_id, ArtifactKind.API_SPEC)
+    api_spec_content = (
+        api_spec.content
+        if api_spec is not None and api_spec.status == ArtifactStatus.FINALIZED
+        else ""
+    )
 
     review_comments = ((body.review_comments if body else None) or "").strip()
     if len(review_comments) > _REVIEW_COMMENTS_MAX:
@@ -1585,6 +2025,10 @@ async def generate_tasks(
             "feedback to the existing list and keep the rest intact.\n\n"
             "## PRD (for reference)\n"
             f"{prd.content}\n\n"
+            + (
+                f"## API Specification (for reference)\n{api_spec_content}\n\n"
+                if api_spec_content else ""
+            ) +
             "## Current task list (revise this)\n"
             "```json\n"
             f"{prev_json}\n"
@@ -1599,30 +2043,101 @@ async def generate_tasks(
             "to the input. No prose before or after."
         )
     else:
+        # The prompt below loads docs/reference-formats/tasks-template.md
+        # at request time. Anyone can edit that file to refine the
+        # task-list format; the next generate-tasks call picks it up.
+        template_md = _load_reference_format("tasks-template.md")
+        if template_md:
+            template_block = (
+                "## Reference format\n"
+                "The following document is a complete real-world example\n"
+                "task list for a different project. Study its structure:\n"
+                "phases organized as `### Phase N: <Theme>`; each task\n"
+                "rendered as `#### Task N: <Title>` with a Status line,\n"
+                "a Rules line, and a Sub-task table.\n\n"
+                "Your output is NOT this markdown — it's a flat JSON array.\n"
+                "BUT every JSON task must round-trip into the same visual\n"
+                "structure when rendered: phase prefix in the title, Rules\n"
+                "+ Sub-tasks in the description. Copy the LEVEL OF DETAIL,\n"
+                "phase grouping, and sub-task specificity — not the\n"
+                "content (your project is different).\n\n"
+                "<reference_task_list>\n"
+                f"{template_md}\n"
+                "</reference_task_list>\n\n"
+            )
+        else:
+            template_block = (
+                "## Required level of detail\n"
+                "Phases organize tasks (e.g. 'Phase 1: Foundation'). Each\n"
+                "task has a Rules reference, a one-paragraph summary, and\n"
+                "a Sub-task table. Sub-tasks name concrete files, commands,\n"
+                "endpoints. Last sub-task is always a Test step.\n\n"
+            )
+        # When the project has a finalized API spec, give it to the
+        # agent so generated sub-tasks reference concrete endpoints /
+        # schemas instead of inventing them.
+        api_spec_block = (
+            f"## API Specification (use as the source of truth for endpoints)\n"
+            f"{api_spec_content}\n\n"
+        ) if api_spec_content else ""
         prompt = (
-            "You are breaking a finalized PRD into a flat list of buildable tasks "
-            "for an AI agent team to execute.\n\n"
+            "You are breaking a finalized PRD into a DETAILED, phase-organized "
+            "task list that an AI agent team will execute.\n\n"
             "## PRD\n"
             f"{prd.content}\n\n"
+            f"{api_spec_block}"
+            f"{template_block}"
             "## Output format\n"
-            "Emit a single fenced ```json``` block containing an ARRAY of task "
-            "objects. No prose before or after. Each object must have these keys:\n"
-            "  - title: string (under 100 chars, imperative — \"Build X\", \"Add Y\")\n"
-            "  - description: string (1-3 sentences describing what done looks like)\n"
-            "  - task_type: one of feature_request, bug_report, doc_request, demo_request, research_request, content_request\n"
-            "  - priority: one of low, medium, high\n"
-            "  - estimated_agent: one of backend_specialist, frontend_specialist, tester_specialist, code_reviewer, devops_specialist, content_creator, research_specialist (best fit; or null if uncertain)\n\n"
-            "Aim for 5-15 tasks. Each task should be independently dispatchable "
-            "to a per-task workflow (the user will dispatch them via chat). "
-            "Order tasks so an earlier task isn't blocked by a later one when "
-            "possible. Do NOT include cross-task dependencies in v1.\n\n"
-            "Example:\n"
-            "```json\n"
-            '[\n'
-            '  {"title": "Add user table migration", "description": "Create users table with email, password_hash, role columns.", "task_type": "feature_request", "priority": "high", "estimated_agent": "backend_specialist"},\n'
-            '  {"title": "Build login form", "description": "Email + password fields, calls POST /auth/login.", "task_type": "feature_request", "priority": "high", "estimated_agent": "frontend_specialist"}\n'
-            ']\n'
-            "```"
+            "Emit a SINGLE fenced ```json``` block containing an ARRAY of "
+            "task objects. No prose before or after. Each object has exactly "
+            "these keys:\n\n"
+            "  - title: string. Format MUST be:\n"
+            "       \"Phase <N>: <Phase theme> — <Task title>\"\n"
+            "     The phase prefix lets the renderer group tasks. Examples:\n"
+            "       \"Phase 1: Foundation — Create project structure\"\n"
+            "       \"Phase 1: Foundation — Configure docker-compose\"\n"
+            "       \"Phase 2: Database & Core Services — Define Drizzle schema\"\n"
+            "     Phases numbered from 1. Use 4-12 phases for a typical\n"
+            "     full-stack app; pick coherent themes (Foundation, Auth,\n"
+            "     Data Layer, Core Feature A, Core Feature B, Polish, QA).\n\n"
+            "  - description: MULTI-LINE markdown string. Required structure:\n\n"
+            "       **Rules**: <which rules / coding-standards apply, e.g.\n"
+            "         '/rules/ui.md' or 'see docs/style-guide.md', or 'N/A'>\n\n"
+            "       <One-paragraph summary of what 'done' looks like.>\n\n"
+            "       **Sub-tasks:**\n"
+            "       - <Sub-task 1 — specific action, files to touch, expected outcome>\n"
+            "       - <Sub-task 2 — …>\n"
+            "       - <Sub-task 3 — …>\n"
+            "       - **Test**: <what to verify to call the task done>\n\n"
+            "     Aim for 4-8 sub-tasks per task. The last one is ALWAYS a\n"
+            "     Test sub-task starting with `**Test**:`. Each sub-task is\n"
+            "     concrete: name the function / file / command / URL where\n"
+            "     possible. Avoid 'implement feature' — say 'create\n"
+            "     src/routes/foo.py with GET /foo returning {…}'.\n\n"
+            "  - task_type: one of feature_request, bug_report, doc_request,\n"
+            "     demo_request, research_request, content_request.\n\n"
+            "  - priority: one of low, medium, high. Foundation-layer tasks\n"
+            "     are typically high; polish tasks are typically low.\n\n"
+            "  - estimated_agent: one of backend_specialist, frontend_specialist,\n"
+            "     tester_specialist, code_reviewer, devops_specialist,\n"
+            "     content_creator, research_specialist. Pick the best fit, or\n"
+            "     null if purely setup / cross-cutting.\n\n"
+            "## Scale guidance\n"
+            "- Aim for 15-40 tasks total. A trivial CLI tool may have 10;\n"
+            "  a full-stack app with auth + multiple features may have 35.\n"
+            "- Within a phase, list 2-6 tasks.\n"
+            "- Order tasks so earlier ones don't block later ones when possible.\n\n"
+            "## Style guidance\n"
+            "- Be SPECIFIC. Mention concrete file paths, function names, env\n"
+            "  vars, API endpoints, SQL tables — derived from the PRD's\n"
+            "  Functional Requirements + Database Design.\n"
+            "- Don't paraphrase the PRD as tasks — translate REQ-XXX IDs into\n"
+            "  buildable units. Reference REQ-IDs in sub-tasks where helpful.\n"
+            "- Use imperative engineering verbs ('create', 'wire', 'register',\n"
+            "  'render', 'validate', 'migrate', 'mock', 'instrument').\n"
+            "- No placeholder text. If unknown, write `TBD — <one-line reason>`.\n\n"
+            "Now produce the full JSON array for the PRD above. Output ONLY\n"
+            "the fenced JSON block — no commentary."
         )
 
     try:

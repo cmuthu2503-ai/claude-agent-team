@@ -146,6 +146,13 @@ def write_finalized_tasks(project_name: str, content: str) -> HostWriteResult:
     return _write_markdown(project_name, "tasks.md", content)
 
 
+def write_finalized_api_spec(project_name: str, content: str) -> HostWriteResult:
+    """PM-finalize — drop the API specification markdown at
+    ``<host>/<ProjectName>/docs/api-spec.md``. Same soft-fail
+    semantics as the PRD / tasks writers."""
+    return _write_markdown(project_name, "api-spec.md", content)
+
+
 def delete_host_file(project_name: str, filename: str) -> HostWriteResult:
     """Remove ``<host>/<ProjectName>/docs/<filename>``. Mirrors the
     write helpers — soft-fail with a structured result. No-op (still
@@ -172,25 +179,63 @@ def delete_host_file(project_name: str, filename: str) -> HostWriteResult:
 
 # ── Task-list → markdown renderer ──────────────────────────────────────
 # ``project_tasks`` is structured (not a markdown blob), so we render it
-# to a human-readable checklist. Format mirrors ``docs/task-list.md``:
+# to a detailed markdown document mirroring the Atlas-Advisory tasks
+# reference at C:/ai-projects/tech-advisory-v1/references/tasks-atlas-advisory.md.
 #
-#   # Tasks — <Project Name>
-#   _List version 3 · finalized at 2026-05-19_
+# Structure produced:
 #
-#   ## Phase 1: Foundation
-#   - [ ] T-001 · Build login form (high · feature_request · frontend_developer)
-#         Description text wrapped here if multi-line.
+#   # <Project> — Implementation Tasks
+#   > Version, generated date, status
 #
-# Phases are grouped from the task's title prefix when present
-# ("Phase 1: ", "P1: ", etc.). Tasks without a matching prefix go under
-# an "Uncategorized" section so nothing is lost.
+#   ## Table of Contents
+#   ## Progress Summary  (table by phase)
+#   ## Implementation Phases
+#
+#     ### Phase 1: Foundation
+#     #### Task 1: Create project skeleton  · `T-abc12345`
+#     **Status**: Backlog · **Priority**: high · **Agent**: devops_specialist
+#
+#     <description body, including "**Rules**" line + "**Sub-tasks**" bullets
+#      as emitted by the user_story_author prompt>
+#
+# Phase grouping picks up the "Phase N: <theme>" prefix in each task's
+# title (which the prompt asks the agent to produce). Tasks without
+# a matching prefix go under "Uncategorized" so nothing is lost.
 
 
 _PHASE_PREFIX_RE = (
-    # Captures: (phase_label, rest_of_title). Tolerates "Phase 1:",
-    # "P1:", "Phase 1 -", "1.", and a trailing space.
-    r"^\s*(?:(?P<phase>(?:Phase\s+)?P?\d+(?:[.:\-]|\s+:))\s*)?(?P<rest>.*\S)\s*$"
+    # Captures: (phase_label, rest_of_title). Examples that match:
+    #   "Phase 1: Foundation — Build X" → phase="Phase 1: Foundation",
+    #                                     rest ="Build X"
+    #   "Phase 2: Database — Define schema" → similar
+    #   "P3: Deploy — Push image" → phase="P3: Deploy", rest="Push image"
+    # The em-dash "—" or regular hyphen "-" separates phase from task.
+    r"^\s*(?P<phase>(?:Phase\s+)?P?\d+:\s*[^—\-]+?)\s*[—\-]\s*(?P<rest>.+\S)\s*$"
 )
+
+
+def _phase_sort_key(name: str) -> tuple[int, str]:
+    """Sort phases by their numeric prefix, with 'Uncategorized' last."""
+    import re
+    if name == "Uncategorized":
+        return (10_000, name)
+    m = re.search(r"\d+", name)
+    return (int(m.group()) if m else 9_999, name)
+
+
+def _task_status_label(status: object) -> str:
+    """Human-friendly label for the task_status enum."""
+    s = str(status)
+    return {
+        "backlog": "Backlog",
+        "dispatched": "Dispatched",
+        "in_progress": "In Progress",
+        "review": "Review",
+        "testing": "Testing",
+        "deployed": "Done",
+        "failed": "Failed",
+        "cancelled": "Cancelled",
+    }.get(s, s.title())
 
 
 def render_tasks_markdown(
@@ -200,64 +245,131 @@ def render_tasks_markdown(
     list_version: int | None = None,
     finalized_at_iso: str | None = None,
 ) -> str:
-    """Pure function — convert a list of ProjectTask rows to a
-    markdown checklist. Sorted by ordinal within each phase group.
-    Suitable for round-tripping through ``write_finalized_tasks``.
-    """
+    """Render a list of ProjectTask rows into a detailed markdown task
+    list following the Atlas-Advisory reference format.
+
+    The agent emits each task's title with a "Phase N: <theme> —
+    <task>" prefix and each description as a multi-line block with
+    `**Rules**:` and `**Sub-tasks:**` sections — we group by phase
+    and inline the description verbatim under each task heading."""
     import re
 
-    lines: list[str] = []
-    lines.append(f"# Tasks — {project_name}")
-    if list_version is not None:
-        suffix = f"_List version {list_version}"
-        if finalized_at_iso:
-            suffix += f" · finalized at {finalized_at_iso}"
-        suffix += "_"
-        lines.append(suffix)
-    lines.append("")
-
-    # Group by phase prefix (best-effort). The displayed title strips
-    # the prefix so we don't double-print it.
     pattern = re.compile(_PHASE_PREFIX_RE)
+
+    # ── Pass 1: group tasks by phase, preserving order within group ──
     groups: dict[str, list[tuple[ProjectTask, str]]] = {}
     for t in sorted(tasks, key=lambda x: (x.ordinal, x.task_id)):
         m = pattern.match(t.title or "")
         if m and m.group("phase"):
-            phase = m.group("phase").rstrip(" :.-").strip()
-            display = m.group("rest") or t.title
+            phase = m.group("phase").strip()
+            display = (m.group("rest") or "").strip() or t.title
         else:
             phase = "Uncategorized"
             display = t.title
         groups.setdefault(phase, []).append((t, display))
 
-    # Stable order: numeric-phase groups first (sorted by int when
-    # possible), then "Uncategorized" last.
-    def _phase_sort_key(name: str) -> tuple[int, str]:
-        m = re.search(r"\d+", name)
-        if name == "Uncategorized":
-            return (10_000, name)
-        return (int(m.group()) if m else 9_999, name)
+    phase_order = sorted(groups.keys(), key=_phase_sort_key)
 
-    for phase in sorted(groups.keys(), key=_phase_sort_key):
-        lines.append(f"## {phase}" if phase != "Uncategorized" else "## Uncategorized")
-        for t, display in groups[phase]:
-            # `project_tasks` uses DEPLOYED as the terminal-success
-            # state (see TaskStatus in src/models/base.py). FAILED /
-            # CANCELLED stay unchecked — they're not "done" in the
-            # checklist sense.
-            done = t.task_status == TaskStatus.DEPLOYED
-            box = "[x]" if done else "[ ]"
-            meta_bits = [t.priority, t.task_type]
-            if t.estimated_agent:
-                meta_bits.append(t.estimated_agent)
-            meta = " · ".join(meta_bits)
-            lines.append(f"- {box} `{t.task_id}` · {display} ({meta})")
-            if t.description:
-                # Indent description lines by 6 spaces to nest under
-                # the checklist item. Strip trailing whitespace per
-                # line, preserve internal blank lines.
-                for desc_line in t.description.splitlines():
-                    lines.append(f"      {desc_line.rstrip()}")
+    lines: list[str] = []
+
+    # ── Header ──
+    lines.append(f"# {project_name} — Implementation Tasks")
+    lines.append("")
+    meta_bits: list[str] = []
+    if list_version is not None:
+        meta_bits.append(f"**Version**: {list_version}")
+    if finalized_at_iso:
+        meta_bits.append(f"**Finalized**: {finalized_at_iso}")
+    meta_bits.append(f"**Total tasks**: {len(tasks)}")
+    lines.append("> " + " · ".join(meta_bits))
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    # ── Table of Contents ──
+    lines.append("## Table of Contents")
+    lines.append("")
+    for i, phase in enumerate(phase_order, start=1):
+        # Slugify the phase for an anchor: lowercase, spaces+colons → dashes.
+        slug = re.sub(r"[^a-z0-9]+", "-", phase.lower()).strip("-")
+        lines.append(f"{i}. [{phase}](#{slug})")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    # ── Progress Summary table ──
+    lines.append("## Progress Summary")
+    lines.append("")
+    lines.append("| Phase | Tasks | Done | Active | Status |")
+    lines.append("|-------|-------|------|--------|--------|")
+    overall_total = 0
+    overall_done = 0
+    for phase in phase_order:
+        rows = groups[phase]
+        total = len(rows)
+        done = sum(1 for t, _ in rows if t.task_status == TaskStatus.DEPLOYED)
+        active = sum(
+            1 for t, _ in rows
+            if t.task_status in {
+                TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS,
+                TaskStatus.REVIEW, TaskStatus.TESTING,
+            }
+        )
+        if done == total:
+            status_label = "✅ Complete"
+        elif active > 0:
+            status_label = "🟡 In Progress"
+        elif done > 0:
+            status_label = f"🟡 {done}/{total}"
+        else:
+            status_label = "⏳ Pending"
+        lines.append(f"| {phase} | {total} | {done} | {active} | {status_label} |")
+        overall_total += total
+        overall_done += done
+    pct = (overall_done * 100 // overall_total) if overall_total else 0
+    lines.append("")
+    lines.append(f"**Overall**: {overall_done}/{overall_total} tasks done ({pct}%)")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    # ── Implementation Phases ──
+    lines.append("## Implementation Phases")
+    lines.append("")
+
+    for phase in phase_order:
+        lines.append(f"### {phase}")
         lines.append("")
+        for task_idx, (t, display) in enumerate(groups[phase], start=1):
+            # Per-task header. We include both an in-phase ordinal
+            # ("Task 1, 2 …") and the canonical task_id for cross-ref
+            # against the DB / chat / dispatch.
+            lines.append(f"#### Task {task_idx}: {display}")
+            lines.append("")
+            # Meta line — status + priority + agent + id.
+            meta_parts: list[str] = []
+            meta_parts.append(f"**Status**: {_task_status_label(t.task_status)}")
+            meta_parts.append(f"**Priority**: {t.priority}")
+            if t.estimated_agent:
+                meta_parts.append(f"**Agent**: {t.estimated_agent}")
+            meta_parts.append(f"**Task ID**: `{t.task_id}`")
+            if t.request_id:
+                meta_parts.append(f"**Request**: `{t.request_id}`")
+            lines.append(" · ".join(meta_parts))
+            lines.append("")
+            # Description — emitted verbatim. The agent's prompt
+            # asks for it to already be a markdown block containing
+            # "**Rules**:", a summary paragraph, and "**Sub-tasks:**"
+            # bullets ending with a "**Test**:" sub-task. We just
+            # pass it through.
+            if t.description:
+                lines.append(t.description.rstrip())
+                lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    # ── Footer ──
+    lines.append("*Generated by Agent Team · keep this file in sync with the project's `project_tasks` table via the platform UI.*")
+    lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"

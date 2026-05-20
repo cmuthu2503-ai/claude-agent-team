@@ -21,6 +21,7 @@ import { api } from "../../lib/api"
 import { MarkdownRenderer } from "../ui/MarkdownRenderer"
 import { TaskListEditor } from "./TaskListEditor"
 import { BuildChatPanel } from "./BuildChatPanel"
+import { APISpecSection } from "./APISpecSection"
 
 interface Artifact {
   artifact_id: string
@@ -670,10 +671,16 @@ function PRDFinalized({
         )}
       </Card>
 
+      {/* API Specification sits between PRD and Tasks. It's optional
+          (skip-and-still-build-tasks works), but when present the
+          tasks prompt picks it up so generated sub-tasks reference
+          real endpoints. */}
+      <APISpecSection projectId={projectId} prdFinalized={true} />
+
       {/* Tasks list comes last. Stacked layout (previously a 2-column
           chat-on-left / tasks-on-right grid) per user-requested order:
-          Deploy → Build Chat → PRD → Tasks → Requests. TaskListEditor
-          renders its own card chrome, so no wrapping <Card> here. */}
+          Deploy → Build Chat → PRD → API Spec → Tasks → Requests.
+          TaskListEditor renders its own card chrome — no wrapping <Card>. */}
       <TaskListEditor projectId={projectId} onFinalized={reload} />
     </div>
   )
