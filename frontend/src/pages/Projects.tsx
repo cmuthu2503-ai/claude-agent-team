@@ -138,7 +138,7 @@ export function ProjectsPage() {
   }, [projects, sortKey])
 
   return (
-    <div style={{ maxWidth: 1800, margin: "0 auto", padding: "24px 36px", display: "flex", flexDirection: "column", gap: 20 }}>
+    <div style={{ maxWidth: 2200, margin: "0 auto", padding: "24px 36px", display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
           <h2 style={{ color: "var(--text-primary)", fontSize: 18, fontWeight: 600, margin: 0 }}>Projects</h2>

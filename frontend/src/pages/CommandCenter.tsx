@@ -258,7 +258,7 @@ export function CommandCenterPage() {
   const completed = requests.filter((r) => isTerminal(r.status)).slice(0, 5)
 
   return (
-    <div style={{ maxWidth: 1800, margin: "0 auto", padding: "24px 36px", display: "flex", flexDirection: "column", gap: 32 }}>
+    <div style={{ maxWidth: 2200, margin: "0 auto", padding: "24px 36px", display: "flex", flexDirection: "column", gap: 32 }}>
       {/* Input Form */}
       <div
         style={{

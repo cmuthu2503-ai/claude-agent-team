@@ -30,17 +30,29 @@ interface Props {
   projectId: string
 }
 
-const STARTER_PROMPTS = [
-  "What's the status?",
-  "Dispatch all high priority tasks",
-  "Show me failed tasks",
-]
+// Build a dynamic starter-prompts list. The first prompt's wording
+// depends on whether the project has ever dispatched any task — first
+// time vs. continuing. These are info-seeking questions; the user
+// decides whether to dispatch after seeing the orchestrator's reply.
+function starterPrompts(hasDispatched: boolean): string[] {
+  return [
+    hasDispatched
+      ? "What's the next set of tasks?"
+      : "What's the first set of independent tasks?",
+    "What's the High Priority tasks?",
+    "What's the Status of Build?",
+  ]
+}
 
 export function BuildChatPanel({ projectId }: Props) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
   const [sending, setSending] = useState(false)
   const [error, setError] = useState("")
+  // True when at least one task on the current finalized list has been
+  // dispatched (task_status != 'backlog'). Drives the first starter
+  // prompt's wording — see starterPrompts().
+  const [hasDispatched, setHasDispatched] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
 
@@ -53,9 +65,37 @@ export function BuildChatPanel({ projectId }: Props) {
     }
   }, [projectId])
 
+  // Fetch task list state so the starter-prompt wording reflects
+  // whether anything's been dispatched yet. Re-runs whenever the
+  // message count changes — sending a chat message can trigger a
+  // dispatch behind the scenes, so we want the prompt to flip from
+  // "first set" → "next set" after that.
+  const loadDispatchState = useCallback(async () => {
+    try {
+      const res = await api.get(`/projects/${projectId}/tasks`)
+      const tasks: { task_status?: string }[] = res.data || []
+      const dispatched = tasks.some(
+        (t) => t.task_status && t.task_status !== "backlog",
+      )
+      setHasDispatched(dispatched)
+    } catch {
+      // Soft-fail — prompts still render with the default "first set"
+      // wording if the tasks endpoint isn't ready yet.
+    }
+  }, [projectId])
+
   useEffect(() => {
     void load()
-  }, [load])
+    void loadDispatchState()
+  }, [load, loadDispatchState])
+
+  // Re-check dispatch state shortly after each new message — the
+  // orchestrator may have dispatched something in response.
+  useEffect(() => {
+    if (messages.length === 0) return
+    const t = window.setTimeout(() => { void loadDispatchState() }, 800)
+    return () => window.clearTimeout(t)
+  }, [messages.length, loadDispatchState])
 
   // Live updates. The chat endpoint emits `project.build.message` on every
   // user + assistant turn; we just re-fetch when one fires for this project.
@@ -151,7 +191,7 @@ export function BuildChatPanel({ projectId }: Props) {
         }}
       >
         {messages.length === 0 && (
-          <EmptyState onPick={(p) => void send(p)} />
+          <EmptyState onPick={(p) => void send(p)} hasDispatched={hasDispatched} />
         )}
         {messages.map((m) => (
           <MessageRow key={m.message_id} message={m} />
@@ -229,7 +269,14 @@ export function BuildChatPanel({ projectId }: Props) {
 
 // ── Empty state ─────────────────────────────────────────────────────────
 
-function EmptyState({ onPick }: { onPick: (prompt: string) => void }) {
+function EmptyState({
+  onPick,
+  hasDispatched,
+}: {
+  onPick: (prompt: string) => void
+  hasDispatched: boolean
+}) {
+  const prompts = starterPrompts(hasDispatched)
   return (
     <div style={{
       flex: 1, display: "flex", flexDirection: "column",
@@ -242,7 +289,7 @@ function EmptyState({ onPick }: { onPick: (prompt: string) => void }) {
         or add new tasks. The agent has tools to operate on this project's task list.
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, justifyContent: "center" }}>
-        {STARTER_PROMPTS.map((p) => (
+        {prompts.map((p) => (
           <button
             key={p}
             type="button"

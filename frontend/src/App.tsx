@@ -38,9 +38,9 @@ function Layout({ children }: { children: React.ReactNode }) {
     >
       <Navbar />
       <Sidebar />
-      {/* Sidebar is position:fixed (width 220); main content sits to its
-          right via marginLeft. */}
-      <div style={{ marginLeft: 220, minWidth: 0 }}>{children}</div>
+      {/* Sidebar is position:fixed (width 180); main content sits to its
+          right via marginLeft — keep this in sync with Sidebar.tsx. */}
+      <div style={{ marginLeft: 180, minWidth: 0 }}>{children}</div>
     </div>
   )
 }

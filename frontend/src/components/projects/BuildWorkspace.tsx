@@ -603,6 +603,10 @@ function PRDFinalized({
           </a>
         </div>
       )}
+      {/* Build Chat comes first — talking to the orchestrator is the
+          primary action on this page. PRD + tasks are reference /
+          editable context below it. */}
+      <BuildChatPanel projectId={projectId} />
       {/* PRD section (full-width, collapsible). */}
       <Card>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
@@ -666,30 +670,11 @@ function PRDFinalized({
         )}
       </Card>
 
-      {/* PDB-41 — two-column layout: chat (~40%) on the left, task list
-          (~60%) on the right. Grid collapses to a single column under
-          ~900px so narrow viewports stack cleanly. */}
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(0, 2fr) minmax(0, 3fr)",
-        gap: 12,
-      }} className="pdb-workspace-grid">
-        <div style={{ minWidth: 0 }}>
-          <BuildChatPanel projectId={projectId} />
-        </div>
-        <div style={{ minWidth: 0 }}>
-          {/* TaskListEditor renders its own card chrome (the inner Stub),
-              so we don't wrap it in another Card. */}
-          <TaskListEditor projectId={projectId} onFinalized={reload} />
-        </div>
-      </div>
-      {/* Stack on narrow viewports. Inline <style> keeps the rule local to
-          this surface so it doesn't bleed into other pages. */}
-      <style>{`
-        @media (max-width: 900px) {
-          .pdb-workspace-grid { grid-template-columns: 1fr !important; }
-        }
-      `}</style>
+      {/* Tasks list comes last. Stacked layout (previously a 2-column
+          chat-on-left / tasks-on-right grid) per user-requested order:
+          Deploy → Build Chat → PRD → Tasks → Requests. TaskListEditor
+          renders its own card chrome, so no wrapping <Card> here. */}
+      <TaskListEditor projectId={projectId} onFinalized={reload} />
     </div>
   )
 }

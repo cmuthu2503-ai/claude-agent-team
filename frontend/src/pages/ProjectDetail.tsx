@@ -135,7 +135,7 @@ export function ProjectDetailPage() {
   const overdue = targetDt && targetDt < new Date()
 
   return (
-    <div style={{ maxWidth: 1800, margin: "0 auto", padding: "24px 36px", display: "flex", flexDirection: "column", gap: 20 }}>
+    <div style={{ maxWidth: 2200, margin: "0 auto", padding: "24px 36px", display: "flex", flexDirection: "column", gap: 20 }}>
       <Link to="/projects" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 13, color: "var(--text-muted)", textDecoration: "none" }}>
         <ArrowLeft size={14} /> Back to Projects
       </Link>

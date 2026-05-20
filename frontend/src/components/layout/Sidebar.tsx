@@ -96,7 +96,11 @@ export function Sidebar() {
       className="app-sidebar"
       aria-label="Primary"
       style={{
-        width: 220,
+        // 180px is the tightest width that still fits the longest
+        // label ("Command Center" / "Prompt Studio") at default font
+        // size without truncation. Trimmed from 220 to reclaim ~40px
+        // for the main content area.
+        width: 180,
         background: "var(--bg-secondary)",
         borderRight: "1px solid var(--border)",
         display: "flex",
