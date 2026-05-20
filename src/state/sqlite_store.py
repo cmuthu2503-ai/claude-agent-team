@@ -2219,6 +2219,20 @@ class SQLiteStateStore(StateStore):
         # Reverse for chronological order.
         return [self._row_to_message(r) for r in reversed(rows)]
 
+    async def delete_messages_for_project(self, project_id: str) -> int:
+        """Wipe the build-chat transcript for a project. Returns the
+        rowcount so the API can report 'cleared N messages'. Single
+        DELETE — no cascade needed (build_session_messages doesn't
+        own any referencing tables)."""
+        db = await self._get_db()
+        cursor = await db.execute(
+            "DELETE FROM build_session_messages WHERE project_id = ?",
+            (project_id,),
+        )
+        deleted = cursor.rowcount or 0
+        await db.commit()
+        return deleted
+
     def _row_to_message(self, row: aiosqlite.Row) -> BuildMessage:
         tool_calls_raw = row["tool_calls"]
         try:

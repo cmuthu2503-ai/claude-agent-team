@@ -2108,6 +2108,36 @@ async def get_build_messages(
     }
 
 
+@router.delete("/{project_id}/build/messages")
+async def clear_build_messages(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Hard-delete the entire Build Chat transcript for this project.
+    Backs the "Clear chat" button in the UI. Tasks, artifacts, and
+    other project state are NOT touched — only the conversation
+    history. Idempotent: 200 even if there were no messages."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    await _require_project(state, project_id)
+    deleted = await state.delete_messages_for_project(project_id)
+    events = request.app.state.events
+    await events.emit("project.chat_cleared", {
+        "project_id": project_id,
+        "deleted": deleted,
+        "by": user.get("user_id"),
+    })
+    return {
+        "data": None,
+        "meta": {"deleted": deleted},
+        "error": None,
+    }
+
+
 @router.post("/{project_id}/build/chat")
 async def post_build_chat(
     project_id: str,

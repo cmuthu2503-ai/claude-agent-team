@@ -433,6 +433,15 @@ class StateStore(ABC):
         for pagination by infinite scroll."""
         ...
 
+    @abstractmethod
+    async def delete_messages_for_project(self, project_id: str) -> int:
+        """Hard-delete every build-chat message row for a project. Used
+        by the "Clear chat" button in the Build Chat panel. Returns the
+        number of rows removed so the API response can report a count.
+        Tasks, artifacts, deployments, and other project state are NOT
+        touched — only the conversation transcript."""
+        ...
+
     # ── Token Usage ──────────────────────────────
 
     @abstractmethod

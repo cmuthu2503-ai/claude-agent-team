@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Send, MessageSquare } from "lucide-react"
+import { Send, MessageSquare, Trash2 } from "lucide-react"
 import { api } from "../../lib/api"
 
 interface ToolCallSummary {
@@ -153,6 +153,36 @@ export function BuildChatPanel({ projectId }: Props) {
     }
   }
 
+  // Hard-delete the chat transcript for this project. Tasks /
+  // artifacts / deploys are untouched — only conversation history
+  // goes away. Confirmation gates the click because it's irreversible.
+  const [clearing, setClearing] = useState(false)
+  const clear = async () => {
+    if (clearing) return
+    if (messages.length === 0) return  // nothing to clear
+    const ok = window.confirm(
+      `Clear all ${messages.length} chat message${messages.length === 1 ? "" : "s"}?\n\n` +
+      "This wipes the Build Chat transcript for this project. Tasks, " +
+      "PRD, and deployments are NOT affected.\n\nThis cannot be undone."
+    )
+    if (!ok) return
+    setClearing(true)
+    setError("")
+    try {
+      await api.delete(`/projects/${projectId}/build/messages`)
+      setMessages([])
+      // Re-fetch dispatch state so the EmptyState prompts reflect the
+      // current task state (which may have changed during the cleared
+      // conversation). Without this, the "first set" vs "next set"
+      // wording could be stale until the next page reload.
+      void loadDispatchState()
+    } catch (e: any) {
+      setError(parseDetail(e?.message) || "Clear failed")
+    } finally {
+      setClearing(false)
+    }
+  }
+
   return (
     <div style={{
       display: "flex", flexDirection: "column",
@@ -178,6 +208,33 @@ export function BuildChatPanel({ projectId }: Props) {
         }}>
           chat with the project_orchestrator agent
         </span>
+        <button
+          type="button"
+          onClick={clear}
+          disabled={clearing || messages.length === 0}
+          title={
+            messages.length === 0
+              ? "Nothing to clear"
+              : "Clear chat transcript (tasks + PRD are untouched)"
+          }
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 4,
+            padding: "3px 8px", fontSize: 11, fontWeight: 600,
+            background: "transparent",
+            color: (clearing || messages.length === 0)
+              ? "var(--text-muted)" : "var(--danger)",
+            border: "1px solid " + (
+              (clearing || messages.length === 0) ? "var(--border)" : "var(--danger)"
+            ),
+            borderRadius: "var(--radius)",
+            cursor: (clearing || messages.length === 0) ? "not-allowed" : "pointer",
+            fontFamily: "var(--font)",
+            opacity: (clearing || messages.length === 0) ? 0.5 : 1,
+          }}
+        >
+          <Trash2 size={11} />
+          {clearing ? "Clearing…" : "Clear chat"}
+        </button>
       </div>
 
       {/* Messages */}

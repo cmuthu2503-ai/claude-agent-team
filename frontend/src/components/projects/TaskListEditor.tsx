@@ -494,6 +494,7 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
                 />
               </Th>
               <Th width={36}>#</Th>
+              <Th width={110}>Task ID</Th>
               <Th>Title</Th>
               <Th width={140}>Type</Th>
               <Th width={100}>Priority</Th>
@@ -532,6 +533,44 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
                 <Td width={36}>
                   <span style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
                     {t.ordinal}
+                  </span>
+                </Td>
+                <Td width={110}>
+                  {/* Click to copy — handy when chatting with the
+                      orchestrator ("dispatch T-abc12345"). Visual
+                      feedback via title; copy uses the Clipboard
+                      API with a fallback for older browsers. */}
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    title={`Click to copy ${t.task_id}`}
+                    onClick={() => {
+                      try {
+                        void navigator.clipboard?.writeText(t.task_id)
+                      } catch {
+                        /* clipboard unavailable — title text still informs */
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault()
+                        try { void navigator.clipboard?.writeText(t.task_id) } catch { /* no-op */ }
+                      }
+                    }}
+                    style={{
+                      color: "var(--accent)",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 11,
+                      cursor: "pointer",
+                      padding: "1px 6px",
+                      borderRadius: 3,
+                      background: "var(--bg-hover)",
+                      border: "1px solid var(--border)",
+                      userSelect: "all",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {t.task_id}
                   </span>
                 </Td>
                 <Td>
