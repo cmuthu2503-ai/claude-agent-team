@@ -17,13 +17,23 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+logger = structlog.get_logger()
+
 from src.auth.service import get_current_user, require_role
 from src.core import project_templates as templates_mod
+from src.core.github_publisher import (
+    GitHubPublishError,
+    GitHubPublisher,
+    GitHubRepoCreateError,
+    extract_owner_repo,
+)
 from src.core.project_validation import (
     assert_not_unassigned,
+    project_repo_slug,
     validate_color,
     validate_description,
     validate_icon,
@@ -32,9 +42,17 @@ from src.core.project_validation import (
     validate_tags,
     validate_target_date,
 )
+from src.core.project_workspace import (
+    delete_host_file,
+    project_root_dir,
+    render_tasks_markdown,
+    write_finalized_prd,
+    write_finalized_tasks,
+)
 from src.models.base import (
     ArtifactKind,
     ArtifactStatus,
+    DeployStatus,
     Project,
     ProjectArtifact,
     ProjectStatus,
@@ -59,6 +77,18 @@ class CreateProjectBody(BaseModel):
     default_team: Literal["engineering", "research", "content"] | None = None
     target_date: str | None = None  # ISO date string
     template_id: str | None = None
+    # WS-03 — when True (and repo_url is blank), the server auto-creates a
+    # private GitHub repo named after the project slug under the GITHUB_TOKEN
+    # user's namespace (or GITHUB_PROJECT_ORG if set). On success, the new
+    # repo's HTML URL becomes `project.repo_url`. Defaults to True so a
+    # fresh project gets a workspace by default.
+    create_repo: bool = True
+    # Per-project working tree feature — which scaffold template to
+    # materialize into C:/ai-projects/<Name>/ at create time. Default
+    # 'web-app' (FastAPI backend + Vite/React frontend). The frontend
+    # picker should constrain to these three values, but we also reject
+    # unknown values on the server.
+    kind: Literal["web-app", "api-service", "frontend-app"] = "web-app"
 
 
 class UpdateProjectBody(BaseModel):
@@ -96,6 +126,19 @@ def _serialize(p: Project, *, with_stats: dict[str, int] | None = None) -> dict[
         "created_by": p.created_by,
         "created_at": p.created_at.isoformat(),
         "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+        # Per-project working tree + deploy fields (the "every project
+        # is its own running app" feature). All optional from the
+        # frontend's perspective — the deployment card only renders
+        # when `kind` is present.
+        "kind": p.kind,
+        "deploy_backend_port": p.deploy_backend_port,
+        "deploy_frontend_port": p.deploy_frontend_port,
+        "deploy_status": p.deploy_status,
+        "deploy_url": p.deploy_url,
+        "deploy_last_started_at": (
+            p.deploy_last_started_at.isoformat() if p.deploy_last_started_at else None
+        ),
+        "deploy_error": p.deploy_error,
     }
     if with_stats:
         out["stats"] = with_stats
@@ -165,6 +208,78 @@ async def create_project(
             detail=f"Unknown template_id {body.template_id!r}.",
         )
 
+    # WS-04 — auto-create a GitHub repo for this project if the user
+    # didn't paste an existing URL and didn't opt out. We do this BEFORE
+    # inserting the project row so a failed repo create doesn't leave an
+    # orphan project that points at nothing. Reverse order would require
+    # an UPDATE-or-rollback dance that's not worth the complexity in v1.
+    final_repo_url = repo_url
+    if body.create_repo and not repo_url:
+        try:
+            slug = project_repo_slug(name)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        publisher = GitHubPublisher()
+        try:
+            created = await publisher.create_repo(
+                name=slug,
+                description=description or f"Workspace for {name}",
+                private=True,
+            )
+            final_repo_url = created["html_url"]
+        except GitHubRepoCreateError as e:
+            # WS-05 — map GitHub status codes to actionable HTTPException details.
+            sc = e.status_code
+            msg = str(e)
+            if sc == 401 or sc == 403:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "github_repo_create_unauthorized",
+                        "message": msg,
+                        "hint": "Check that GITHUB_TOKEN is set and has `repo` scope. "
+                                "If you don't want auto-creation, set create_repo=false "
+                                "and paste an existing repo URL.",
+                    },
+                ) from e
+            if sc == 422:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "github_repo_name_taken",
+                        "message": msg,
+                        "hint": f"A repo with the slug {slug!r} already exists in your namespace. "
+                                "Pick a different project name.",
+                    },
+                ) from e
+            if sc is None:
+                # Token misconfigured / unreachable host. Allow project creation
+                # WITHOUT a repo so the user isn't blocked entirely; they can
+                # backfill via the Project Detail page later.
+                logger.warning("github_skipped_repo_unconfigured", message=msg)
+                final_repo_url = ""
+            else:
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "error": "github_repo_create_failed",
+                        "message": msg,
+                        "status": sc,
+                    },
+                ) from e
+
+    # Per-project working tree feature — allocate ports BEFORE inserting
+    # the project row so they can be baked into the scaffolded
+    # docker-compose.yml. Sequential MAX+1; partial unique indexes on
+    # the columns catch any race. Port allocation can't fail in
+    # practice (16-bit headroom under the bases) but propagate any
+    # error as 500 since it's a system condition.
+    try:
+        backend_port, frontend_port = await state.allocate_project_ports()
+    except Exception as e:  # noqa: BLE001
+        logger.error("port_allocation_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Port allocation failed: {e}")
+
     project = Project(
         project_id=f"proj-{uuid.uuid4().hex[:8]}",
         name=name,
@@ -175,13 +290,115 @@ async def create_project(
         tags=tags,
         # Default lead to caller (PRJ-012)
         lead_user_id=body.lead_user_id or user.get("user_id"),
-        repo_url=repo_url,
+        repo_url=final_repo_url,
         default_team=body.default_team,
         target_date=target_date,
         template_id=body.template_id,
         created_by=user.get("user_id"),
+        # Per-project working tree fields. Initial state: ports
+        # allocated, scaffold about to be materialized below,
+        # deploy_status stays at the model default (stopped) until the
+        # user clicks Deploy.
+        kind=body.kind,
+        deploy_backend_port=backend_port,
+        deploy_frontend_port=frontend_port,
     )
     await state.create_project(project)
+
+    # ── Scaffold the per-project working tree ────────────────────────
+    # Materialize the chosen template into C:/ai-projects/<Name>/ on the
+    # host (via the /host/ai-projects bind mount). The scaffolded tree
+    # has docker-compose.yml + Dockerfile(s) + a minimal "hello world"
+    # app, so the user can click Deploy right after creating the project
+    # and see something running before any agent task fires.
+    #
+    # Soft-fail: if the scaffold fails (mount missing, disk full,
+    # permission) we still return 201 and report the error in `meta` so
+    # the UI can offer a retro-scaffold button later. The DB row is
+    # already in place, so subsequent attempts are recoverable.
+    from src.core.project_scaffolder import ProjectScaffolder
+    from src.core.project_workspace import project_root_dir
+
+    scaffolder = ProjectScaffolder()
+    scaffold_meta: dict[str, Any] = {"ok": False, "skipped": "not attempted"}
+    initial_push_meta: dict[str, Any] = {"ok": False, "skipped": "not attempted"}
+    try:
+        slug = project_repo_slug(name)
+    except ValueError:
+        slug = name.lower()  # validate_name ran earlier; this can't fail in practice
+    substitutions = {
+        "PROJECT_NAME": name,
+        "PROJECT_SLUG": slug,
+        "BACKEND_PORT": str(backend_port),
+        "FRONTEND_PORT": str(frontend_port),
+    }
+    try:
+        target_root = project_root_dir(name)
+        scaffold_result = scaffolder.scaffold(
+            kind=body.kind,
+            project_root=target_root,
+            substitutions=substitutions,
+        )
+        scaffold_meta = scaffold_result.as_dict()
+        if not scaffold_result.ok:
+            logger.warning(
+                "scaffold_failed",
+                project_id=project.project_id, error=scaffold_result.error,
+            )
+    except Exception as e:  # noqa: BLE001 — soft-fail catch-all
+        logger.exception("scaffold_exception", project_id=project.project_id)
+        scaffold_meta = {"ok": False, "error": str(e)}
+
+    # ── Push the scaffold to the project's GitHub repo as initial commit ──
+    # The auto_init=true GitHub repo starts with only a README.md. We
+    # overlay the scaffold via Trees API — the README from the template
+    # replaces the auto-init one. Skipped (with a clear reason) when:
+    #   - No repo was created (user pasted their own URL, or token unset)
+    #   - The repo_url isn't parseable as a github.com link
+    # Soft-fail like the disk scaffold — the local tree stays valid.
+    if final_repo_url and scaffold_meta.get("ok"):
+        parsed = extract_owner_repo(final_repo_url)
+        if not parsed:
+            initial_push_meta = {"ok": False, "skipped": "unparseable_repo_url"}
+        else:
+            target_repo = f"{parsed[0]}/{parsed[1]}"
+            try:
+                rendered = scaffolder.render_template_files(
+                    kind=body.kind, substitutions=substitutions,
+                )
+                publisher = GitHubPublisher()
+                commit_info = await publisher.commit_files(
+                    files=rendered,
+                    commit_message=(
+                        f"chore: initial scaffold ({body.kind})\n\n"
+                        f"Scaffolded by the Agent Team platform at project creation.\n"
+                        f"Project: {name} ({project.project_id})\n"
+                        f"Kind: {body.kind}\n"
+                        f"Backend port: {backend_port}\n"
+                        f"Frontend port: {frontend_port}\n"
+                    ),
+                    repo=target_repo,
+                )
+                initial_push_meta = {
+                    "ok": True,
+                    "repo": target_repo,
+                    "sha": commit_info.get("sha"),
+                    "short_sha": commit_info.get("short_sha"),
+                    "url": commit_info.get("url"),
+                    "files": len(rendered),
+                }
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "initial_scaffold_push_failed",
+                    project_id=project.project_id, repo=target_repo, error=str(e),
+                )
+                initial_push_meta = {
+                    "ok": False, "skipped": "publish_error", "error": str(e),
+                }
+    elif not final_repo_url:
+        initial_push_meta = {"ok": False, "skipped": "no_repo_url"}
+    elif not scaffold_meta.get("ok"):
+        initial_push_meta = {"ok": False, "skipped": "scaffold_failed"}
 
     # PM-15 — lifecycle event
     events = request.app.state.events
@@ -189,8 +406,19 @@ async def create_project(
         "project_id": project.project_id,
         "name": project.name,
         "created_by": project.created_by,
+        "repo_url": project.repo_url,
+        "kind": project.kind,
+        "deploy_backend_port": project.deploy_backend_port,
+        "deploy_frontend_port": project.deploy_frontend_port,
     })
-    return {"data": _serialize(project), "meta": None, "error": None}
+    return {
+        "data": _serialize(project),
+        "meta": {
+            "scaffold": scaffold_meta,
+            "initial_github_push": initial_push_meta,
+        },
+        "error": None,
+    }
 
 
 @router.get("/{project_id}")
@@ -380,6 +608,242 @@ async def delete_project(
     return None
 
 
+# ─────────────────────── WS-16: backfill repo for existing project ───────────
+
+
+@router.post("/{project_id}/create_repo")
+async def create_repo_for_project(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """WS-16 — create a GitHub repo for an existing project that doesn't
+    have one yet. Idempotent in the sense that it 409's instead of silently
+    creating a duplicate when repo_url is already set; user must clear the
+    URL first (via PATCH) if they really want to rebind."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    project = await state.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project {project_id!r} not found.")
+    if project.repo_url:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "repo_url_already_set",
+                "current_repo_url": project.repo_url,
+                "hint": "This project already points at a repo. Clear repo_url via PATCH first if you want to create a fresh one.",
+            },
+        )
+
+    try:
+        slug = project_repo_slug(project.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    publisher = GitHubPublisher()
+    try:
+        created = await publisher.create_repo(
+            name=slug,
+            description=project.description or f"Workspace for {project.name}",
+            private=True,
+        )
+    except GitHubRepoCreateError as e:
+        sc = e.status_code
+        msg = str(e)
+        if sc in (401, 403):
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "github_repo_create_unauthorized", "message": msg,
+                        "hint": "GITHUB_TOKEN must have `repo` scope."},
+            ) from e
+        if sc == 422:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "github_repo_name_taken", "message": msg,
+                        "hint": f"Slug {slug!r} already taken in your namespace. Rename the project first."},
+            ) from e
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "github_repo_create_failed", "message": msg, "status": sc},
+        ) from e
+
+    project.repo_url = created["html_url"]
+    project.updated_at = datetime.utcnow()
+    await state.update_project(project)
+
+    events = request.app.state.events
+    await events.emit("project.repo_created", {
+        "project_id": project_id,
+        "repo_url": project.repo_url,
+    })
+    return {"data": _serialize(project), "meta": None, "error": None}
+
+
+# ─────────────────────── Per-project Deploy / Stop ───────────────────────────
+# These flip the project's `deploy_status` to `pending_deploy` or
+# `pending_stop`. The actual `docker compose up/down` runs on the host
+# (via the supervisor) because the backend container can't run docker
+# from inside without bind-mount path-resolution issues (see CLAUDE.md
+# "Supervisor scope"). Endpoints return 202 immediately; UI polls
+# `GET /projects/:id` for the eventual `running` or `failed` status.
+
+
+def _project_deployable(project: Project) -> tuple[bool, str]:
+    """Pre-flight checks before flipping a project into pending_deploy.
+    Returns (ok, reason). Reason is empty when ok."""
+    if not project.deploy_backend_port and not project.deploy_frontend_port:
+        return False, (
+            "No ports allocated. This project was created before per-project "
+            "deploys were available; rename + recreate or use a legacy deploy."
+        )
+    # Scaffolded compose file must exist on disk. If it doesn't, the
+    # scaffold step failed at create time (or someone deleted the
+    # files); we can't run docker compose without it.
+    try:
+        root = project_root_dir(project.name)
+    except ValueError as e:
+        return False, str(e)
+    if not (root / "docker-compose.yml").exists():
+        return False, (
+            f"No docker-compose.yml at {root}. Scaffold missing — recreate "
+            f"the project, or re-run the scaffold via support tools."
+        )
+    return True, ""
+
+
+@router.post("/{project_id}/deploy", status_code=202)
+async def deploy_project(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Mark the project as ``pending_deploy`` so the host-side
+    supervisor picks it up and runs ``docker compose -f
+    <project>/docker-compose.yml up -d --build`` on the user's host.
+
+    Returns 202 immediately. UI should poll ``GET /projects/{id}`` and
+    watch ``deploy_status`` transition through:
+
+        stopped → pending_deploy → deploying → running
+
+    On failure: ``failed`` with ``deploy_error`` populated.
+
+    Refuses (409) when the project isn't deployable (no scaffold on
+    disk, no ports allocated) or is already running / deploying.
+    """
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    project = await state.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project {project_id!r} not found.")
+
+    # Pre-flight — refuse if there's no scaffold to deploy.
+    ok, reason = _project_deployable(project)
+    if not ok:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "not_deployable", "hint": reason},
+        )
+
+    # Already running / mid-deploy — surface a 409 so the UI can show
+    # a clear "already running" hint instead of silently no-op'ing.
+    if project.deploy_status in (
+        DeployStatus.RUNNING, DeployStatus.DEPLOYING,
+        DeployStatus.PENDING_DEPLOY,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "already_active",
+                "current_status": project.deploy_status,
+                "hint": (
+                    "Wait for the current operation to finish, or click Stop "
+                    "first to redeploy."
+                ),
+            },
+        )
+
+    # Flip the flag. The supervisor's next poll cycle picks it up.
+    # `deploy_error` is cleared so a previous failure doesn't keep
+    # showing in the UI.
+    await state.update_project_deploy(
+        project_id,
+        deploy_status=DeployStatus.PENDING_DEPLOY,
+        deploy_last_started_at=datetime.utcnow(),
+        deploy_error="",
+    )
+    events = request.app.state.events
+    await events.emit("project.deploy_requested", {
+        "project_id": project_id,
+        "name": project.name,
+        "kind": project.kind,
+        "backend_port": project.deploy_backend_port,
+        "frontend_port": project.deploy_frontend_port,
+    })
+    # Re-read the row so the response reflects the just-flipped state.
+    project = await state.get_project(project_id)
+    return {
+        "data": _serialize(project) if project else None,
+        "meta": {"hint": "Deploy queued. Poll GET /projects/{id} for status."},
+        "error": None,
+    }
+
+
+@router.post("/{project_id}/stop", status_code=202)
+async def stop_project(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Mark the project as ``pending_stop``. Supervisor runs
+    ``docker compose -f <project>/docker-compose.yml down`` and flips
+    status to ``stopped``."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    project = await state.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project {project_id!r} not found.")
+
+    # Already stopped / mid-stop — 409 so the UI gives feedback.
+    if project.deploy_status in (
+        DeployStatus.STOPPED, DeployStatus.STOPPING, DeployStatus.PENDING_STOP,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "not_running",
+                "current_status": project.deploy_status,
+                "hint": "Project is already stopped or stopping.",
+            },
+        )
+
+    await state.update_project_deploy(
+        project_id,
+        deploy_status=DeployStatus.PENDING_STOP,
+    )
+    events = request.app.state.events
+    await events.emit("project.stop_requested", {
+        "project_id": project_id,
+        "name": project.name,
+    })
+    project = await state.get_project(project_id)
+    return {
+        "data": _serialize(project) if project else None,
+        "meta": {"hint": "Stop queued. Poll GET /projects/{id} for status."},
+        "error": None,
+    }
+
+
 # ─────────────────────── Project-driven Build: Brief + PRD ───────────────────
 # PDB-06 + PDB-07. The brief is plain text (user-authored, 50–4000 chars).
 # The PRD is markdown generated by the prd_author agent from the brief +
@@ -397,9 +861,19 @@ class PRDPatchBody(BaseModel):
     status: Literal["finalized"] | None = None
 
 
+class PRDGenerateBody(BaseModel):
+    # Optional reviewer feedback to apply to the PREVIOUS PRD version
+    # (if any). When empty/missing AND a previous version exists, the agent
+    # is still asked to produce a fresh draft from the brief — same as
+    # before this feature. When provided, the agent is asked to revise the
+    # previous draft to address the comments rather than start fresh.
+    review_comments: str | None = None
+
+
 _BRIEF_MIN = 50
 _BRIEF_MAX = 4000
 _PRD_MAX = 50_000
+_REVIEW_COMMENTS_MAX = 2000  # 2000 chars caps the regen prompt overhead
 
 
 def _artifact_to_dict(art: ProjectArtifact) -> dict[str, Any]:
@@ -415,6 +889,7 @@ def _artifact_to_dict(art: ProjectArtifact) -> dict[str, Any]:
         "updated_at": art.updated_at.isoformat() if art.updated_at else None,
         "finalized_at": art.finalized_at.isoformat() if art.finalized_at else None,
         "finalized_by": art.finalized_by,
+        "review_input": art.review_input,
     }
 
 
@@ -510,11 +985,17 @@ async def get_prd(
 async def generate_prd(
     project_id: str,
     request: Request,
+    body: PRDGenerateBody | None = None,
     user: dict = Depends(get_current_user),
 ):
     """Run `prd_author` (single-shot, no workflow) using the project's
     brief + metadata as input. Creates a NEW PRD version each time —
     older versions stay in the table but the UI surfaces only the latest.
+
+    When `body.review_comments` is provided AND a previous PRD version
+    exists, the agent is asked to revise that previous draft to address
+    the comments. Otherwise (no comments, or no prior version) the agent
+    drafts a fresh PRD from the brief.
     """
     state = request.app.state.state_store
     try:
@@ -530,9 +1011,18 @@ async def generate_prd(
             detail="Save a project brief (≥50 chars) before generating a PRD.",
         )
 
-    # Reserve the artifact row up front so the cost-attribution row
-    # recorded inside single_agent_call() has a real artifact_id to point at.
+    review_comments = ((body.review_comments if body else None) or "").strip()
+    if len(review_comments) > _REVIEW_COMMENTS_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"review_comments must be ≤ {_REVIEW_COMMENTS_MAX} characters.",
+        )
+
+    # Pull the most recent PRD before we mint a new row — that's the
+    # version the agent will revise against if review comments are given.
     existing = await state.list_artifacts(project_id, ArtifactKind.PRD)
+    # `list_artifacts` returns newest-first.
+    previous_prd = existing[0] if existing else None
     next_version = (max((a.version for a in existing), default=0)) + 1
     new_art = ProjectArtifact(
         artifact_id=f"art-{uuid.uuid4().hex[:12]}",
@@ -542,6 +1032,7 @@ async def generate_prd(
         status=ArtifactStatus.DRAFT,
         content="",
         created_by=user.get("user_id"),
+        review_input=review_comments or None,
     )
     await state.create_artifact(new_art)
 
@@ -552,22 +1043,44 @@ async def generate_prd(
             detail="Agent executor not configured — set ANTHROPIC_AWS_API_KEY + ANTHROPIC_AWS_WORKSPACE_ID.",
         )
 
-    prompt = (
-        f"You are drafting a Product Requirements Document for a project named "
-        f"{project.name!r}.\n\n"
-        f"Project description: {project.description or '(none provided)'}\n\n"
-        f"Project brief from the lead:\n"
-        f"---\n{brief.content}\n---\n\n"
-        f"Write a complete PRD in markdown following the existing project "
-        f"convention: top-level title, Document Information table, Table of "
-        f"Contents, numbered sections (Context, Executive Summary, Goals & "
-        f"Non-Goals, User Stories, Functional Requirements with REQ-XXX IDs, "
-        f"Data Model, API Surface, UI Design, Permissions, Edge Cases, Out of "
-        f"Scope, Open Questions, Implementation Phases, Revision History). "
-        f"Be specific and avoid placeholder text. The user will edit before "
-        f"finalizing — so it's OK to lean opinionated. Output the markdown "
-        f"only, no commentary before or after."
-    )
+    # Two prompt shapes:
+    #   - "fresh draft" — no review comments, OR no prior PRD to revise.
+    #     Same prompt as before this feature.
+    #   - "revise existing" — comments + prior PRD. Agent is explicitly told
+    #     NOT to start from scratch.
+    revising = bool(review_comments) and previous_prd is not None and previous_prd.content.strip()
+    if revising:
+        prompt = (
+            f"You are REVISING an existing Product Requirements Document for "
+            f"the project {project.name!r}. DO NOT start from scratch — apply "
+            f"the reviewer's feedback to the existing draft and keep the rest "
+            f"intact.\n\n"
+            f"## Project brief\n{brief.content}\n\n"
+            f"## Current PRD (revise this)\n{previous_prd.content}\n\n"
+            f"## Reviewer comments to address in this revision\n"
+            f"{review_comments}\n\n"
+            f"Output the FULL revised PRD in markdown — same structure and "
+            f"sections as before. Apply the comments precisely; keep "
+            f"unaffected sections word-for-word identical to the previous "
+            f"draft. No commentary before or after."
+        )
+    else:
+        prompt = (
+            f"You are drafting a Product Requirements Document for a project named "
+            f"{project.name!r}.\n\n"
+            f"Project description: {project.description or '(none provided)'}\n\n"
+            f"Project brief from the lead:\n"
+            f"---\n{brief.content}\n---\n\n"
+            f"Write a complete PRD in markdown following the existing project "
+            f"convention: top-level title, Document Information table, Table of "
+            f"Contents, numbered sections (Context, Executive Summary, Goals & "
+            f"Non-Goals, User Stories, Functional Requirements with REQ-XXX IDs, "
+            f"Data Model, API Surface, UI Design, Permissions, Edge Cases, Out of "
+            f"Scope, Open Questions, Implementation Phases, Revision History). "
+            f"Be specific and avoid placeholder text. The user will edit before "
+            f"finalizing — so it's OK to lean opinionated. Output the markdown "
+            f"only, no commentary before or after."
+        )
 
     try:
         result = await executor.single_agent_call(
@@ -603,13 +1116,21 @@ async def patch_prd(
     request: Request,
     user: dict = Depends(get_current_user),
 ):
-    """Either save-draft (`content`) or finalize (`status='finalized'`)."""
+    """Either save-draft (`content`) or finalize (`status='finalized'`).
+
+    On finalize, also writes the markdown to the host filesystem at
+    ``C:/ai-projects/<ProjectName>/docs/PRD.md`` (via the
+    ``/host/ai-projects`` bind-mount) and pushes it to the project's
+    GitHub repo when ``project.repo_url`` is set. Both side effects are
+    soft-fail: failures are reported in ``meta`` but do not roll back
+    the SQLite finalize (the user can retry via the project actions
+    menu)."""
     state = request.app.state.state_store
     try:
         assert_not_unassigned(project_id, "modified")
     except ValueError as e:
         raise HTTPException(status_code=403, detail=str(e))
-    await _require_project(state, project_id)
+    project = await _require_project(state, project_id)
 
     art = await state.get_artifact(project_id, ArtifactKind.PRD)
     if art is None:
@@ -624,6 +1145,8 @@ async def patch_prd(
             )
         await state.update_artifact_content(art.artifact_id, content)
 
+    meta: dict[str, Any] = {}
+
     if body.status == "finalized":
         # `finalize_artifact` archives any prior finalized row for the same
         # (project_id, kind) atomically and stamps timestamps on this one.
@@ -634,10 +1157,151 @@ async def patch_prd(
             "artifact_id": art.artifact_id,
             "version": art.version,
         })
+
+        # ── PM-finalize: write to host filesystem + push to GitHub ──
+        # Soft-fail: log + report in `meta`, do NOT raise.
+        host_result = write_finalized_prd(project.name, art.content)
+        meta["host_write"] = host_result.as_dict()
+        if not host_result.ok:
+            logger.warning(
+                "prd_finalize.host_write_failed",
+                project_id=project_id, project_name=project.name,
+                error=host_result.error,
+            )
+
+        # Push the finalized PRD to the project's own GitHub repo (if
+        # repo_url is set). Lands at `docs/PRD.md` in the project's
+        # repo. Commit message includes the version + actor for
+        # auditability. Skipped when no repo_url is configured — the
+        # host write still happened, so the user has a local copy.
+        meta["github_push"] = await _push_finalized_doc_to_repo(
+            project=project,
+            repo_path="docs/PRD.md",
+            content=art.content,
+            commit_subject=f"docs: finalize PRD v{art.version}",
+            descriptor=f"PRD v{art.version}",
+            actor=user.get("username") or user.get("user_id") or "unknown",
+        )
     else:
         art = await state.get_artifact(project_id, ArtifactKind.PRD)
 
-    return {"data": _artifact_to_dict(art), "meta": None, "error": None}
+    return {"data": _artifact_to_dict(art), "meta": meta or None, "error": None}
+
+
+@router.delete("/{project_id}/prd")
+async def delete_prd(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Hard-delete the PRD for this project — all versions (drafts,
+    finalized, archived). Also removes the host-side
+    ``docs/PRD.md`` file. Tasks derived from this PRD are NOT touched
+    (they have no foreign key) — they're left for the user to
+    delete separately if they want a clean slate.
+
+    Returns ``meta.deleted_versions`` (DB row count) and
+    ``meta.host_delete`` (filesystem result). 200 even if there was no
+    PRD to delete — caller can treat this as idempotent."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    project = await _require_project(state, project_id)
+
+    deleted = await state.delete_artifacts(project_id, ArtifactKind.PRD)
+    host_result = delete_host_file(project.name, "PRD.md")
+
+    events = request.app.state.events
+    await events.emit("project.prd_deleted", {
+        "project_id": project_id,
+        "deleted_versions": deleted,
+        "by": user.get("user_id"),
+    })
+
+    logger.info(
+        "prd.deleted",
+        project_id=project_id, project_name=project.name,
+        deleted_versions=deleted, host_ok=host_result.ok,
+    )
+    return {
+        "data": None,
+        "meta": {
+            "deleted_versions": deleted,
+            "host_delete": host_result.as_dict(),
+        },
+        "error": None,
+    }
+
+
+async def _push_finalized_doc_to_repo(
+    *,
+    project: Project,
+    repo_path: str,
+    content: str,
+    commit_subject: str,
+    descriptor: str,
+    actor: str,
+) -> dict[str, Any]:
+    """Mirrors the WS-12 / WS-15 research_publisher pattern: if the
+    project has a parseable GitHub repo URL, commit ``content`` to
+    ``repo_path`` in that repo via the Trees API.
+
+    ``descriptor`` is a short string included in the commit body for
+    traceability (e.g. ``"PRD v3"`` or ``"task list v7 (24 tasks)"``).
+
+    Returns a result dict for inclusion in the response ``meta``.
+    Soft-fail — never raises.
+
+    Skipped cases (returned as ``{ok: False, skipped: <reason>}``):
+      - No ``repo_url`` set on the project
+      - ``repo_url`` isn't a parseable github.com URL
+      - GitHub token / publisher not configured
+    """
+    if not project.repo_url:
+        return {"ok": False, "skipped": "no_repo_url"}
+    parsed = extract_owner_repo(project.repo_url)
+    if not parsed:
+        return {"ok": False, "skipped": "unparseable_repo_url"}
+    owner, repo = parsed
+    target_repo = f"{owner}/{repo}"
+
+    publisher = GitHubPublisher()
+    commit_body = (
+        f"{commit_subject}\n\n"
+        f"Finalized by {actor} via the Agent Team UI.\n"
+        f"Project: {project.name} ({project.project_id})\n"
+        f"Artifact: {descriptor}\n"
+    )
+    try:
+        result = await publisher.commit_files(
+            files={repo_path: content},
+            commit_message=commit_body,
+            repo=target_repo,
+        )
+        return {
+            "ok": True,
+            "repo": target_repo,
+            "path": repo_path,
+            "sha": result.get("sha"),
+            "short_sha": result.get("short_sha"),
+            "url": result.get("url"),
+        }
+    except GitHubPublishError as e:
+        logger.warning(
+            "finalize.github_push_failed",
+            project_id=project.project_id, repo=target_repo,
+            path=repo_path, error=str(e),
+        )
+        return {"ok": False, "skipped": "publish_error", "error": str(e)}
+    except Exception as e:  # noqa: BLE001 — soft-fail catch-all
+        logger.exception(
+            "finalize.github_push_unexpected",
+            project_id=project.project_id, repo=target_repo,
+            path=repo_path,
+        )
+        return {"ok": False, "skipped": "unexpected_error", "error": str(e)}
 
 
 # ─────────────────────── Project-driven Build: Task List ─────────────────────
@@ -688,6 +1352,7 @@ def _task_to_dict(t: ProjectTask) -> dict[str, Any]:
         "task_status": t.task_status,
         "request_id": t.request_id,
         "amended": t.amended,
+        "review_input": t.review_input,
         "created_at": t.created_at.isoformat(),
         "updated_at": t.updated_at.isoformat() if t.updated_at else None,
     }
@@ -801,15 +1466,26 @@ async def get_tasks(
     }
 
 
+class TasksGenerateBody(BaseModel):
+    # Optional reviewer feedback to apply to the PREVIOUS task list draft
+    # (if any). Same shape as PRDGenerateBody.
+    review_comments: str | None = None
+
+
 @router.post("/{project_id}/tasks/generate", status_code=201)
 async def generate_tasks(
     project_id: str,
     request: Request,
+    body: TasksGenerateBody | None = None,
     user: dict = Depends(get_current_user),
 ):
     """Run `user_story_author` (single-shot) on the finalized PRD. Replaces
     any existing draft (PRD §4.3 TSK-005). Blocked when a finalized list
-    already exists — caller must archive that list first (TSK-006)."""
+    already exists — caller must archive that list first (TSK-006).
+
+    When `body.review_comments` is supplied AND a prior draft (or archived
+    list) exists, the agent is asked to revise that list to address the
+    comments rather than start fresh from the PRD."""
     state = request.app.state.state_store
     try:
         assert_not_unassigned(project_id, "modified")
@@ -822,6 +1498,13 @@ async def generate_tasks(
         raise HTTPException(
             status_code=409,
             detail="Finalize the PRD before generating a task list.",
+        )
+
+    review_comments = ((body.review_comments if body else None) or "").strip()
+    if len(review_comments) > _REVIEW_COMMENTS_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"review_comments must be ≤ {_REVIEW_COMMENTS_MAX} characters.",
         )
 
     # TSK-006: refuse if a finalized list already exists.
@@ -837,13 +1520,28 @@ async def generate_tasks(
             },
         )
 
-    # TSK-005: discard any existing draft for this project.
+    # Pull the most recent draft (if any) BEFORE we delete it — that's the
+    # version the agent will revise against when review comments are given.
     existing_draft = await state.list_tasks_for_project(
         project_id, list_status=ArtifactStatus.DRAFT,
     )
+    previous_tasks: list[ProjectTask] = list(existing_draft)
     if existing_draft:
         # All draft tasks share a list_version (they were all generated together).
         await state.delete_task_list_draft(project_id, existing_draft[0].list_version)
+
+    # If no draft exists but archived versions do, fall back to the most
+    # recent archived list as the revision base. Lets a user finalize →
+    # archive → regenerate-with-comments and still get a revision.
+    if not previous_tasks:
+        archived = await state.list_tasks_for_project(
+            project_id, list_status=ArtifactStatus.ARCHIVED,
+        )
+        if archived:
+            # `list_tasks_for_project` orders by ordinal asc; pick the
+            # highest-list_version group.
+            latest_ver = max(t.list_version for t in archived)
+            previous_tasks = [t for t in archived if t.list_version == latest_ver]
 
     # Next version = max(all versions) + 1, where archived versions still count.
     all_tasks = await state.list_tasks_for_project(
@@ -863,31 +1561,69 @@ async def generate_tasks(
             detail="Agent executor not configured.",
         )
 
-    prompt = (
-        "You are breaking a finalized PRD into a flat list of buildable tasks "
-        "for an AI agent team to execute.\n\n"
-        "## PRD\n"
-        f"{prd.content}\n\n"
-        "## Output format\n"
-        "Emit a single fenced ```json``` block containing an ARRAY of task "
-        "objects. No prose before or after. Each object must have these keys:\n"
-        "  - title: string (under 100 chars, imperative — \"Build X\", \"Add Y\")\n"
-        "  - description: string (1-3 sentences describing what done looks like)\n"
-        "  - task_type: one of feature_request, bug_report, doc_request, demo_request, research_request, content_request\n"
-        "  - priority: one of low, medium, high\n"
-        "  - estimated_agent: one of backend_specialist, frontend_specialist, tester_specialist, code_reviewer, devops_specialist, content_creator, research_specialist (best fit; or null if uncertain)\n\n"
-        "Aim for 5-15 tasks. Each task should be independently dispatchable "
-        "to a per-task workflow (the user will dispatch them via chat). "
-        "Order tasks so an earlier task isn't blocked by a later one when "
-        "possible. Do NOT include cross-task dependencies in v1.\n\n"
-        "Example:\n"
-        "```json\n"
-        '[\n'
-        '  {"title": "Add user table migration", "description": "Create users table with email, password_hash, role columns.", "task_type": "feature_request", "priority": "high", "estimated_agent": "backend_specialist"},\n'
-        '  {"title": "Build login form", "description": "Email + password fields, calls POST /auth/login.", "task_type": "feature_request", "priority": "high", "estimated_agent": "frontend_specialist"}\n'
-        ']\n'
-        "```"
-    )
+    # Two prompt shapes (same pattern as PRD regen).
+    revising = bool(review_comments) and bool(previous_tasks)
+    if revising:
+        # Serialize the previous list as JSON the agent can ingest cleanly.
+        import json as _json
+        prev_json = _json.dumps(
+            [
+                {
+                    "title": t.title,
+                    "description": t.description,
+                    "task_type": t.task_type,
+                    "priority": t.priority,
+                    "estimated_agent": t.estimated_agent,
+                }
+                for t in sorted(previous_tasks, key=lambda x: x.ordinal)
+            ],
+            indent=2,
+        )
+        prompt = (
+            "You are REVISING an existing flat task list for an AI agent team "
+            "to execute. DO NOT start from scratch — apply the reviewer's "
+            "feedback to the existing list and keep the rest intact.\n\n"
+            "## PRD (for reference)\n"
+            f"{prd.content}\n\n"
+            "## Current task list (revise this)\n"
+            "```json\n"
+            f"{prev_json}\n"
+            "```\n\n"
+            "## Reviewer comments to address\n"
+            f"{review_comments}\n\n"
+            "## Output format\n"
+            "Emit a single fenced ```json``` block containing the REVISED ARRAY "
+            "of task objects, with the same keys as the input (title, "
+            "description, task_type, priority, estimated_agent). Apply the "
+            "comments precisely; keep unaffected tasks word-for-word identical "
+            "to the input. No prose before or after."
+        )
+    else:
+        prompt = (
+            "You are breaking a finalized PRD into a flat list of buildable tasks "
+            "for an AI agent team to execute.\n\n"
+            "## PRD\n"
+            f"{prd.content}\n\n"
+            "## Output format\n"
+            "Emit a single fenced ```json``` block containing an ARRAY of task "
+            "objects. No prose before or after. Each object must have these keys:\n"
+            "  - title: string (under 100 chars, imperative — \"Build X\", \"Add Y\")\n"
+            "  - description: string (1-3 sentences describing what done looks like)\n"
+            "  - task_type: one of feature_request, bug_report, doc_request, demo_request, research_request, content_request\n"
+            "  - priority: one of low, medium, high\n"
+            "  - estimated_agent: one of backend_specialist, frontend_specialist, tester_specialist, code_reviewer, devops_specialist, content_creator, research_specialist (best fit; or null if uncertain)\n\n"
+            "Aim for 5-15 tasks. Each task should be independently dispatchable "
+            "to a per-task workflow (the user will dispatch them via chat). "
+            "Order tasks so an earlier task isn't blocked by a later one when "
+            "possible. Do NOT include cross-task dependencies in v1.\n\n"
+            "Example:\n"
+            "```json\n"
+            '[\n'
+            '  {"title": "Add user table migration", "description": "Create users table with email, password_hash, role columns.", "task_type": "feature_request", "priority": "high", "estimated_agent": "backend_specialist"},\n'
+            '  {"title": "Build login form", "description": "Email + password fields, calls POST /auth/login.", "task_type": "feature_request", "priority": "high", "estimated_agent": "frontend_specialist"}\n'
+            ']\n'
+            "```"
+        )
 
     try:
         result = await executor.single_agent_call(
@@ -910,9 +1646,12 @@ async def generate_tasks(
             },
         )
 
-    # Persist rows.
+    # Persist rows. `review_input` is the same on every row in this list
+    # version — that's why we denormalize rather than introduce a per-list
+    # metadata table for v1.
     now = datetime.utcnow()
     saved: list[ProjectTask] = []
+    review_input_value = review_comments or None
     for i, raw_task in enumerate(parsed):
         t = ProjectTask(
             task_id=f"T-{uuid.uuid4().hex[:8]}",
@@ -927,6 +1666,7 @@ async def generate_tasks(
             estimated_agent=raw_task.get("estimated_agent"),
             task_status=TaskStatus.BACKLOG,
             created_at=now,
+            review_input=review_input_value,
         )
         await state.create_task(t)
         saved.append(t)
@@ -985,6 +1725,135 @@ async def patch_task(
     return {"data": _task_to_dict(updated), "meta": None, "error": None}
 
 
+@router.delete("/{project_id}/tasks/{task_id}", status_code=204)
+async def delete_task(
+    project_id: str,
+    task_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Hard-delete a single task row. Allowed only when the task is NOT
+    actively in flight — i.e. task_status is one of {backlog, cancelled,
+    failed, deployed}. For dispatched/in_progress/review/testing rows the
+    user must cancel first (via the chat agent or by cancelling the
+    underlying Request) before deleting.
+
+    If the task had a linked Request, the request's source_task_id is
+    nulled out — the Request continues to exist in History / Story Board,
+    it just loses the project-task back-link."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    task = await state.get_task(task_id)
+    if task is None or task.project_id != project_id:
+        raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found in project.")
+
+    # In-flight states block deletion. Terminal states + backlog are fine.
+    blocked_states = {
+        TaskStatus.DISPATCHED,
+        TaskStatus.IN_PROGRESS,
+        TaskStatus.REVIEW,
+        TaskStatus.TESTING,
+    }
+    if task.task_status in blocked_states:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "task in flight",
+                "task_status": str(task.task_status),
+                "hint": "Cancel the task first (e.g. ask the chat agent to cancel it, or cancel the linked Request) before deleting.",
+            },
+        )
+
+    await state.delete_task(task_id)
+    return None
+
+
+class BulkDeleteTasksBody(BaseModel):
+    task_ids: list[str]
+
+
+@router.post("/{project_id}/tasks/bulk_delete")
+async def bulk_delete_tasks(
+    project_id: str,
+    body: BulkDeleteTasksBody,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Hard-delete multiple task rows in one call. Partial-success contract:
+    in-flight or unknown task_ids are reported under `skipped` rather than
+    failing the whole batch. The frontend's "Delete Selected" action uses
+    this so users can sweep a list without worrying about a single in-flight
+    row 409'ing the rest.
+
+    Same per-task rule as the single-task endpoint: in-flight states
+    (dispatched/in_progress/review/testing) are blocked; backlog +
+    terminal states are deletable. Linked Requests have their
+    `source_task_id` nulled out.
+
+    Response shape:
+      {"data": {"deleted": ["T-abc", ...],
+                "skipped": [{"task_id": "T-xyz", "reason": "in_flight",
+                             "task_status": "in_progress"}, ...]},
+       "meta": {"requested": N, "deleted": M, "skipped": K}, ...}
+    """
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    await _require_project(state, project_id)
+
+    if not body.task_ids:
+        raise HTTPException(status_code=400, detail="task_ids must contain at least one entry.")
+
+    # Cap at a reasonable batch size to bound the DB work per request.
+    # A finalized list rarely exceeds 50 tasks; 200 leaves headroom while
+    # protecting against accidental floods.
+    if len(body.task_ids) > 200:
+        raise HTTPException(
+            status_code=400,
+            detail=f"bulk_delete capped at 200 task_ids per call (got {len(body.task_ids)}).",
+        )
+
+    blocked_states = {
+        TaskStatus.DISPATCHED,
+        TaskStatus.IN_PROGRESS,
+        TaskStatus.REVIEW,
+        TaskStatus.TESTING,
+    }
+    deleted: list[str] = []
+    skipped: list[dict[str, Any]] = []
+
+    # De-dupe IDs in case the client sent the same task twice.
+    for tid in dict.fromkeys(body.task_ids):
+        task = await state.get_task(tid)
+        if task is None or task.project_id != project_id:
+            skipped.append({"task_id": tid, "reason": "not_found"})
+            continue
+        if task.task_status in blocked_states:
+            skipped.append({
+                "task_id": tid,
+                "reason": "in_flight",
+                "task_status": str(task.task_status),
+            })
+            continue
+        await state.delete_task(tid)
+        deleted.append(tid)
+
+    return {
+        "data": {"deleted": deleted, "skipped": skipped},
+        "meta": {
+            "requested": len(body.task_ids),
+            "deleted": len(deleted),
+            "skipped": len(skipped),
+        },
+        "error": None,
+    }
+
+
 @router.post("/{project_id}/tasks/finalize")
 async def finalize_tasks(
     project_id: str,
@@ -992,13 +1861,18 @@ async def finalize_tasks(
     user: dict = Depends(get_current_user),
 ):
     """TSK-008. Flips the current draft list to finalized atomically (any
-    previously-finalized version is archived first). Rejects empty drafts."""
+    previously-finalized version is archived first). Rejects empty drafts.
+
+    On finalize, also renders the task list to markdown and writes it
+    to ``C:/ai-projects/<ProjectName>/docs/tasks.md`` on the host, then
+    pushes to the project's GitHub repo when ``repo_url`` is set. Both
+    side effects are soft-fail (logged + reported in ``meta``)."""
     state = request.app.state.state_store
     try:
         assert_not_unassigned(project_id, "modified")
     except ValueError as e:
         raise HTTPException(status_code=403, detail=str(e))
-    await _require_project(state, project_id)
+    project = await _require_project(state, project_id)
 
     draft_rows = await state.list_tasks_for_project(
         project_id, list_status=ArtifactStatus.DRAFT,
@@ -1023,9 +1897,47 @@ async def finalize_tasks(
     finalized = await state.list_tasks_for_project(
         project_id, list_version=list_version,
     )
+
+    # ── PM-finalize: render markdown + write to host + push to GitHub ──
+    # Pull a finalized_at timestamp off any row (they all share the
+    # same finalize_task_list transaction, so updated_at is consistent).
+    finalized_at_iso = None
+    if finalized and finalized[0].updated_at:
+        finalized_at_iso = finalized[0].updated_at.isoformat()
+    md = render_tasks_markdown(
+        project.name, finalized,
+        list_version=list_version,
+        finalized_at_iso=finalized_at_iso,
+    )
+    host_result = write_finalized_tasks(project.name, md)
+    if not host_result.ok:
+        logger.warning(
+            "tasks_finalize.host_write_failed",
+            project_id=project_id, project_name=project.name,
+            error=host_result.error,
+        )
+
+    # Push the rendered markdown to the project's GitHub repo (mirrors
+    # the PRD push above). Task lists aren't ProjectArtifact rows —
+    # they're rows in `project_tasks` — so we pass the rendered
+    # markdown directly rather than synthesizing a fake artifact.
+    github_result = await _push_finalized_doc_to_repo(
+        project=project,
+        repo_path="docs/tasks.md",
+        content=md,
+        commit_subject=f"docs: finalize task list v{list_version}",
+        descriptor=f"task list v{list_version} ({len(finalized)} tasks)",
+        actor=user.get("username") or user.get("user_id") or "unknown",
+    )
+
     return {
         "data": [_task_to_dict(t) for t in finalized],
-        "meta": {"list_version": list_version, "count": len(finalized)},
+        "meta": {
+            "list_version": list_version,
+            "count": len(finalized),
+            "host_write": host_result.as_dict(),
+            "github_push": github_result,
+        },
         "error": None,
     }
 

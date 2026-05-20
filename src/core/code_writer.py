@@ -87,7 +87,12 @@ class CodeWriter:
         self.github = GitHubPublisher()
 
     async def commit_code(
-        self, request_id: str, description: str, agent_outputs: dict[str, str]
+        self,
+        request_id: str,
+        description: str,
+        agent_outputs: dict[str, str],
+        repo: str | None = None,
+        project_root: Path | None = None,
     ) -> DeploymentState:
         """Full code commit pipeline: parse → write → compile → test → publish.
 
@@ -95,6 +100,19 @@ class CodeWriter:
             request_id: The request ID this code belongs to
             description: Human-readable description for the commit message
             agent_outputs: Dict of agent_id → output_text (from backend/frontend specialists)
+            repo: Target "owner/name" for the GitHub commit. None → falls back to
+                  GITHUB_REPO env var (the platform's own repo, preserves
+                  pre-WS behavior). The orchestrator resolves this per-request
+                  by looking up the request's project (WS-09).
+            project_root: Per-project working tree root (the
+                  "per-project working tree" feature). When set, all
+                  file ops (write, read, compile, test) happen under
+                  THIS directory instead of ``self.root`` (the platform
+                  tree). The orchestrator resolves this from the
+                  request's project (when project_id is set) via
+                  ``project_workspace.project_root_dir(project.name)``.
+                  Legacy requests with no project still write to the
+                  platform tree via ``self.root``.
 
         Returns:
             DeploymentState with step = code_committed (ready for sidecar)
@@ -102,6 +120,20 @@ class CodeWriter:
         Raises:
             CodeWriteError if any step fails
         """
+        # Resolve the effective root for THIS commit. The instance
+        # attribute (`self.root`) stays at the platform tree so any
+        # concurrent legacy request keeps working — only the per-call
+        # binding switches. mkdir up-front: a project-scoped commit may
+        # land in a freshly-created project tree (scaffold succeeded
+        # but `docs/` is the only existing subdir).
+        effective_root = project_root if project_root is not None else self.root
+        try:
+            effective_root.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise CodeWriteError(
+                f"Could not access project root {effective_root}: {e}"
+            ) from e
+
         deployment_id = f"deploy-{uuid.uuid4().hex[:8]}"
         dep_state = DeploymentState(
             deployment_id=deployment_id,
@@ -125,7 +157,9 @@ class CodeWriter:
             for agent_id, output_text in agent_outputs.items():
                 if not output_text:
                     continue
-                files = self._parse_and_write_files(output_text, agent_id)
+                files = self._parse_and_write_files(
+                    output_text, agent_id, root=effective_root,
+                )
                 all_file_content.update(files)
                 logger.info(
                     "files_written", agent=agent_id, count=len(files), files=list(files.keys())
@@ -148,7 +182,7 @@ class CodeWriter:
                 for rel_path in tool_edited:
                     if rel_path in all_file_content:
                         continue  # Already captured via Full Source
-                    full_path = self.root / rel_path
+                    full_path = effective_root / rel_path
                     if not full_path.exists():
                         logger.warning(
                             "files_modified_listed_but_missing",
@@ -218,7 +252,7 @@ class CodeWriter:
             # in code the agent never touched and block every commit.
             python_files = [f for f in all_files if f.endswith(".py")]
             if python_files:
-                await self._compile_python(python_files)
+                await self._compile_python(python_files, cwd=effective_root)
                 self._record_step(
                     dep_state, "python_compiled", "done",
                     f"ruff check passed on {len(python_files)} file(s)",
@@ -243,7 +277,7 @@ class CodeWriter:
                 # supervisor's docker build catches TS errors as a backstop.
                 # Raises CodeWriteError only when npm IS available AND the build
                 # actually fails (real type errors, not env gaps).
-                await self._compile_typescript()
+                await self._compile_typescript(cwd=effective_root)
                 self._record_step(
                     dep_state, "typescript_compiled", "done",
                     "frontend prod build verified (or skipped if npm unavailable)",
@@ -268,7 +302,7 @@ class CodeWriter:
                 if f.startswith("tests/") and "test_" in f.rsplit("/", 1)[-1]
             ]
             if test_files_written:
-                await self._run_tests(test_files_written)
+                await self._run_tests(test_files_written, cwd=effective_root)
                 self._record_step(dep_state, "tests_passed", "done", "pytest passed")
             else:
                 self._record_step(
@@ -287,6 +321,7 @@ class CodeWriter:
                 commit_info = await self.github.commit_files(
                     {p: c for p, c in all_file_content.items()},
                     commit_msg,
+                    repo=repo,  # WS-09 — None means fall back to GITHUB_REPO env
                 )
             except GitHubPublishError as e:
                 raise CodeWriteError(f"GitHub publish failed: {e}") from e
@@ -378,14 +413,24 @@ class CodeWriter:
             paths.append(cleaned)
         return paths
 
-    def _parse_and_write_files(self, output_text: str, agent_id: str) -> dict[str, str]:
+    def _parse_and_write_files(
+        self,
+        output_text: str,
+        agent_id: str,
+        root: Path | None = None,
+    ) -> dict[str, str]:
         """Parse code blocks with file paths from agent output, validate every
         one against the snapshot guard, THEN write to disk atomically (all-or-nothing).
+
+        ``root`` overrides the writer's default base directory — used by
+        per-project commits to land files under the project's working
+        tree instead of the platform tree.
 
         Returns a dict of {path: content} for downstream use (e.g., GitHub publishing).
         Raises CodeWriteError if any file fails validation — and in that case NO
         files are written, so disk state is unchanged.
         """
+        target_root = root if root is not None else self.root
         # Pattern: ### `path/to/file.ext` or ### Full Source: `path/to/file.ext`
         # Followed by ```lang\n...\n```
         pattern = r'###\s+(?:Full Source:\s*)?`([^`]+)`\s*(?:\([^)]*\))?\s*\n```\w*\n([\s\S]*?)```'
@@ -409,7 +454,7 @@ class CodeWriter:
                 logger.warning("path_traversal_blocked", path=file_path, agent=agent_id)
                 continue
 
-            full_path = self.root / file_path
+            full_path = target_root / file_path
             content_with_newline = content + "\n"
 
             if full_path.exists():
@@ -497,25 +542,29 @@ class CodeWriter:
                     f"{_MAX_LINE_DROP_PCT}% drop on files ≥{_MIN_LINES_FOR_DROP_CHECK} lines."
                 )
 
-    async def _compile_python(self, files: list[str]) -> None:
+    async def _compile_python(self, files: list[str], cwd: Path | None = None) -> None:
         """Run ruff check on the specific Python files the agent just wrote.
 
         We deliberately do NOT check the whole `src/` tree — pre-existing E/F
         violations in code the current agent never touched would block every
         commit. Only the files in this commit are validated.
+
+        ``cwd`` overrides the writer's default base directory — used for
+        per-project commits so ruff finds the project's pyproject.toml
+        (if any) instead of the platform's.
         """
         if not files:
             return
         # Shell-quote each path to be safe with unusual characters.
         quoted = " ".join(f"'{f}'" for f in files)
         code, stdout, stderr = await self._run_cmd(
-            f"ruff check {quoted} --select E,F --no-fix", timeout=30,
+            f"ruff check {quoted} --select E,F --no-fix", timeout=30, cwd=cwd,
         )
         if code != 0:
             error = stderr or stdout
             raise CodeWriteError(f"Python compilation failed (ruff):\n{error[:500]}")
 
-    async def _compile_typescript(self) -> None:
+    async def _compile_typescript(self, cwd: Path | None = None) -> None:
         """Run the REAL prod frontend build (npm run build) if npm is available.
 
         Uses the strict tsconfig.app.json that the supervisor's docker build
@@ -524,14 +573,19 @@ class CodeWriter:
 
         Backend containers don't always ship with node/npm (it's a Python
         image). When npm isn't present, we skip the local check and rely on
-        the supervisor's `docker compose build` to catch compile errors. The
-        supervisor-side build is the same content; the only thing we lose
-        when npm is missing is the EARLIER catch + rework-with-instructions
-        path. Better than failing the commit on an environment gap.
+        the supervisor's `docker compose build` to catch compile errors.
+
+        For per-project commits the project tree won't have
+        ``frontend/node_modules`` (npm install only runs at
+        ``docker compose build`` time, which is the Deploy step). When
+        node_modules is missing we skip the build — the per-project
+        docker build catches errors at deploy time. Without this guard
+        every per-project frontend commit would fail with "vite: not
+        found", blocking the agent forever.
         """
         # Probe for npm. The path traversal-safe way: try `npm --version` and
         # tolerate non-zero exit. If it succeeds, npm exists; otherwise skip.
-        probe_code, _, _ = await self._run_cmd("npm --version", timeout=10)
+        probe_code, _, _ = await self._run_cmd("npm --version", timeout=10, cwd=cwd)
         if probe_code != 0:
             logger.info(
                 "ts_compile_skipped_no_npm",
@@ -539,14 +593,29 @@ class CodeWriter:
             )
             return
 
+        # Skip when node_modules isn't installed in the target tree —
+        # almost certainly a per-project commit before the first Deploy.
+        target_root = cwd if cwd is not None else self.root
+        if not (target_root / "frontend" / "node_modules").exists():
+            logger.info(
+                "ts_compile_skipped_no_node_modules",
+                root=str(target_root),
+                reason="per-project commit; docker build will install deps at Deploy time",
+            )
+            return
+
         code, stdout, stderr = await self._run_cmd(
-            "cd frontend && npm run build 2>&1", timeout=180,
+            "cd frontend && npm run build 2>&1", timeout=180, cwd=cwd,
         )
         if code != 0:
             error = stderr or stdout
             raise CodeWriteError(f"Frontend prod build failed:\n{error[:1000]}")
 
-    async def _run_tests(self, test_files: list[str] | None = None) -> None:
+    async def _run_tests(
+        self,
+        test_files: list[str] | None = None,
+        cwd: Path | None = None,
+    ) -> None:
         """Run pytest only on the specific test files the agent emitted.
 
         Running pytest tests/ (the whole suite) is wrong for the lint-my-diff
@@ -557,7 +626,8 @@ class CodeWriter:
         """
         target = " ".join(test_files) if test_files else "tests/"
         code, stdout, stderr = await self._run_cmd(
-            f"python -m pytest {target} -x -q --tb=short --no-cov 2>&1", timeout=120,
+            f"python -m pytest {target} -x -q --tb=short --no-cov 2>&1",
+            timeout=120, cwd=cwd,
         )
         if code != 0:
             error = stderr or stdout
@@ -572,14 +642,25 @@ class CodeWriter:
             "detail": detail,
         })
 
-    async def _run_cmd(self, cmd: str, timeout: int = 30) -> tuple[int, str, str]:
-        """Run a shell command and return (exit_code, stdout, stderr)."""
+    async def _run_cmd(
+        self,
+        cmd: str,
+        timeout: int = 30,
+        cwd: Path | None = None,
+    ) -> tuple[int, str, str]:
+        """Run a shell command and return (exit_code, stdout, stderr).
+
+        ``cwd`` overrides ``self.root`` for this call — used by the
+        per-project compile / test pipeline so ruff / npm / pytest run
+        in the project's working tree, not the platform's.
+        """
+        target_cwd = cwd if cwd is not None else self.root
         try:
             proc = await asyncio.create_subprocess_shell(
                 cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=str(self.root),
+                cwd=str(target_cwd),
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             return proc.returncode or 0, stdout.decode(), stderr.decode()

@@ -2,14 +2,20 @@
 
 Pipeline (called as the "publish" stage of the research workflow):
   1. Parse `### File: <name>` blocks from research_report + content_creator output
-  2. Write each file to docs/research/REQ-XXX-<slug>/
+  2. Write each file to <workspace>/docs/research/REQ-XXX-<slug>/
+       - workspace is project-workspaces/<project-slug>/ when the request
+         belongs to a project with a non-empty repo_url (WS-13). Otherwise
+         it's the platform repo's working dir (legacy behavior, WS-15).
   3. Render slides.md → slides.pptx (python-pptx)
   4. Render report.md → report.pdf (weasyprint)
   5. Commit all files to GitHub via the Trees API in one atomic commit
-  6. Soft-fail: if GitHub publish errors, the request still completes; the local
-     files remain on disk and the error is captured in the result.
+       - target repo is the project's repo when supplied (WS-14), else the
+         platform repo from GITHUB_REPO env var (WS-15).
+  6. Soft-fail: if GitHub publish errors, the request still completes; the
+     local files remain on disk and the error is captured in the result.
 """
 
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -24,6 +30,11 @@ logger = structlog.get_logger()
 # Where artifacts are written, relative to the project root inside the container
 DOCS_RESEARCH_DIR = Path("docs/research")
 
+# WS-13 — root directory under which per-project workspaces are materialized.
+# `project-workspaces/<project-slug>/docs/research/<request_folder>/`. Path is
+# relative to the platform repo root unless PROJECT_WORKSPACES_DIR is set.
+_PROJECT_WORKSPACES_DEFAULT = "project-workspaces"
+
 
 class ResearchPublisher:
     """Parses research artifacts, writes them locally, and publishes to GitHub."""
@@ -32,9 +43,21 @@ class ResearchPublisher:
         self.root = Path(project_root)
         self.docs_dir = self.root / DOCS_RESEARCH_DIR
         self.github = GitHubPublisher()
+        # Configurable per-deployment, defaults to "project-workspaces/" at
+        # the platform repo root. Inside Docker the platform repo is mounted
+        # at /app/, so this lands at /app/project-workspaces/<slug>/ —
+        # gitignored from the platform repo by .gitignore.
+        self.workspaces_dir = self.root / (
+            os.getenv("PROJECT_WORKSPACES_DIR") or _PROJECT_WORKSPACES_DEFAULT
+        )
 
     async def publish(
-        self, request_id: str, description: str, artifacts: dict[str, Any]
+        self,
+        request_id: str,
+        description: str,
+        artifacts: dict[str, Any],
+        project_slug: str | None = None,
+        project_repo: str | None = None,
     ) -> dict[str, Any]:
         """Main entry point — called by the workflow runner for the publish stage.
 
@@ -43,6 +66,12 @@ class ResearchPublisher:
             description: The original request description (used for the folder slug)
             artifacts: workflow artifacts dict — contains research_specialist_output
                        and content_creator_output (or similar keys)
+            project_slug: WS-13. When set, writes to
+                       `<workspaces-root>/<project_slug>/docs/research/...`
+                       and pushes to project_repo. When None, uses the legacy
+                       platform-repo layout (`docs/research/...`).
+            project_repo: WS-14. "owner/name" of the GitHub target. None →
+                       falls back to GITHUB_REPO env var (platform repo).
 
         Returns:
             dict with keys: published_files, commit_sha, commit_url, publish_error
@@ -63,11 +92,24 @@ class ResearchPublisher:
             logger.warning("research_publish_no_input", request_id=request_id)
             return result
 
-        # ── 2. Determine the folder name ──────────
+        # ── 2. Determine the folder name + workspace root ────────
         folder_name = self._make_folder_name(request_id, description)
-        folder_path = self.docs_dir / folder_name
+        # WS-13: per-project layout when a project_slug is supplied.
+        # Local path: `project-workspaces/<slug>/docs/research/<folder>/`.
+        # Repo path inside the project's GitHub repo will be just
+        # `docs/research/<folder>/` (the inner slug is intentionally NOT
+        # repeated — per the agreed v1 spec).
+        if project_slug:
+            local_base = self.workspaces_dir / project_slug
+            folder_path = local_base / DOCS_RESEARCH_DIR / folder_name
+        else:
+            folder_path = self.docs_dir / folder_name
         folder_path.mkdir(parents=True, exist_ok=True)
-        logger.info("research_publish_folder", path=str(folder_path), request_id=request_id)
+        logger.info(
+            "research_publish_folder",
+            path=str(folder_path), request_id=request_id,
+            project_slug=project_slug,
+        )
 
         # ── 3. Parse file blocks from content_creator output ──────────
         files_written: dict[str, str] = {}  # rel_path → text content
@@ -115,15 +157,36 @@ class ResearchPublisher:
 
         # Collect all written files (text + binary)
         all_files = list(files_written.keys()) + list(binary_files.keys())
-        result["published_files"] = [f"{folder_name}/{f}" for f in all_files]
+        # published_files paths are reported relative to the project's workspace
+        # root (or the platform repo root, legacy) so the UI / cost dashboard
+        # can render meaningful paths.
+        published_prefix = (
+            f"project-workspaces/{project_slug}/docs/research/{folder_name}"
+            if project_slug else f"docs/research/{folder_name}"
+        )
+        result["published_files"] = [f"{published_prefix}/{f}" for f in all_files]
 
         # ── 6. Publish to GitHub via Trees API (soft-fail) ──────────
-        if not self.github.is_configured():
-            result["publish_error"] = "GITHUB_TOKEN/GITHUB_REPO not configured — files written locally only"
-            logger.warning("research_publish_not_configured", request_id=request_id)
+        # WS-14/15: if project_repo is supplied, target that repo and write
+        # at the natural `docs/research/<folder>/` path inside it. Otherwise
+        # fall back to GITHUB_REPO env (platform repo) with the same path.
+        target_repo = project_repo or os.getenv("GITHUB_REPO") or ""
+        if not target_repo or not (
+            self.github.token and not self.github.token.startswith("ghp_xxxxx")
+        ):
+            result["publish_error"] = (
+                "GitHub publish skipped — set GITHUB_TOKEN (+ GITHUB_REPO or "
+                "give the project a repo_url) to push artifacts."
+            )
+            logger.warning(
+                "research_publish_not_configured",
+                request_id=request_id, project_slug=project_slug,
+            )
             return result
 
-        # Build the {repo_path: content} dict for the Trees API
+        # Inside the target repo, artifacts live at the natural
+        # `docs/research/<folder>/` path — no inner project-slug duplication
+        # per the agreed v1 spec.
         commit_files: dict[str, bytes | str] = {}
         for filename, content in files_written.items():
             commit_files[f"docs/research/{folder_name}/{filename}"] = content
@@ -138,12 +201,15 @@ class ResearchPublisher:
         )
 
         try:
-            commit_info = await self.github.commit_files(commit_files, commit_msg)
+            commit_info = await self.github.commit_files(
+                commit_files, commit_msg, repo=target_repo,
+            )
             result["commit_sha"] = commit_info["short_sha"]
             result["commit_url"] = commit_info["url"]
             logger.info(
                 "research_published_to_github",
                 request_id=request_id,
+                target_repo=target_repo,
                 sha=commit_info["short_sha"],
                 files=len(all_files),
             )

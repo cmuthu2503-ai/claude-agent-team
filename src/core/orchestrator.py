@@ -474,7 +474,52 @@ class Orchestrator(AgentExecutor):
 
         try:
             description = artifacts.get("description", request_id)[:80]
-            dep_state = await self._code_writer.commit_code(request_id, description, agent_outputs)
+
+            # WS-09 — resolve which repo this request's code should land in.
+            # Look up request → project → repo_url. If the project has a
+            # repo_url that parses as a GitHub URL, target it. Otherwise
+            # fall back to GITHUB_REPO env var (the platform's own repo).
+            #
+            # Per-project working tree feature — same lookup also yields
+            # the project name, which becomes the on-disk root for this
+            # commit's file writes. Without a project_id (legacy
+            # one-off requests), project_root stays None and the writer
+            # falls back to self.root (= the platform tree at /app/).
+            from pathlib import Path as _Path
+
+            from src.core.github_publisher import extract_owner_repo
+            from src.core.project_workspace import project_root_dir
+            import os as _os
+            target_repo: str | None = None
+            project_root: _Path | None = None
+            req_for_repo = await self.state.get_request(request_id)
+            if req_for_repo and req_for_repo.project_id:
+                proj = await self.state.get_project(req_for_repo.project_id)
+                if proj:
+                    if proj.repo_url:
+                        parsed = extract_owner_repo(proj.repo_url)
+                        if parsed:
+                            target_repo = f"{parsed[0]}/{parsed[1]}"
+                    try:
+                        project_root = project_root_dir(proj.name)
+                    except ValueError:
+                        # validate_name rejected the name — shouldn't
+                        # happen because create_project ran the same
+                        # validator. Log and fall back to platform tree
+                        # so the request doesn't wedge.
+                        logger.warning(
+                            "code_commit.project_root_resolve_failed",
+                            project_id=proj.project_id, name=proj.name,
+                        )
+                        project_root = None
+            if not target_repo:
+                target_repo = _os.getenv("GITHUB_REPO") or None  # CodeWriter falls back too
+
+            dep_state = await self._code_writer.commit_code(
+                request_id, description, agent_outputs,
+                repo=target_repo,
+                project_root=project_root,
+            )
 
             # Persist artifact metadata on the Request so the UI can display it after page reload
             try:
@@ -482,11 +527,9 @@ class Orchestrator(AgentExecutor):
                 if req:
                     req.published_files = dep_state.files_committed or []
                     req.commit_sha = dep_state.commit_sha
-                    # Build a GitHub commit URL from the configured repo + sha if available
-                    import os as _os
-                    repo = _os.getenv("GITHUB_REPO", "")
-                    if repo and dep_state.commit_sha:
-                        req.commit_url = f"https://github.com/{repo}/commit/{dep_state.commit_sha}"
+                    # Build a GitHub commit URL from the ACTUAL target repo (not just env)
+                    if target_repo and dep_state.commit_sha:
+                        req.commit_url = f"https://github.com/{target_repo}/commit/{dep_state.commit_sha}"
                     await self.state.update_request(req)
             except Exception as e:
                 logger.warning("code_commit_persist_failed", request_id=request_id, error=str(e))
@@ -525,7 +568,36 @@ class Orchestrator(AgentExecutor):
         logger.info("research_publish_started", request_id=request_id)
 
         description = artifacts.get("description", request_id)
-        result = await self._research_publisher.publish(request_id, description, artifacts)
+
+        # WS-12/14 — resolve project_slug + project_repo from the request's
+        # project so research artifacts land in the project's workspace and
+        # its own GitHub repo (not the platform's). Falls through to legacy
+        # behavior (platform repo, flat path) when the project has no
+        # repo_url or no project at all.
+        from src.core.github_publisher import extract_owner_repo
+        from src.core.project_validation import project_repo_slug as _slug_for
+        project_slug: str | None = None
+        project_repo: str | None = None
+        req_for_proj = await self.state.get_request(request_id)
+        if req_for_proj and req_for_proj.project_id:
+            proj = await self.state.get_project(req_for_proj.project_id)
+            if proj:
+                # Use the same slug the repo was created with so the local
+                # workspace name matches the GitHub repo name.
+                try:
+                    project_slug = _slug_for(proj.name)
+                except ValueError:
+                    project_slug = None
+                if proj.repo_url:
+                    parsed = extract_owner_repo(proj.repo_url)
+                    if parsed:
+                        project_repo = f"{parsed[0]}/{parsed[1]}"
+
+        result = await self._research_publisher.publish(
+            request_id, description, artifacts,
+            project_slug=project_slug,
+            project_repo=project_repo,
+        )
 
         # Persist artifact metadata on the Request so the UI can display it after page reload
         try:

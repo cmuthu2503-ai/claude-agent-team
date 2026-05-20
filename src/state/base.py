@@ -1,6 +1,7 @@
 """Abstract StateStore interface — swappable backend (SQLite, Redis, etc.)."""
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 
 from src.models.base import (
     AcceptanceCriterion,
@@ -249,6 +250,30 @@ class StateStore(ABC):
         the project detail page stat cards."""
         ...
 
+    @abstractmethod
+    async def allocate_project_ports(self) -> tuple[int, int]:
+        """Pick the next available (backend, frontend) port pair for a
+        new project. Sequential MAX+1 allocation starting at
+        ``PROJECT_BACKEND_PORT_BASE`` / ``PROJECT_FRONTEND_PORT_BASE``.
+        Caller is responsible for INSERTing the new project row with
+        these values; unique indexes catch any race condition."""
+        ...
+
+    @abstractmethod
+    async def update_project_deploy(
+        self,
+        project_id: str,
+        *,
+        deploy_status: str | None = None,
+        deploy_url: str | None = None,
+        deploy_last_started_at: datetime | None = None,
+        deploy_error: str | None = None,
+    ) -> None:
+        """Targeted update for the deploy-lifecycle fields only.
+        Used by the Deploy / Stop endpoints; pass ``None`` to leave a
+        field unchanged."""
+        ...
+
     # ── Project Artifacts (PDB-03) ───────────────
     # Versioned brief + PRD per project. Tasks live in their own structured
     # table (Phase B). At most one row per (project_id, kind) has
@@ -293,6 +318,17 @@ class StateStore(ABC):
         """Transaction: archive any other finalized row for the same
         (project_id, kind), then mark THIS row finalized with timestamps.
         Returns the updated artifact."""
+        ...
+
+    @abstractmethod
+    async def delete_artifacts(
+        self, project_id: str, kind: ArtifactKind
+    ) -> int:
+        """Hard-delete every row for a (project_id, kind) — drafts,
+        finalized, and archived alike. Returns the number of rows
+        removed. Used by the "Delete PRD" action; downstream tasks
+        keep their rows but lose the parent reference (no FK, so this
+        is allowed)."""
         ...
 
     # ── Project Tasks (PDB-15) ───────────────────
@@ -364,6 +400,16 @@ class StateStore(ABC):
         """Hard-delete every row of a draft list_version. Used when the
         user regenerates a draft — the old draft is discarded entirely
         (versions are only kept after they've been finalized at least once)."""
+        ...
+
+    @abstractmethod
+    async def delete_task(self, task_id: str) -> None:
+        """Hard-delete a single task row. The route layer is responsible
+        for guarding the task_status precondition (only safe to delete
+        when not actively dispatched / in-flight). If the task has a
+        linked Request, the request's `source_task_id` is set to NULL
+        rather than deleted — the Request stays valid, it just loses its
+        back-link to the (now gone) project task."""
         ...
 
     # ── Build Session Messages (PDB-33) ──────────

@@ -10,9 +10,9 @@
  * finalized (since the backend rejects generate before that).
  */
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { Link } from "react-router-dom"
-import { ListChecks, Plus, RefreshCw, CheckCircle2, AlertTriangle, Rocket, ExternalLink } from "lucide-react"
+import { ListChecks, Plus, RefreshCw, CheckCircle2, AlertTriangle, Rocket, ExternalLink, Trash2 } from "lucide-react"
 import { api } from "../../lib/api"
 
 interface Task {
@@ -53,6 +53,15 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
   const [error, setError] = useState("")
   const [parseWarning, setParseWarning] = useState<string | null>(null)
   const [dispatchingTaskId, setDispatchingTaskId] = useState<string | null>(null)
+  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null)
+  // Review comments for the next regeneration. Transient — cleared on
+  // successful regen. Mirrors the PRDEditor pattern.
+  const [reviewComments, setReviewComments] = useState("")
+  // Multi-select state for bulk-delete. A Set lets us toggle efficiently
+  // and re-key off task_id rather than ordinal (which can shift).
+  // Pruned automatically when the underlying tasks list refreshes —
+  // see the useEffect below.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   const load = useCallback(async () => {
     try {
@@ -90,16 +99,25 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
     setError("")
     setParseWarning(null)
     try {
-      const res = await api.post(`/projects/${projectId}/tasks/generate`, {})
+      const body = reviewComments.trim()
+        ? { review_comments: reviewComments.trim() }
+        : {}
+      const res = await api.post(`/projects/${projectId}/tasks/generate`, body)
       const mode = res?.meta?.parse_mode
       if (mode === "markdown" || mode === "json_malformed_used_markdown") {
         setParseWarning(
           "Agent output had to be reparsed from markdown — review tasks carefully. (Regenerate may fix it.)"
         )
       }
-      await load()
+      setReviewComments("")  // clear on success
+      await load()           // also sets busy=null inside; finally below is belt-and-suspenders
     } catch (e: any) {
       setError(parseDetail(e?.message) || "Task generation failed")
+    } finally {
+      // Belt-and-suspenders — if `load()` itself throws AFTER api.post
+      // succeeded, busy would otherwise leak. `load()` already sets busy=null
+      // in both its branches; this is the safety net for the rest of the
+      // function body.
       setBusy(null)
     }
   }
@@ -120,14 +138,35 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
 
   const finalize = async () => {
     if (!tasks || tasks.length === 0) return
-    if (!window.confirm(`Finalize ${tasks.length} task${tasks.length === 1 ? "" : "s"}? You can still amend via chat in Phase D, but downstream dispatch will use this version.`)) return
+    if (!window.confirm(`Finalize ${tasks.length} task${tasks.length === 1 ? "" : "s"}? You can still amend via chat in Phase D, but downstream dispatch will use this version.\n\nThe list will also be written to C:/ai-projects/<ProjectName>/docs/tasks.md and pushed to the project's GitHub repo (if configured).`)) return
     setBusy("finalizing")
     setError("")
     try {
-      await api.post(`/projects/${projectId}/tasks/finalize`, {})
+      const res = await api.post(`/projects/${projectId}/tasks/finalize`, {})
+      // Refresh our OWN task state — the parent's onFinalized() only
+      // refetches brief+PRD on the workspace, not the task rows. Without
+      // this, the table stays on the draft rows and the toolbar never
+      // flips to the finalized view (View Board / Dispatch All).
+      await load()
+      // Surface host-write + GitHub-push results (mirrors the PRD
+      // finalize handler in BuildWorkspace.tsx). Both are soft-fail
+      // server-side, so we always have a meta object on 200.
+      const meta = (res as any)?.meta || {}
+      const hw = meta.host_write
+      const gh = meta.github_push
+      const lines: string[] = [`Finalized ${meta.count ?? tasks.length} task${(meta.count ?? tasks.length) === 1 ? "" : "s"}.`]
+      if (hw?.ok) lines.push(`Saved to: ${hw.path}`)
+      else if (hw?.error) lines.push(`Local write failed: ${hw.error}`)
+      if (gh?.ok) lines.push(`Pushed to ${gh.repo} @ ${gh.short_sha}`)
+      else if (gh?.skipped === "no_repo_url") lines.push("(No GitHub repo configured for this project — skipped push)")
+      else if (gh?.error) lines.push(`GitHub push failed: ${gh.error}`)
+      window.alert(lines.join("\n"))
       onFinalized()
     } catch (e: any) {
       setError(parseDetail(e?.message) || "Finalize failed")
+    } finally {
+      // Always reset busy. The previous version only reset on error so
+      // a successful finalize left the button stuck on "Finalizing…".
       setBusy(null)
     }
   }
@@ -145,6 +184,106 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
     }
   }
 
+  const deleteOne = async (task: Task) => {
+    // Friendly warning for tasks that already produced a Request. The
+    // server keeps the Request alive but the back-link to this task
+    // disappears, which can be surprising.
+    const hasRequest = !!task.request_id
+    const warning = hasRequest
+      ? `\n\nThis task is linked to ${task.request_id} (status: ${task.task_status}). The Request will remain in History but lose its back-link to this task.`
+      : ""
+    if (!window.confirm(`Permanently delete task ${task.task_id} — "${task.title}"?${warning}\n\nThis cannot be undone.`)) return
+    setDeletingTaskId(task.task_id)
+    setError("")
+    try {
+      await api.delete(`/projects/${projectId}/tasks/${task.task_id}`)
+      await load()
+    } catch (e: any) {
+      setError(parseDetail(e?.message) || "Delete failed")
+    } finally {
+      setDeletingTaskId(null)
+    }
+  }
+
+  // Server rejects deletes on in-flight statuses; mirror that rule here so
+  // the row's checkbox can be disabled (and select-all skips them) instead
+  // of letting the user check rows that will be quietly skipped.
+  const _IN_FLIGHT = ["dispatched", "in_progress", "review", "testing"]
+  const isDeletable = (t: Task) => !_IN_FLIGHT.includes(t.task_status)
+
+  // Prune the selection set when the tasks list refreshes — drop any IDs
+  // that no longer exist (e.g. just got deleted), or that became
+  // un-deletable (status flipped to in_flight in the background). Keeps
+  // the "Delete Selected (N)" counter honest.
+  useEffect(() => {
+    if (!tasks) return
+    const valid = new Set(tasks.filter(isDeletable).map((t) => t.task_id))
+    setSelectedIds((prev) => {
+      const next = new Set<string>()
+      for (const id of prev) if (valid.has(id)) next.add(id)
+      return next.size === prev.size ? prev : next
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks])
+
+  // Computed: which rows are currently deletable, for the select-all logic.
+  const deletableTasks = useMemo(
+    () => (tasks ?? []).filter(isDeletable),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tasks],
+  )
+  const allSelected =
+    deletableTasks.length > 0 && deletableTasks.every((t) => selectedIds.has(t.task_id))
+  const someSelected = selectedIds.size > 0 && !allSelected
+
+  const toggleOne = (taskId: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(taskId)
+      else next.delete(taskId)
+      return next
+    })
+  }
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(deletableTasks.map((t) => t.task_id)))
+    }
+  }
+
+  const bulkDelete = async () => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    if (!window.confirm(
+      `Permanently delete ${ids.length} selected task${ids.length === 1 ? "" : "s"}?\n\n` +
+      "Linked Requests stay in History; they just lose their back-link to these tasks. " +
+      "This cannot be undone."
+    )) return
+    setBusy("dispatching")  // reuse the disabling state; nothing here cares about the literal string
+    setError("")
+    try {
+      const res = await api.post(`/projects/${projectId}/tasks/bulk_delete`, { task_ids: ids })
+      const meta = res?.meta || {}
+      // Surface partial-success info so the user knows if any were skipped.
+      if (meta.skipped > 0) {
+        const reasons = (res?.data?.skipped || [])
+          .map((s: any) => `${s.task_id} (${s.reason}${s.task_status ? `: ${s.task_status}` : ""})`)
+          .join(", ")
+        setError(
+          `Deleted ${meta.deleted}/${meta.requested}. Skipped: ${reasons}`,
+        )
+      }
+      setSelectedIds(new Set())
+      await load()
+    } catch (e: any) {
+      setError(parseDetail(e?.message) || "Bulk delete failed")
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const dispatchAllBacklog = async () => {
     if (!tasks) return
     const backlogIds = tasks
@@ -159,6 +298,7 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
       await load()
     } catch (e: any) {
       setError(parseDetail(e?.message) || "Dispatch failed")
+    } finally {
       setBusy(null)
     }
   }
@@ -203,10 +343,28 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
           Task List {isFinalized ? "(Finalized)" : "(Draft)"} · v{tasks[0]?.list_version} · {tasks.length} task{tasks.length === 1 ? "" : "s"}
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {selectedIds.size > 0 && (
+            <button
+              type="button"
+              onClick={bulkDelete}
+              disabled={busy === "dispatching"}
+              style={dangerBtn(busy === "dispatching")}
+              title={`Delete ${selectedIds.size} selected task${selectedIds.size === 1 ? "" : "s"} (in-flight rows are skipped server-side)`}
+            >
+              <Trash2 size={12} />
+              <span>Delete Selected ({selectedIds.size})</span>
+            </button>
+          )}
           {!isFinalized && (
             <button type="button" onClick={generate} disabled={busy === "generating"} style={secondaryBtn(busy === "generating")}>
               <RefreshCw size={12} />
-              <span>{busy === "generating" ? "Regenerating…" : "Regenerate"}</span>
+              <span>
+                {busy === "generating"
+                  ? "Regenerating…"
+                  : reviewComments.trim()
+                    ? "Regenerate with comments"
+                    : "Regenerate"}
+              </span>
             </button>
           )}
           {!isFinalized && (
@@ -241,11 +399,60 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
               )}
               <button type="button" onClick={generate} disabled={busy === "generating"} style={secondaryBtn(busy === "generating")}>
                 <RefreshCw size={12} />
-                <span>{busy === "generating" ? "Archiving & regenerating…" : "Archive & Regenerate"}</span>
+                <span>
+                  {busy === "generating"
+                    ? "Archiving & regenerating…"
+                    : reviewComments.trim()
+                      ? "Archive & Regenerate (with comments)"
+                      : "Archive & Regenerate"}
+                </span>
               </button>
             </>
           )}
         </div>
+      </div>
+
+      {/* Review comments for the next regeneration. Mirrors the PRDEditor
+          pattern — transient, cleared on successful regen. The label
+          adapts to whether the list is finalized (archive-and-regen
+          flow) or still a draft. */}
+      <div style={{
+        marginBottom: 10, padding: "10px 12px",
+        background: "var(--bg-card)", border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+      }}>
+        <div style={{
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          marginBottom: 6, fontSize: 11, color: "var(--text-muted)",
+        }}>
+          <span>
+            Review comments for next regeneration <em>(optional)</em>
+          </span>
+          <span style={{
+            fontFamily: "var(--font-mono)",
+            color: reviewComments.length > 2000 ? "var(--danger)" : "var(--text-muted)",
+          }}>
+            {reviewComments.length}/2000
+          </span>
+        </div>
+        <textarea
+          value={reviewComments}
+          onChange={(e) => setReviewComments(e.target.value.slice(0, 2000))}
+          placeholder={
+            'e.g. "Drop T-3 and T-7 — out of scope. Add a task for cost ' +
+            'dashboard wiring. Mark T-2 high priority."'
+          }
+          rows={2}
+          disabled={busy === "generating"}
+          style={{
+            width: "100%", padding: "6px 10px", fontSize: 12,
+            fontFamily: "var(--font)", lineHeight: 1.4,
+            color: "var(--text-primary)", background: "var(--bg-hover)",
+            border: "1px solid var(--border)", borderRadius: "var(--radius)",
+            resize: "vertical", minHeight: 44, outline: "none",
+            boxSizing: "border-box",
+          }}
+        />
       </div>
 
       {parseWarning && (
@@ -269,18 +476,60 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ background: "var(--bg-hover)", borderBottom: "1px solid var(--border)" }}>
-              <Th width={50}>#</Th>
+              <Th width={32}>
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  // Indeterminate state when some-but-not-all selected; React
+                  // doesn't have a prop for this, so set it imperatively.
+                  ref={(el) => { if (el) el.indeterminate = someSelected }}
+                  onChange={toggleSelectAll}
+                  disabled={deletableTasks.length === 0}
+                  title={
+                    allSelected
+                      ? "Deselect all"
+                      : `Select all ${deletableTasks.length} deletable task${deletableTasks.length === 1 ? "" : "s"}`
+                  }
+                  style={{ cursor: deletableTasks.length === 0 ? "not-allowed" : "pointer" }}
+                />
+              </Th>
+              <Th width={36}>#</Th>
               <Th>Title</Th>
               <Th width={140}>Type</Th>
               <Th width={100}>Priority</Th>
               <Th width={170}>Agent</Th>
-              <Th width={100}>Status</Th>
+              <Th width={isFinalized ? 170 : 100}>Status</Th>
+              <Th width={44}>{" "}</Th>
             </tr>
           </thead>
           <tbody>
             {tasks.map((t) => (
-              <tr key={t.task_id} style={{ borderBottom: "1px solid var(--border)" }}>
-                <Td width={50}>
+              <tr
+                key={t.task_id}
+                style={{
+                  borderBottom: "1px solid var(--border)",
+                  // Subtle highlight when a row is in the selection set
+                  // so the user can see what they'll delete.
+                  background: selectedIds.has(t.task_id)
+                    ? "var(--accent-subtle, color-mix(in srgb, var(--accent) 8%, transparent))"
+                    : undefined,
+                }}
+              >
+                <Td width={32}>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(t.task_id)}
+                    onChange={(e) => toggleOne(t.task_id, e.target.checked)}
+                    disabled={!isDeletable(t)}
+                    title={
+                      isDeletable(t)
+                        ? "Select for bulk delete"
+                        : `In-flight (${t.task_status}) — cancel first to enable delete`
+                    }
+                    style={{ cursor: isDeletable(t) ? "pointer" : "not-allowed" }}
+                  />
+                </Td>
+                <Td width={36}>
                   <span style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
                     {t.ordinal}
                   </span>
@@ -373,6 +622,49 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
                   {(!isFinalized || (!t.request_id && t.task_status !== "backlog")) && (
                     <Badge>{t.task_status}</Badge>
                   )}
+                </Td>
+                <Td width={44}>
+                  {/* Trash icon. Disabled (with tooltip) when the task is in
+                      flight — server returns 409 in that case anyway, but the
+                      affordance is clearer if we surface it here. */}
+                  {(() => {
+                    const inFlight = ["dispatched", "in_progress", "review", "testing"].includes(t.task_status)
+                    const busy = deletingTaskId === t.task_id
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => deleteOne(t)}
+                        disabled={inFlight || busy}
+                        title={inFlight
+                          ? `Task is ${t.task_status} — cancel it before deleting`
+                          : "Delete this task"}
+                        style={{
+                          display: "inline-flex", alignItems: "center", justifyContent: "center",
+                          width: 24, height: 24, padding: 0,
+                          background: "transparent",
+                          color: inFlight ? "var(--text-muted)" : "var(--text-muted)",
+                          border: "1px solid var(--border)",
+                          borderRadius: 3,
+                          cursor: inFlight ? "not-allowed" : busy ? "wait" : "pointer",
+                          opacity: inFlight ? 0.4 : busy ? 0.5 : 1,
+                          transition: "background 0.15s, color 0.15s, border-color 0.15s",
+                        }}
+                        onMouseEnter={(e) => {
+                          if (inFlight || busy) return
+                          e.currentTarget.style.background = "var(--danger-subtle)"
+                          e.currentTarget.style.color = "var(--danger)"
+                          e.currentTarget.style.borderColor = "var(--danger)"
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "transparent"
+                          e.currentTarget.style.color = "var(--text-muted)"
+                          e.currentTarget.style.borderColor = "var(--border)"
+                        }}
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    )
+                  })()}
                 </Td>
               </tr>
             ))}
@@ -545,6 +837,21 @@ function dispatchBtn(disabled: boolean): React.CSSProperties {
     borderRadius: 3, cursor: disabled ? "wait" : "pointer",
     whiteSpace: "nowrap", lineHeight: 1, fontFamily: "var(--font-mono)",
     textTransform: "uppercase", letterSpacing: 0.5,
+  }
+}
+
+function dangerBtn(disabled: boolean): React.CSSProperties {
+  return {
+    display: "inline-flex", alignItems: "center", gap: 6,
+    padding: "6px 12px", fontSize: 12, fontWeight: 600,
+    background: disabled
+      ? "var(--bg-card)"
+      : "var(--danger-subtle, color-mix(in srgb, var(--danger) 12%, transparent))",
+    color: disabled ? "var(--text-muted)" : "var(--danger)",
+    border: `1px solid var(--danger)`,
+    borderRadius: "var(--radius)",
+    cursor: disabled ? "wait" : "pointer",
+    whiteSpace: "nowrap", lineHeight: 1, fontFamily: "var(--font)",
   }
 }
 

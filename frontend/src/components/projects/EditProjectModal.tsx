@@ -46,6 +46,28 @@ const MAX_DESC = 500
 const MAX_TAG = 25
 const MAX_TAGS = 10
 
+// Same regex / rules as CreateProjectModal — keep these in sync with
+// validate_name() in src/core/project_validation.py. The project name
+// doubles as a folder name on the host filesystem; renaming a project
+// changes the folder name on next finalize, so we keep the rules.
+const NAME_BAD_CHARS = /[\s/\\<>:"|?*\x00-\x1f]/
+function validateNameClient(raw: string): string | null {
+  const cleaned = raw.trim()
+  if (!cleaned) return null
+  if (cleaned.length > MAX_NAME) return `Max ${MAX_NAME} characters.`
+  const m = NAME_BAD_CHARS.exec(cleaned)
+  if (m) {
+    const bad = m[0]
+    const nice = /\s/.test(bad) ? "a space" : `'${bad}'`
+    return `Can't contain ${nice}. Use letters, numbers, dashes, underscores, or dots — no spaces.`
+  }
+  if (cleaned === "." || cleaned === "..") return "Can't be '.' or '..'."
+  if (cleaned.startsWith(".") || cleaned.endsWith(".") || cleaned.endsWith(" ")) {
+    return "Can't start or end with a dot or space."
+  }
+  return null
+}
+
 interface UserOption { user_id: string; username: string; role: string }
 
 export interface EditableProject {
@@ -119,6 +141,9 @@ export function EditProjectModal({ open, initial, onClose, onSaved }: Props) {
 
   if (!open) return null
 
+  // Recompute on every render — cheap, and Save gate uses it too.
+  const nameError = validateNameClient(name)
+
   const addTag = () => {
     const t = tagDraft.trim().toLowerCase()
     if (!t) return
@@ -134,6 +159,11 @@ export function EditProjectModal({ open, initial, onClose, onSaved }: Props) {
   const submit = async () => {
     if (!name.trim()) {
       setError("Name is required.")
+      return
+    }
+    const localErr = validateNameClient(name)
+    if (localErr) {
+      setError(localErr)
       return
     }
     setSubmitting(true)
@@ -196,8 +226,17 @@ export function EditProjectModal({ open, initial, onClose, onSaved }: Props) {
             <input
               type="text" value={name}
               onChange={(e) => setName(e.target.value.slice(0, MAX_NAME))}
-              style={inputStyle}
+              style={{
+                ...inputStyle,
+                borderColor: nameError ? "var(--danger)" : "var(--border)",
+              }}
+              aria-invalid={nameError ? "true" : "false"}
             />
+            {nameError && (
+              <div style={{ marginTop: 4, fontSize: 11, color: "var(--danger)" }}>
+                {nameError}
+              </div>
+            )}
           </Field>
           <Field label="Description" hint={`${description.length}/${MAX_DESC}`}>
             <textarea
@@ -328,7 +367,17 @@ export function EditProjectModal({ open, initial, onClose, onSaved }: Props) {
           <button type="button" onClick={onClose} style={btnSecondary}>
             Cancel
           </button>
-          <button type="button" onClick={submit} disabled={submitting || !name.trim()} style={btnPrimary}>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={submitting || !name.trim() || !!nameError}
+            style={{
+              ...btnPrimary,
+              opacity: (submitting || !name.trim() || !!nameError) ? 0.5 : 1,
+              cursor: (submitting || !name.trim() || !!nameError) ? "not-allowed" : "pointer",
+            }}
+            title={nameError || (name.trim() ? "" : "Enter a project name")}
+          >
             <span>{submitting ? "Saving…" : "Save Changes"}</span>
           </button>
         </div>

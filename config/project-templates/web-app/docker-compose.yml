@@ -1,0 +1,64 @@
+# Per-project Docker Compose for {{PROJECT_NAME}}.
+#
+# Allocated ports (claimed at project creation, persisted on the
+# `projects` row, free for the life of this project):
+#   - backend  → host :{{BACKEND_PORT}}
+#   - frontend → host :{{FRONTEND_PORT}}
+#
+# Project name pins this stack to its own Compose project so it can't
+# collide with the Agent Team platform's `agent-team-dev` stack or with
+# any other project's stack.
+name: project-{{PROJECT_SLUG}}
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: project-{{PROJECT_SLUG}}-backend
+    ports:
+      - "{{BACKEND_PORT}}:8000"
+    volumes:
+      - ./backend/app:/app/app
+    environment:
+      - PROJECT_NAME={{PROJECT_NAME}}
+      - LOG_LEVEL=INFO
+    networks:
+      - project-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: project-{{PROJECT_SLUG}}-frontend
+    ports:
+      - "{{FRONTEND_PORT}}:3000"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+    environment:
+      # Backend reachable from the frontend container via the docker
+      # network. The Vite dev server proxies /api/* to this URL.
+      - VITE_BACKEND_URL=http://backend:8000
+    networks:
+      - project-net
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+networks:
+  project-net:
+    name: project-{{PROJECT_SLUG}}-net

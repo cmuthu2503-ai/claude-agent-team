@@ -806,3 +806,52 @@ refactor:
   empty body) — caught when wiring the Project delete trash icon.
 - DELETE routes that return 204 confuse the api client if it tries
   `res.json()` — always test the cleanup path during smoke.
+
+### 15.9 Project Workspaces (WS — v1.3)
+
+Per `docs/prd-projects-feature.md` §16 — verify after every WS-touching change.
+
+1. **Auto-create on new project.** Click `+ New Project`, type a name
+   like "Smoke Test Project", confirm the live preview shows
+   `github.com/<your-user>/smoke-test-project`. Leave "Create a new
+   private GitHub repo for this project" checked. Save. Detail page
+   loads with a `View on GitHub` link to the new repo.
+2. **Opt-out path.** Repeat the create flow but uncheck the checkbox
+   and paste an existing repo URL. Project saves with that URL, no
+   GitHub call is made (verify via `docker logs agent-team-backend`
+   for absence of `github_repo_created`).
+3. **Backfill button (WS-16).** Open an existing project with empty
+   `repo_url` (must NOT be Unassigned). A dashed `Create GitHub repo`
+   chip appears next to the Created date. Click it, confirm, the repo
+   materializes, the chip is replaced by a `View on GitHub` link.
+4. **Idempotency.** Hit the backfill endpoint twice via curl —
+   second call returns **409** with `repo_url_already_set`.
+5. **Name collision.** Create two projects whose names slug to the
+   same value (e.g. "Foo Bar" + "foo-bar"). Second creation should
+   **fail with 422** and the alert reads "A repo with the slug
+   'foo-bar' already exists in your namespace. Pick a different
+   project name." First project is created cleanly.
+6. **Research artifact routing (WS-12..15).** Submit a research_request
+   against the CrewAITeam project. After the workflow runs, verify:
+   - `project-workspaces/crewaiteam/docs/research/REQ-XXX-…/` exists
+     locally inside the backend container.
+   - `docs/research/REQ-XXX-…/` exists in `cmuthu2503-ai/crewaiteam`
+     on GitHub at the latest commit.
+   - The platform's own repo (`cmuthu2503-ai/claude-agent-team`)
+     gained NO commits during the workflow.
+   - Request's `commit_url` on the detail page points at the
+     CrewAITeam repo, not the platform repo.
+7. **Code commit routing (WS-09..11).** Submit a feature_request
+   against a project that has a repo. When the code_commit stage
+   completes, verify the request's `commit_url` resolves to the
+   project's repo + the files appear there at top-level `src/...`,
+   `frontend/...`, etc.
+8. **Fallback when project has no repo (WS-10/15).** Submit a request
+   against the Agent Team project (legitimately points at the platform
+   repo). Code + research land in `claude-agent-team`, not in a new
+   workspace. This is the legacy behavior — preserved as the fallback
+   when a project's `repo_url` matches the platform's.
+9. **`PROJECT_WORKSPACES_DIR` override.** Set this env var in the
+   backend's environment, restart, and verify the `project-workspaces/`
+   prefix in published_files paths changes accordingly. No code edits
+   required — pure config.

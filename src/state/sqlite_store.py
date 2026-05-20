@@ -405,7 +405,42 @@ class SQLiteStateStore(StateStore):
             self._db.row_factory = aiosqlite.Row
             await self._db.execute("PRAGMA journal_mode=WAL")
             await self._db.execute("PRAGMA foreign_keys=ON")
+            # Cross-process WAL visibility — without an aggressive
+            # checkpoint, this connection's writes stay in its own
+            # WAL file until the default 1000-page threshold, and
+            # external readers (e.g. the host supervisor doing per-
+            # project deploys) see stale data. ``wal_autocheckpoint=1``
+            # forces the WAL to flush into the main DB after every
+            # commit, so subsequent sqlite3 connections (from other
+            # processes) see fresh data immediately. Tiny perf cost
+            # for the visibility guarantee we need.
+            await self._db.execute("PRAGMA wal_autocheckpoint=1")
         return self._db
+
+    async def _refresh_read_snapshot(self) -> None:
+        """Drop and reopen the aiosqlite connection so the next query
+        starts from a fresh WAL snapshot — picks up writes from OTHER
+        processes (e.g. the host supervisor updating
+        ``projects.deploy_status``).
+
+        Why so aggressive: in WAL mode, a long-lived connection pins
+        a snapshot that only advances on its OWN writes. Neither
+        ``commit()``, ``BEGIN IMMEDIATE; COMMIT;``, nor
+        ``PRAGMA wal_checkpoint`` reliably forces the snapshot to
+        re-read after external writes — they affect the WAL file but
+        not the in-memory frame index this connection holds. The only
+        deterministic fix is to close and reopen the connection.
+
+        Cost: ~1ms per call to reopen. Called from project-read paths
+        that race against the supervisor; not from every query."""
+        if self._db is None:
+            return
+        try:
+            await self._db.close()
+        except Exception:
+            pass
+        self._db = None
+        # Subsequent _get_db() call rebuilds the connection.
 
     async def initialize(self) -> None:
         db = await self._get_db()
@@ -442,6 +477,43 @@ class SQLiteStateStore(StateStore):
             # brief is edited AFTER the PRD has been finalized (i.e.
             # "your finalized PRD may be stale — regenerate?").
             "ALTER TABLE project_artifacts ADD COLUMN updated_at TIMESTAMP",
+            # Review-driven regeneration — when a brief/PRD is regenerated
+            # with user feedback, store the feedback that drove that
+            # revision so the version-history view can show "v0.2 — added
+            # rate limiting per review" instead of just a date. NULL for
+            # first-draft (v0.1) artifacts that weren't driven by review.
+            "ALTER TABLE project_artifacts ADD COLUMN review_input TEXT",
+            # Same idea for task-list regeneration. All rows of a given
+            # list_version share the same review_input (denormalized for
+            # simplicity — a separate per-list table wasn't worth the join
+            # cost at v1 scale).
+            "ALTER TABLE project_tasks ADD COLUMN review_input TEXT",
+            # Per-project working tree + per-project deploy (the
+            # "every project is its own running app" feature). Adds:
+            #   - kind: which template was scaffolded (web-app / api-service / frontend-app)
+            #   - deploy_backend_port / deploy_frontend_port: allocated at create time, immutable for life of project
+            #   - deploy_status: stopped | deploying | running | failed
+            #   - deploy_url: launch URL when running
+            #   - deploy_last_started_at: last "Deploy" timestamp
+            #   - deploy_error: last failure message (if any)
+            # Default `web-app` is the most common case; legacy projects
+            # inherit it but won't have a scaffold on disk — the Deploy
+            # endpoint rejects them with a clear error.
+            "ALTER TABLE projects ADD COLUMN kind TEXT NOT NULL DEFAULT 'web-app'",
+            "ALTER TABLE projects ADD COLUMN deploy_backend_port INTEGER",
+            "ALTER TABLE projects ADD COLUMN deploy_frontend_port INTEGER",
+            "ALTER TABLE projects ADD COLUMN deploy_status TEXT NOT NULL DEFAULT 'stopped'",
+            "ALTER TABLE projects ADD COLUMN deploy_url TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE projects ADD COLUMN deploy_last_started_at TIMESTAMP",
+            "ALTER TABLE projects ADD COLUMN deploy_error TEXT",
+            # Partial unique indexes — enforce no two projects share a
+            # backend or frontend port, but only when the port is set
+            # (NULL means "not allocated yet"). SQLite supports
+            # WHERE-clause partial indexes.
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_deploy_backend_port "
+            "  ON projects(deploy_backend_port) WHERE deploy_backend_port IS NOT NULL",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_deploy_frontend_port "
+            "  ON projects(deploy_frontend_port) WHERE deploy_frontend_port IS NOT NULL",
         ]
         for stmt in migrations:
             try:
@@ -1440,8 +1512,12 @@ class SQLiteStateStore(StateStore):
             """INSERT INTO projects
                (project_id, name, description, status, color, icon, tags,
                 lead_user_id, repo_url, default_team, target_date,
-                template_id, created_by, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                template_id, created_by, created_at,
+                kind, deploy_backend_port, deploy_frontend_port,
+                deploy_status, deploy_url,
+                deploy_last_started_at, deploy_error)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?, ?, ?, ?)""",
             (
                 project.project_id, project.name, project.description,
                 project.status, project.color, project.icon,
@@ -1450,12 +1526,68 @@ class SQLiteStateStore(StateStore):
                 project.target_date.isoformat() if project.target_date else None,
                 project.template_id, project.created_by,
                 project.created_at.isoformat(),
+                str(project.kind),
+                project.deploy_backend_port,
+                project.deploy_frontend_port,
+                str(project.deploy_status),
+                project.deploy_url,
+                (project.deploy_last_started_at.isoformat()
+                 if project.deploy_last_started_at else None),
+                project.deploy_error,
             ),
         )
         await db.commit()
         return project.project_id
 
+    async def allocate_project_ports(self) -> tuple[int, int]:
+        """Atomically pick the next available (backend, frontend) port
+        pair for a new project. Used at project-creation time so the
+        scaffolded ``docker-compose.yml`` can bake ports inline.
+
+        Algorithm: ``MAX(<column>) + 1`` (or the base port if no
+        projects have allocated ports yet). Cheap and predictable; gaps
+        from deleted projects are not reused (plenty of headroom under
+        16-bit space).
+
+        Race-safety: aiosqlite serializes writes, but to be defensive
+        we run the SELECT + read inside an IMMEDIATE transaction so a
+        concurrent reader can't slip a write in between.
+
+        Raises if ports would overflow 65535 (vanishingly unlikely).
+        """
+        from src.models.base import (
+            PROJECT_BACKEND_PORT_BASE,
+            PROJECT_FRONTEND_PORT_BASE,
+        )
+        db = await self._get_db()
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await db.execute(
+                "SELECT COALESCE(MAX(deploy_backend_port), ? - 1) + 1, "
+                "       COALESCE(MAX(deploy_frontend_port), ? - 1) + 1 "
+                "FROM projects",
+                (PROJECT_BACKEND_PORT_BASE, PROJECT_FRONTEND_PORT_BASE),
+            )
+            row = await cur.fetchone()
+            backend_port = int(row[0])
+            frontend_port = int(row[1])
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+        if backend_port > 65535 or frontend_port > 65535:
+            raise ValueError(
+                f"Project port allocation exhausted: backend={backend_port}, "
+                f"frontend={frontend_port}. Reclaim ports from deleted projects "
+                f"or shift the base ports."
+            )
+        return backend_port, frontend_port
+
     async def get_project(self, project_id: str) -> Project | None:
+        # Drop the cached connection so the next query sees the
+        # supervisor's latest write (cross-process WAL visibility).
+        # See _refresh_read_snapshot for why this is needed.
+        await self._refresh_read_snapshot()
         db = await self._get_db()
         async with db.execute(
             "SELECT * FROM projects WHERE project_id = ?", (project_id,)
@@ -1561,6 +1693,17 @@ class SQLiteStateStore(StateStore):
         }
 
     def _row_to_project(self, row: aiosqlite.Row) -> Project:
+        # Deploy-related columns may be missing on rows persisted before
+        # the per-project working-tree migration ran on this DB file —
+        # defend with try/except so reads stay backwards-compatible.
+        def _opt(col: str, default=None):
+            try:
+                v = row[col]
+            except (IndexError, KeyError):
+                return default
+            return v if v is not None else default
+
+        deploy_started = _opt("deploy_last_started_at")
         return Project(
             project_id=row["project_id"],
             name=row["name"],
@@ -1581,7 +1724,60 @@ class SQLiteStateStore(StateStore):
             updated_at=(
                 datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
             ),
+            kind=_opt("kind", "web-app"),
+            deploy_backend_port=_opt("deploy_backend_port"),
+            deploy_frontend_port=_opt("deploy_frontend_port"),
+            deploy_status=_opt("deploy_status", "stopped"),
+            deploy_url=_opt("deploy_url", "") or "",
+            deploy_last_started_at=(
+                datetime.fromisoformat(deploy_started) if deploy_started else None
+            ),
+            deploy_error=_opt("deploy_error"),
         )
+
+    async def update_project_deploy(
+        self,
+        project_id: str,
+        *,
+        deploy_status: str | None = None,
+        deploy_url: str | None = None,
+        deploy_last_started_at: datetime | None = None,
+        deploy_error: str | None = None,
+    ) -> None:
+        """Targeted update for deploy-lifecycle fields only. Used by
+        the Deploy / Stop endpoints to flip status between the
+        ``stopped → deploying → running | failed`` states without
+        racing against the broader ``update_project`` call (which
+        clobbers everything).
+
+        Pass ``None`` for any field to leave it unchanged. To explicitly
+        clear ``deploy_error`` pass an empty string (the DB-side check
+        treats ``""`` as "set to NULL" — keeps the column tidy)."""
+        sets = []
+        params: list = []
+        if deploy_status is not None:
+            sets.append("deploy_status = ?")
+            params.append(deploy_status)
+        if deploy_url is not None:
+            sets.append("deploy_url = ?")
+            params.append(deploy_url)
+        if deploy_last_started_at is not None:
+            sets.append("deploy_last_started_at = ?")
+            params.append(deploy_last_started_at.isoformat())
+        if deploy_error is not None:
+            sets.append("deploy_error = ?")
+            params.append(deploy_error or None)  # "" → NULL for tidiness
+        if not sets:
+            return
+        sets.append("updated_at = ?")
+        params.append(datetime.utcnow().isoformat())
+        params.append(project_id)
+        db = await self._get_db()
+        await db.execute(
+            f"UPDATE projects SET {', '.join(sets)} WHERE project_id = ?",
+            tuple(params),
+        )
+        await db.commit()
 
     # ── Project Artifacts (PDB-04) ───────────────
 
@@ -1590,8 +1786,9 @@ class SQLiteStateStore(StateStore):
         await db.execute(
             """INSERT INTO project_artifacts
                (artifact_id, project_id, kind, version, status, content,
-                created_by, created_at, finalized_at, finalized_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                created_by, created_at, finalized_at, finalized_by,
+                review_input)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 artifact.artifact_id,
                 artifact.project_id,
@@ -1603,6 +1800,7 @@ class SQLiteStateStore(StateStore):
                 artifact.created_at.isoformat(),
                 artifact.finalized_at.isoformat() if artifact.finalized_at else None,
                 artifact.finalized_by,
+                artifact.review_input,
             ),
         )
         await db.commit()
@@ -1710,13 +1908,32 @@ class SQLiteStateStore(StateStore):
             row = await cursor.fetchone()
         return self._row_to_artifact(row) if row else None
 
+    async def delete_artifacts(
+        self, project_id: str, kind: ArtifactKind
+    ) -> int:
+        """Hard-delete every artifact row matching (project_id, kind).
+        Returns the row count for the API response so the UI can show
+        'Deleted N versions.' Used by ``DELETE /projects/:id/prd``."""
+        db = await self._get_db()
+        cursor = await db.execute(
+            "DELETE FROM project_artifacts WHERE project_id = ? AND kind = ?",
+            (project_id, str(kind)),
+        )
+        deleted = cursor.rowcount or 0
+        await db.commit()
+        return deleted
+
     def _row_to_artifact(self, row: aiosqlite.Row) -> ProjectArtifact:
-        # `updated_at` may be missing on rows from before the PDB-43 migration —
-        # _safe_get pattern would be heavy here, just try/except.
+        # `updated_at` + `review_input` may be missing on rows from before
+        # the migration that added them — defend with try/except.
         try:
             updated_at_raw = row["updated_at"]
         except (IndexError, KeyError):
             updated_at_raw = None
+        try:
+            review_input = row["review_input"]
+        except (IndexError, KeyError):
+            review_input = None
         return ProjectArtifact(
             artifact_id=row["artifact_id"],
             project_id=row["project_id"],
@@ -1733,6 +1950,7 @@ class SQLiteStateStore(StateStore):
                 datetime.fromisoformat(row["finalized_at"]) if row["finalized_at"] else None
             ),
             finalized_by=row["finalized_by"],
+            review_input=review_input,
         )
 
     # ── Project Tasks (PDB-15) ───────────────────
@@ -1743,8 +1961,9 @@ class SQLiteStateStore(StateStore):
             """INSERT INTO project_tasks
                (task_id, project_id, list_version, list_status, ordinal,
                 title, description, task_type, priority, estimated_agent,
-                task_status, request_id, amended, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                task_status, request_id, amended, created_at, updated_at,
+                review_input)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 task.task_id, task.project_id, task.list_version,
                 str(task.list_status), task.ordinal, task.title,
@@ -1753,6 +1972,7 @@ class SQLiteStateStore(StateStore):
                 task.request_id, 1 if task.amended else 0,
                 task.created_at.isoformat(),
                 task.updated_at.isoformat() if task.updated_at else None,
+                task.review_input,
             ),
         )
         await db.commit()
@@ -1918,7 +2138,25 @@ class SQLiteStateStore(StateStore):
         )
         await db.commit()
 
+    async def delete_task(self, task_id: str) -> None:
+        """Single-row delete. Detaches any linked Request first so the
+        Request stays valid but loses its source_task_id back-link."""
+        db = await self._get_db()
+        await db.execute(
+            "UPDATE requests SET source_task_id = NULL WHERE source_task_id = ?",
+            (task_id,),
+        )
+        await db.execute(
+            "DELETE FROM project_tasks WHERE task_id = ?",
+            (task_id,),
+        )
+        await db.commit()
+
     def _row_to_task(self, row: aiosqlite.Row) -> ProjectTask:
+        try:
+            review_input = row["review_input"]
+        except (IndexError, KeyError):
+            review_input = None
         return ProjectTask(
             task_id=row["task_id"],
             project_id=row["project_id"],
@@ -1933,6 +2171,7 @@ class SQLiteStateStore(StateStore):
             task_status=TaskStatus(row["task_status"]),
             request_id=row["request_id"],
             amended=bool(row["amended"]),
+            review_input=review_input,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=(
                 datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
@@ -2111,3 +2350,4 @@ class SQLiteStateStore(StateStore):
             strategy_reasoning=_safe_get("strategy_reasoning") or "",
             risk=_safe_get("risk") or "",
         )
+

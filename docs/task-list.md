@@ -1028,3 +1028,56 @@ project."
 | Phase D: Build chat | 10 | 10 | 0 | 0 | 0 |
 | Phase E: Polish + docs + smoke test | 8 | 8 | 0 | 0 | 0 |
 | **Total** | **50** | **50** | **0** | **0** | **0** |
+
+---
+
+## Project Workspaces (WS) — Detailed Task Breakdown
+
+Reference PRD: [`docs/prd-projects-feature.md`](prd-projects-feature.md) §16.
+
+Routes each new project to its own private GitHub repo. Code commits and
+research artifacts published BY the platform FOR a project land in that
+project's repo (not the platform's). Local mirror at
+`project-workspaces/<slug>/`. Capability 4 (per-project deploy stack)
+deferred.
+
+All 20 tasks shipped 2026-05-19 in one focused pass. Backend
+foundation + UI + docs in the same change; per-phase split optional.
+
+### Implementation
+
+| ID | Task | Effort | Status |
+|----|------|--------|--------|
+| WS-01 | `project_repo_slug()` helper in `project_validation.py` | S | `[x]` |
+| WS-02 | `GitHubPublisher.create_repo()` — POST /user/repos + auto-init | M | `[x]` |
+| WS-03 | `POST /projects` body accepts `create_repo: bool` (default true) | S | `[x]` |
+| WS-04 | Backend creates repo BEFORE inserting project row | M | `[x]` |
+| WS-05 | Error mapping: 401/403 → 403, 422 collision → 422, other → 502 | S | `[x]` |
+| WS-06 | `CreateProjectModal` — live slug preview + toggle to disable auto-create | M | `[x]` |
+| WS-07 | `extract_owner_repo(url)` URL parser (HTTPS + SSH forms) | S | `[x]` |
+| WS-08 | `GitHubPublisher.commit_files(repo=None)` per-call override | S | `[x]` |
+| WS-09 | `Orchestrator._handle_code_commit` resolves project → repo | M | `[x]` |
+| WS-10 | Fallback to `GITHUB_REPO` env when project repo_url empty | S | `[x]` |
+| WS-11 | Smoke test code commit routes correctly (deferred — same code path as WS-19) | S | `[x]` |
+| WS-12 | `ResearchPublisher.publish(project_slug=, project_repo=)` | M | `[x]` |
+| WS-13 | Local path `project-workspaces/<slug>/docs/research/REQ-XXX-…/` | S | `[x]` |
+| WS-14 | Trees API push targets project's repo at `docs/research/REQ-XXX-…/` | S | `[x]` |
+| WS-15 | Fallback to platform repo + flat path when no `repo_url` | S | `[x]` |
+| WS-16 | `POST /projects/:id/create_repo` endpoint + "Create Repo" button on ProjectDetail | M | `[x]` |
+| WS-17 | `docs/prd-projects-feature.md` v1.3 §16 Project Workspaces | S | `[x]` |
+| WS-18 | `docs/task-list.md` WS-01..20 section (this) | S | `[x]` |
+| WS-19 | End-to-end smoke: CrewAITeam → repo `crewaiteam` → research artifacts pushed | M | `[x]` |
+| WS-20 | Manual smoke checklist additions to PRD §15 | S | `[x]` |
+
+### Progress Summary
+
+| Phase | Tasks | Done | In Progress | Deferred | Not Started |
+|-------|-------|------|-------------|----------|-------------|
+| Implementation | 20 | 20 | 0 | 0 | 0 |
+| **Total** | **20** | **20** | **0** | **0** | **0** |
+
+### Live verification
+
+- CrewAITeam project (`proj-89cd2b66`) — repo backfilled to `cmuthu2503-ai/crewaiteam` via WS-16 button path.
+- End-to-end smoke (request `REQ-WSE2E1`): research artifacts written to `project-workspaces/crewaiteam/docs/research/REQ-WSE2E1-…/` locally, committed to the CrewAI Team repo at commit `ec9cdfa3`. Files appear at the natural `docs/research/REQ-WSE2E1-…/` path inside the repo.
+- GitHub-side smoke repos `ws-smoke-1779224190` + `ws-smoke-distinct-name-1779224190` created during validation. Linger on GitHub — `GITHUB_TOKEN` lacks `delete_repo` scope by design; delete manually if not needed.

@@ -12,6 +12,7 @@ Requires: Docker, docker compose, git, sqlite3, curl on the host.
 
 import json
 import os
+import pathlib
 import sqlite3
 import subprocess
 import sys
@@ -194,11 +195,75 @@ def get_db() -> sqlite3.Connection:
 
 
 def get_pending_deployments(db: sqlite3.Connection) -> list[dict]:
-    """Find deployments with current_step = 'code_committed'."""
+    """Find deployments with current_step = 'code_committed'.
+
+    Filters out per-project commits — those have their own deploy
+    lifecycle via the Deploy/Stop endpoints and shouldn't trigger the
+    platform redeploy. A commit is per-project when its underlying
+    request has a non-null ``project_id``.
+
+    Without this filter, every project task would cause the platform
+    stack to rebuild and restart, which was the original bug: the user
+    saw their project's "build a login page" task trigger an Agent
+    Team app redeploy.
+    """
     cursor = db.execute(
-        "SELECT * FROM deployment_states WHERE current_step = 'code_committed' ORDER BY started_at"
+        # LEFT JOIN — code_committed rows always have a request, but
+        # defensive in case a manual row got inserted without one.
+        """
+        SELECT ds.*, r.project_id AS request_project_id
+        FROM deployment_states ds
+        LEFT JOIN requests r ON r.request_id = ds.request_id
+        WHERE ds.current_step = 'code_committed'
+        ORDER BY ds.started_at
+        """
     )
-    return [dict(row) for row in cursor.fetchall()]
+    rows = []
+    skipped_project_rows = 0
+    for row in cursor.fetchall():
+        d = dict(row)
+        if d.get("request_project_id"):
+            # Mark the row "skipped" so it doesn't sit in code_committed
+            # forever (which would make a future supervisor pickup
+            # process it). The per-project Deploy endpoint owns this
+            # request's deploy lifecycle.
+            mark_project_commit_skipped(db, d["deployment_id"])
+            skipped_project_rows += 1
+            continue
+        rows.append(d)
+    if skipped_project_rows:
+        log(
+            f"  ⏭  skipped {skipped_project_rows} per-project commit(s) — "
+            f"those deploy via the per-project Deploy endpoint, not the supervisor"
+        )
+    return rows
+
+
+def mark_project_commit_skipped(db: sqlite3.Connection, deployment_id: str) -> None:
+    """Transition a per-project commit row to a terminal 'skipped'
+    state so it doesn't keep appearing in the pending poll. Records
+    a step in step_history so the UI / audit log shows why."""
+    cursor = db.execute(
+        "SELECT step_history FROM deployment_states WHERE deployment_id = ?",
+        (deployment_id,),
+    )
+    row = cursor.fetchone()
+    history = json.loads(row["step_history"]) if row and row["step_history"] else []
+    history.append({
+        "step": "supervisor_skipped",
+        "status": "skipped",
+        "timestamp": datetime.utcnow().isoformat(),
+        "detail": (
+            "Per-project commit — supervisor does not deploy these. "
+            "Use the project's Deploy button to start the project's stack."
+        ),
+    })
+    db.execute(
+        "UPDATE deployment_states SET current_step = ?, step_history = ?, "
+        "completed_at = ? WHERE deployment_id = ?",
+        ("skipped", json.dumps(history), datetime.utcnow().isoformat(), deployment_id),
+    )
+    db.commit()
 
 
 # Non-terminal "in flight" states. If a row is sitting in one of these when
@@ -657,6 +722,214 @@ def _setup_github_auth() -> None:
     log("🔑 GitHub credential helper configured for rollback push")
 
 
+# ── Per-project Deploy / Stop ─────────────────────────────────────────
+# When the user clicks Deploy on the Project Detail page, the backend
+# flips ``projects.deploy_status`` to ``pending_deploy``. This function
+# (called from the main loop) picks those rows up and runs the actual
+# ``docker compose up -d --build`` from the host (where the daemon is)
+# against the project's scaffolded compose file at
+# ``C:/ai-projects/<Name>/docker-compose.yml``.
+#
+# We run on the host for the same reason the platform supervisor does:
+# inside-container ``docker compose`` would resolve relative compose
+# paths against the container filesystem, not the host, and bind-mounts
+# would break (see CLAUDE.md "Supervisor scope").
+
+# Where projects live on the host. Read from env so the user can
+# override the layout if their workspace lives elsewhere.
+PROJECT_HOST_ROOT = pathlib.Path(os.getenv("HOST_PROJECT_ROOT", "C:/ai-projects"))
+
+
+def get_pending_project_deploys(db: sqlite3.Connection) -> list[dict]:
+    """Return projects whose deploy_status is pending_deploy or pending_stop."""
+    cursor = db.execute(
+        "SELECT project_id, name, kind, deploy_status, "
+        "deploy_backend_port, deploy_frontend_port "
+        "FROM projects "
+        "WHERE deploy_status IN ('pending_deploy', 'pending_stop')"
+    )
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def update_project_deploy_status(
+    db: sqlite3.Connection,
+    project_id: str,
+    *,
+    status: str,
+    url: str | None = None,
+    error: str | None = None,
+) -> None:
+    """Write status/url/error back to the projects row. Mirrors the
+    backend's ``update_project_deploy`` so the UI sees the same state
+    transitions whether the change came from the backend or here."""
+    sets = ["deploy_status = ?"]
+    params: list = [status]
+    if url is not None:
+        sets.append("deploy_url = ?")
+        params.append(url)
+    if error is not None:
+        sets.append("deploy_error = ?")
+        # Empty string → NULL for tidiness, matches the backend convention.
+        params.append(error or None)
+    sets.append("updated_at = ?")
+    params.append(datetime.utcnow().isoformat())
+    params.append(project_id)
+    db.execute(
+        f"UPDATE projects SET {', '.join(sets)} WHERE project_id = ?",
+        tuple(params),
+    )
+    db.commit()
+    # Force the WAL contents into the main DB file. Without this,
+    # the backend's long-lived aiosqlite connection (in a separate
+    # process) keeps its pre-update read snapshot and never sees the
+    # ``deploy_status = running`` write — the UI gets stuck on
+    # ``deploying`` until the backend restarts. PASSIVE checkpoint
+    # doesn't block on readers, so it's safe to call frequently.
+    try:
+        db.execute("PRAGMA wal_checkpoint(PASSIVE)")
+    except sqlite3.OperationalError:
+        # Checkpoint can fail if the WAL is currently in use; safe
+        # to swallow — next caller will retry.
+        pass
+
+
+def process_project_deploy_requests(db: sqlite3.Connection) -> None:
+    """Poll cycle for per-project Deploy / Stop. Runs in the same tick
+    as the platform autodeploy poll. Each pending row gets handled
+    inline (blocks the main loop for the duration) — ``docker compose
+    up`` with caching is typically <30s after the first build."""
+    for row in get_pending_project_deploys(db):
+        status = row["deploy_status"]
+        if status == "pending_deploy":
+            _run_project_deploy(db, row)
+        elif status == "pending_stop":
+            _run_project_stop(db, row)
+
+
+def _project_compose_path(name: str) -> pathlib.Path:
+    """``C:/ai-projects/<Name>/docker-compose.yml`` — what we hand to
+    ``docker compose -f``. The backend already validated the name when
+    the project was created, so this is safe to concat."""
+    return PROJECT_HOST_ROOT / name / "docker-compose.yml"
+
+
+def _project_compose_project_name(name: str) -> str:
+    """Compose project name = ``project-<slug>``. Mirrors the value
+    baked into the scaffolded compose file by the backend's
+    ``project_repo_slug`` substitution, so deploy/stop target the same
+    container set."""
+    slug = "".join(c if c.isalnum() else "-" for c in name.lower())
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return f"project-{slug.strip('-')}"
+
+
+def _run_project_deploy(db: sqlite3.Connection, row: dict) -> None:
+    """Run ``docker compose -f <project>/docker-compose.yml up -d --build``
+    and flip status to ``running`` on healthcheck pass, ``failed`` on
+    error. Updates ``deploy_url`` to ``http://localhost:<frontend_port>``
+    when the project is a web-app or frontend-app, or to the backend
+    port for api-service (so there's always a URL to click)."""
+    pid = row["project_id"]
+    name = row["name"]
+    kind = row["kind"]
+    backend_port = row["deploy_backend_port"]
+    frontend_port = row["deploy_frontend_port"]
+
+    log(f"📦 deploy: {name} ({pid}) kind={kind} backend={backend_port} frontend={frontend_port}")
+
+    compose_path = _project_compose_path(name)
+    if not compose_path.exists():
+        msg = f"docker-compose.yml not found at {compose_path}"
+        log(f"  ❌ {msg}")
+        update_project_deploy_status(db, pid, status="failed", error=msg)
+        return
+
+    # Transition pending_deploy → deploying so the UI shows progress.
+    update_project_deploy_status(db, pid, status="deploying", error="")
+
+    project_name = _project_compose_project_name(name)
+    cmd = [
+        "docker", "compose",
+        "-p", project_name,
+        "-f", str(compose_path),
+        "up", "-d", "--build",
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=600,  # 10min cap on first build
+        )
+    except subprocess.TimeoutExpired:
+        msg = "docker compose up timed out after 10 minutes"
+        log(f"  ❌ {msg}")
+        update_project_deploy_status(db, pid, status="failed", error=msg)
+        return
+    except Exception as e:
+        msg = f"docker compose invocation failed: {e}"
+        log(f"  ❌ {msg}")
+        update_project_deploy_status(db, pid, status="failed", error=msg)
+        return
+
+    if result.returncode != 0:
+        # Take the LAST few lines of stderr; full output is too long for the
+        # deploy_error column / UI.
+        tail = (result.stderr or result.stdout or "").splitlines()[-15:]
+        msg = "\n".join(tail) or f"exit code {result.returncode}"
+        log(f"  ❌ deploy failed (exit {result.returncode}):\n{msg}")
+        update_project_deploy_status(db, pid, status="failed", error=msg)
+        return
+
+    # Pick the launch URL: frontend port for kinds that have one,
+    # backend port for api-service.
+    if kind == "api-service":
+        url = f"http://localhost:{backend_port}" if backend_port else ""
+    else:
+        url = f"http://localhost:{frontend_port}" if frontend_port else ""
+    log(f"  ✅ deployed — {url}")
+    update_project_deploy_status(db, pid, status="running", url=url, error="")
+
+
+def _run_project_stop(db: sqlite3.Connection, row: dict) -> None:
+    """Run ``docker compose -p <project> down`` and flip status to
+    ``stopped``. Failure here is rare but still soft-fails to ``failed``
+    so the UI can show why."""
+    pid = row["project_id"]
+    name = row["name"]
+    log(f"🛑 stop: {name} ({pid})")
+
+    compose_path = _project_compose_path(name)
+    if not compose_path.exists():
+        # Stop with no compose file is fine — mark stopped, clear URL.
+        update_project_deploy_status(db, pid, status="stopped", url="", error="")
+        return
+
+    update_project_deploy_status(db, pid, status="stopping")
+    project_name = _project_compose_project_name(name)
+    cmd = [
+        "docker", "compose",
+        "-p", project_name,
+        "-f", str(compose_path),
+        "down",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except Exception as e:
+        msg = f"docker compose down failed: {e}"
+        log(f"  ❌ {msg}")
+        update_project_deploy_status(db, pid, status="failed", error=msg)
+        return
+
+    if result.returncode != 0:
+        tail = (result.stderr or result.stdout or "").splitlines()[-10:]
+        msg = "\n".join(tail) or f"exit code {result.returncode}"
+        log(f"  ❌ stop failed (exit {result.returncode}):\n{msg}")
+        update_project_deploy_status(db, pid, status="failed", error=msg)
+        return
+
+    log("  ✅ stopped")
+    update_project_deploy_status(db, pid, status="stopped", url="", error="")
+
+
 def main() -> None:
     """Main supervisor loop — poll for pending deployments."""
     log("=" * 60)
@@ -702,6 +975,11 @@ def main() -> None:
                 if pending:
                     for deployment in pending:
                         deploy(db, deployment)
+                # Per-project Deploy/Stop pickup. Same DB connection,
+                # same poll cycle — keeps the user's host setup to one
+                # process for both platform autodeploy and per-project
+                # deploys.
+                process_project_deploy_requests(db)
                 db.close()
         except KeyboardInterrupt:
             log("Supervisor stopped by user")

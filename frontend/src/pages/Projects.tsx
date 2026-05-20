@@ -14,7 +14,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Link } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 import {
   Folder, Rocket, Layers, Code, FlaskConical, Palette, Bug, BookOpen,
   Plus, User as UserIcon, Trash2,
@@ -65,6 +65,7 @@ export function ProjectsPage() {
   const [busyId, setBusyId] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const currentUser = useAuthStore((s) => s.user)
+  const navigate = useNavigate()
   const isAdmin = currentUser?.role === "admin"
 
   const load = async () => {
@@ -237,7 +238,15 @@ export function ProjectsPage() {
       <CreateProjectModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        onCreated={(_p: CreatedProject) => { void _p; load() }}
+        onCreated={(p: CreatedProject) => {
+          // Land the user on the new project's detail page so they
+          // immediately see the Build Workspace (brief textarea →
+          // Generate PRD → Generate Tasks). Without this, the modal
+          // just closes and the user has to find the new card in the
+          // list and click into it — they often miss the workspace
+          // entirely.
+          navigate(`/projects/${p.project_id}`)
+        }}
       />
     </div>
   )

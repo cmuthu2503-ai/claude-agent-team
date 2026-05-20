@@ -16,7 +16,7 @@ import { Link, useParams } from "react-router-dom"
 import {
   Folder, Rocket, Layers, Code, FlaskConical, Palette, Bug, BookOpen,
   ArrowLeft, ExternalLink, FileText, ListChecks, CheckCircle2, Circle, Github,
-  Pencil,
+  Pencil, Play, Square, Loader2, AlertTriangle, Boxes, Server, Globe,
 } from "lucide-react"
 import { api } from "../lib/api"
 import { StatusBadge } from "../components/ui/StatusBadge"
@@ -27,6 +27,13 @@ const ICON_MAP: Record<string, React.ComponentType<{ size?: number; color?: stri
   folder: Folder, rocket: Rocket, layers: Layers, code: Code,
   "flask-conical": FlaskConical, palette: Palette, bug: Bug, "book-open": BookOpen,
 }
+
+// Per-project working tree feature — deploy lifecycle states. Matches
+// src/models/base.py::DeployStatus.
+type DeployStatus =
+  | "stopped" | "pending_deploy" | "deploying"
+  | "running" | "pending_stop" | "stopping" | "failed"
+type ProjectKind = "web-app" | "api-service" | "frontend-app"
 
 interface ProjectDetail {
   project_id: string
@@ -44,6 +51,14 @@ interface ProjectDetail {
   created_by: string | null
   created_at: string
   updated_at: string | null
+  // Per-project working tree fields — may be null on legacy rows.
+  kind: ProjectKind | null
+  deploy_backend_port: number | null
+  deploy_frontend_port: number | null
+  deploy_status: DeployStatus | null
+  deploy_url: string
+  deploy_last_started_at: string | null
+  deploy_error: string | null
   stats: { total: number; active: number; completed: number; failed: number }
   requests: Array<{
     request_id: string
@@ -179,6 +194,9 @@ export function ProjectDetailPage() {
                   <ExternalLink size={10} />
                 </a>
               )}
+              {!data.repo_url && data.project_id !== "proj-unassigned" && (
+                <CreateRepoButton projectId={data.project_id} onCreated={load} />
+              )}
             </div>
             {data.tags.length > 0 && (
               <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 4 }}>
@@ -243,6 +261,21 @@ export function ProjectDetailPage() {
         <StatCard label="Completed" value={String(data.stats.completed)} color="var(--success)" />
         <StatCard label="Failed" value={String(data.stats.failed)} color={data.stats.failed > 0 ? "var(--danger)" : "var(--text-muted)"} />
       </div>
+
+      {/* ── Deployment (per-project working tree feature) ── */}
+      {data.project_id !== "proj-unassigned" && (
+        <DeploymentCard
+          projectId={data.project_id}
+          kind={data.kind}
+          backendPort={data.deploy_backend_port}
+          frontendPort={data.deploy_frontend_port}
+          status={data.deploy_status}
+          url={data.deploy_url}
+          error={data.deploy_error}
+          lastStartedAt={data.deploy_last_started_at}
+          onChanged={load}
+        />
+      )}
 
       {/* ── Build Workspace (PDB-09 → PDB-12) — Brief → PRD ── */}
       {data.project_id !== "proj-unassigned" && (
@@ -392,6 +425,56 @@ export function ProjectDetailPage() {
   )
 }
 
+// WS-16 — inline backfill action. Shown only when the project lacks a
+// repo_url. Hits `POST /projects/:id/create_repo`, which calls the same
+// GitHub Trees API path the create-project flow uses.
+function CreateRepoButton({ projectId, onCreated }: { projectId: string; onCreated: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState("")
+  const click = async () => {
+    if (!window.confirm("Create a private GitHub repo for this project? Uses the project name to derive the slug.")) return
+    setBusy(true); setErr("")
+    try {
+      await api.post(`/projects/${projectId}/create_repo`, {})
+      onCreated()
+    } catch (e: any) {
+      // Pull the FastAPI `detail` out — could be string or {error, hint, ...}.
+      const raw = e?.message || String(e)
+      const m = raw.match(/^\d+:\s*(.+)$/)
+      try {
+        const parsed = m ? JSON.parse(m[1]) : null
+        const d = parsed?.detail
+        if (d) {
+          setErr(typeof d === "string" ? d : (d.hint || d.message || JSON.stringify(d)))
+        } else setErr(raw)
+      } catch { setErr(raw) }
+    } finally { setBusy(false) }
+  }
+  return (
+    <>
+      <button
+        type="button"
+        onClick={click}
+        disabled={busy}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 4,
+          padding: "2px 8px", fontSize: 11, fontFamily: "var(--font)",
+          background: "transparent", color: busy ? "var(--text-muted)" : "var(--accent)",
+          border: "1px dashed var(--accent)", borderRadius: 3,
+          cursor: busy ? "wait" : "pointer",
+        }}
+        title="Create a private GitHub repo for this project (backfill)"
+      >
+        <Github size={11} />
+        {busy ? "Creating…" : "Create GitHub repo"}
+      </button>
+      {err && (
+        <span style={{ fontSize: 11, color: "var(--danger)" }}>{err}</span>
+      )}
+    </>
+  )
+}
+
 function StatCard({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
     <div style={{
@@ -407,4 +490,322 @@ function StatCard({ label, value, color }: { label: string; value: string; color
       </div>
     </div>
   )
+}
+
+
+// ── Deployment card (per-project working tree feature) ──────────────
+// Renders status + ports + launch URL + Deploy/Stop buttons. Polls
+// the project detail endpoint (parent does the polling — we just read
+// the `data` prop) so transitions through pending → deploying →
+// running happen live without manual refresh.
+
+const KIND_ICON: Record<ProjectKind, typeof Boxes> = {
+  "web-app": Boxes,
+  "api-service": Server,
+  "frontend-app": Globe,
+}
+const KIND_LABEL: Record<ProjectKind, string> = {
+  "web-app": "Web App",
+  "api-service": "API Service",
+  "frontend-app": "Frontend App",
+}
+
+interface DeploymentCardProps {
+  projectId: string
+  kind: ProjectKind | null
+  backendPort: number | null
+  frontendPort: number | null
+  status: DeployStatus | null
+  url: string
+  error: string | null
+  lastStartedAt: string | null
+  onChanged: () => void   // called after a successful deploy/stop request — parent reloads
+}
+
+function DeploymentCard({
+  projectId, kind, backendPort, frontendPort, status, url, error,
+  lastStartedAt, onChanged,
+}: DeploymentCardProps) {
+  const [busy, setBusy] = useState<"deploy" | "stop" | null>(null)
+  const [clientErr, setClientErr] = useState<string>("")
+
+  if (!kind) {
+    // Legacy project — no kind set. Show a gentle hint instead of the
+    // deployment controls (no scaffold exists, no ports allocated).
+    return (
+      <div style={cardWrap}>
+        <div style={cardHeader}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <Boxes size={16} color="var(--text-muted)" />
+            <span style={{ fontSize: 13, fontWeight: 600 }}>Deployment</span>
+          </span>
+        </div>
+        <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+          This project was created before per-project deploys were available.
+          No scaffold or ports are set. Create a new project to get the deploy UI.
+        </div>
+      </div>
+    )
+  }
+
+  const KindIcon = KIND_ICON[kind]
+  const kindLabel = KIND_LABEL[kind]
+  const effectiveStatus: DeployStatus = status || "stopped"
+  const isRunning = effectiveStatus === "running"
+  const isFailed = effectiveStatus === "failed"
+  // Pending / deploying / stopping all count as "in flight" — disable both
+  // buttons and show a spinner.
+  const inFlight = (
+    effectiveStatus === "pending_deploy" ||
+    effectiveStatus === "deploying" ||
+    effectiveStatus === "pending_stop" ||
+    effectiveStatus === "stopping"
+  )
+
+  // The URL we surface to the user. For a web-app + frontend-app, point
+  // at the frontend port (where the UI is); for api-service point at
+  // the backend port. The server already chose this when it set
+  // `deploy_url`, but if status is "stopped" the URL might be empty —
+  // synthesize a preview so users can see where it WILL land.
+  const previewUrl = url || (
+    kind === "api-service"
+      ? (backendPort ? `http://localhost:${backendPort}` : "")
+      : (frontendPort ? `http://localhost:${frontendPort}` : "")
+  )
+
+  const deploy = async () => {
+    setBusy("deploy"); setClientErr("")
+    try {
+      await api.post(`/projects/${projectId}/deploy`, {})
+      onChanged()
+    } catch (e: any) {
+      setClientErr(parseDetailMessage(e?.message) || "Deploy failed")
+    } finally {
+      setBusy(null)
+    }
+  }
+  const stop = async () => {
+    if (!window.confirm("Stop this project's containers?")) return
+    setBusy("stop"); setClientErr("")
+    try {
+      await api.post(`/projects/${projectId}/stop`, {})
+      onChanged()
+    } catch (e: any) {
+      setClientErr(parseDetailMessage(e?.message) || "Stop failed")
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div style={cardWrap}>
+      <div style={cardHeader}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <KindIcon size={16} color="var(--accent)" />
+          <span style={{ fontSize: 13, fontWeight: 600 }}>Deployment</span>
+          <span style={{
+            fontSize: 10, color: "var(--text-muted)",
+            padding: "2px 8px", borderRadius: 3,
+            background: "var(--bg-hover)",
+            fontFamily: "var(--font-mono)",
+          }}>
+            {kindLabel}
+          </span>
+        </span>
+        <DeployStatusBadge status={effectiveStatus} />
+      </div>
+
+      {/* Body — ports, URL, last-started */}
+      <div style={{
+        display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+        gap: 12, marginTop: 4,
+      }}>
+        <Field label="Backend port" value={backendPort ? String(backendPort) : "—"} />
+        <Field label="Frontend port" value={frontendPort ? String(frontendPort) : "—"} />
+        <Field label="Launch URL" value={
+          previewUrl
+            ? <a href={previewUrl} target="_blank" rel="noopener noreferrer"
+                style={{
+                  color: isRunning ? "var(--accent)" : "var(--text-muted)",
+                  textDecoration: "none",
+                  display: "inline-flex", alignItems: "center", gap: 4,
+                  pointerEvents: isRunning ? "auto" : "none",
+                }}>
+                {previewUrl}
+                {isRunning && <ExternalLink size={11} />}
+              </a>
+            : "—"
+        } />
+        <Field label="Last deploy" value={
+          lastStartedAt ? new Date(lastStartedAt).toLocaleString() : "Never"
+        } />
+      </div>
+
+      {/* Error banner — only when status=failed AND error message exists */}
+      {isFailed && error && (
+        <div style={{
+          marginTop: 10, padding: "8px 12px", borderRadius: "var(--radius)",
+          border: "1px solid var(--danger)",
+          background: "rgba(255, 59, 59, 0.08)",
+          color: "var(--danger)", fontSize: 11, fontFamily: "var(--font-mono)",
+          whiteSpace: "pre-wrap", maxHeight: 120, overflow: "auto",
+          display: "flex", gap: 6, alignItems: "flex-start",
+        }}>
+          <AlertTriangle size={12} style={{ flexShrink: 0, marginTop: 1 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>{error}</div>
+        </div>
+      )}
+
+      {/* Buttons */}
+      <div style={{
+        marginTop: 14, display: "flex", justifyContent: "space-between",
+        alignItems: "center", gap: 12, flexWrap: "wrap",
+      }}>
+        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+          {inFlight && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <Loader2 size={12} className="spin" />
+              {effectiveStatus === "pending_deploy" && "Queued for deploy…"}
+              {effectiveStatus === "deploying" && "Building + starting containers…"}
+              {effectiveStatus === "pending_stop" && "Queued for stop…"}
+              {effectiveStatus === "stopping" && "Stopping containers…"}
+              {" "}<em style={{ color: "var(--text-muted)" }}>(supervisor processes ~every 5s)</em>
+            </span>
+          )}
+          {!inFlight && effectiveStatus === "stopped" && "Containers are stopped."}
+          {!inFlight && isRunning && "Containers running. Click the URL above to open."}
+          {!inFlight && isFailed && "Last operation failed. See error above; click Deploy to retry."}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {isRunning || inFlight ? (
+            <button
+              type="button" onClick={stop}
+              disabled={busy !== null || effectiveStatus === "pending_stop" || effectiveStatus === "stopping"}
+              style={dangerBtn(busy !== null || effectiveStatus !== "running")}
+              title="Stop the project's containers"
+            >
+              <Square size={12} />
+              {busy === "stop" ? "Stopping…" : "Stop"}
+            </button>
+          ) : (
+            <button
+              type="button" onClick={deploy}
+              disabled={busy !== null}
+              style={primaryBtn(busy !== null)}
+              title="Build + start the project's containers"
+            >
+              <Play size={12} />
+              {busy === "deploy" ? "Queuing…" : "Deploy"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {clientErr && (
+        <div style={{
+          marginTop: 8, fontSize: 11, color: "var(--danger)",
+        }}>
+          {clientErr}
+        </div>
+      )}
+
+      {/* Inline keyframes for the spinner — keeps the component
+          self-contained; no global CSS edits needed. */}
+      <style>{`
+        @keyframes pd-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .spin { animation: pd-spin 1s linear infinite; }
+      `}</style>
+    </div>
+  )
+}
+
+function DeployStatusBadge({ status }: { status: DeployStatus }) {
+  // Color rules match the cyberpunk-ish palette: green = healthy,
+  // accent cyan = in-progress, red = failed, muted = stopped.
+  const palette: Record<DeployStatus, { bg: string; fg: string; label: string }> = {
+    stopped:        { bg: "var(--bg-hover)",                 fg: "var(--text-muted)", label: "Stopped" },
+    pending_deploy: { bg: "rgba(0, 240, 255, 0.10)",         fg: "var(--accent)",     label: "Pending deploy" },
+    deploying:      { bg: "rgba(0, 240, 255, 0.10)",         fg: "var(--accent)",     label: "Deploying" },
+    running:        { bg: "rgba(57, 255, 20, 0.12)",         fg: "var(--success)",    label: "Running" },
+    pending_stop:   { bg: "rgba(255, 140, 0, 0.10)",         fg: "var(--warning, #ff8c00)", label: "Pending stop" },
+    stopping:       { bg: "rgba(255, 140, 0, 0.10)",         fg: "var(--warning, #ff8c00)", label: "Stopping" },
+    failed:         { bg: "rgba(255, 42, 109, 0.12)",        fg: "var(--danger)",     label: "Failed" },
+  }
+  const p = palette[status]
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 4,
+      padding: "3px 10px", borderRadius: 4, fontSize: 10, fontWeight: 700,
+      textTransform: "uppercase", letterSpacing: 1,
+      background: p.bg, color: p.fg,
+      border: `1px solid ${p.fg}`,
+    }}>
+      {p.label}
+    </span>
+  )
+}
+
+function Field({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 1 }}>
+        {label}
+      </span>
+      <span style={{ fontSize: 12, color: "var(--text-primary)", fontFamily: "var(--font-mono)" }}>
+        {value}
+      </span>
+    </div>
+  )
+}
+
+const cardWrap: React.CSSProperties = {
+  background: "var(--bg-card)", border: "1px solid var(--border)",
+  borderRadius: "var(--radius)", padding: 18,
+  display: "flex", flexDirection: "column", gap: 10,
+}
+const cardHeader: React.CSSProperties = {
+  display: "flex", alignItems: "center", justifyContent: "space-between",
+}
+
+function primaryBtn(disabled: boolean): React.CSSProperties {
+  return {
+    display: "inline-flex", alignItems: "center", gap: 6,
+    padding: "6px 14px", fontSize: 12, fontWeight: 700,
+    background: disabled ? "var(--bg-hover)" : "var(--accent)",
+    color: disabled ? "var(--text-muted)" : "#0a0014",
+    border: "1px solid " + (disabled ? "var(--border)" : "var(--accent)"),
+    borderRadius: "var(--radius)",
+    cursor: disabled ? "not-allowed" : "pointer",
+    whiteSpace: "nowrap", lineHeight: 1, fontFamily: "var(--font)",
+  }
+}
+function dangerBtn(disabled: boolean): React.CSSProperties {
+  return {
+    display: "inline-flex", alignItems: "center", gap: 6,
+    padding: "6px 14px", fontSize: 12, fontWeight: 700,
+    background: "transparent",
+    color: disabled ? "var(--text-muted)" : "var(--danger)",
+    border: "1px solid " + (disabled ? "var(--border)" : "var(--danger)"),
+    borderRadius: "var(--radius)",
+    cursor: disabled ? "not-allowed" : "pointer",
+    whiteSpace: "nowrap", lineHeight: 1, fontFamily: "var(--font)",
+    opacity: disabled ? 0.5 : 1,
+  }
+}
+
+// FastAPI errors arrive as "<status>: <body>" through the api client.
+// Pull the human-readable hint out of {detail: {error, hint, ...}}.
+function parseDetailMessage(msg: string | undefined): string | undefined {
+  if (!msg) return undefined
+  const colon = msg.indexOf(":")
+  if (colon < 0) return msg
+  try {
+    const parsed = JSON.parse(msg.slice(colon + 1).trim())
+    const d = parsed?.detail ?? parsed
+    if (typeof d === "string") return d
+    if (typeof d === "object" && d) return d.hint || d.message || d.error || JSON.stringify(d)
+    return msg
+  } catch {
+    return msg
+  }
 }

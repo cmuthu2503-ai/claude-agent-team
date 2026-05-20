@@ -22,9 +22,43 @@
 import { useEffect, useState } from "react"
 import {
   Folder, Rocket, Layers, Code, FlaskConical, Palette, Bug, BookOpen,
-  X, Plus,
+  X, Plus, Server, Globe, Boxes,
 } from "lucide-react"
 import { api } from "../../lib/api"
+
+// Per-project working tree feature — three scaffold kinds. Must match
+// the backend Literal in CreateProjectBody.
+type ProjectKind = "web-app" | "api-service" | "frontend-app"
+interface KindOption {
+  id: ProjectKind
+  label: string
+  Icon: typeof Boxes
+  description: string
+  ports: string  // user-facing summary of port allocation
+}
+const PROJECT_KINDS: readonly KindOption[] = [
+  {
+    id: "web-app",
+    label: "Web App",
+    Icon: Boxes,
+    description: "FastAPI backend + Vite/React frontend — full-stack scaffold.",
+    ports: "2 ports allocated",
+  },
+  {
+    id: "api-service",
+    label: "API Service",
+    Icon: Server,
+    description: "FastAPI service only — no frontend.",
+    ports: "1 port allocated",
+  },
+  {
+    id: "frontend-app",
+    label: "Frontend App",
+    Icon: Globe,
+    description: "Vite/React app only — no backend.",
+    ports: "1 port allocated",
+  },
+] as const
 
 // Closed-set palettes — must match src/models/base.py PROJECT_COLOR_PALETTE
 // and PROJECT_ICON_SET exactly, or the backend rejects the value.
@@ -47,6 +81,44 @@ const MAX_NAME = 80
 const MAX_DESC = 500
 const MAX_TAG = 25
 const MAX_TAGS = 10
+
+// WS-06 — mirrors `project_repo_slug` in src/core/project_validation.py.
+// Kept in sync by hand: lowercase, dashes for spaces/dots/underscores,
+// strip non-alphanumeric, collapse runs of dashes, trim, cap 100 chars.
+// Used only for the live preview — the server re-runs the canonical
+// version, so any drift is corrected server-side.
+function projectRepoSlug(name: string): string {
+  let s = (name || "").trim().toLowerCase()
+  s = s.replace(/[\s._]+/g, "-")
+  s = s.replace(/[^a-z0-9_-]+/g, "")
+  s = s.replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "")
+  if (s.length > 100) s = s.slice(0, 100).replace(/-+$/g, "")
+  return s
+}
+
+// Mirrors `validate_name` in src/core/project_validation.py — keep these
+// regexes in sync. The project name doubles as a folder name on the host
+// filesystem (under C:/ai-projects/<Name>/docs/) and as the source for
+// the GitHub repo slug, so we reject spaces and Windows/POSIX-unsafe
+// characters at type-time rather than letting the user discover it on
+// submit.
+const NAME_BAD_CHARS = /[\s/\\<>:"|?*\x00-\x1f]/
+function validateNameClient(raw: string): string | null {
+  const cleaned = raw.trim()
+  if (!cleaned) return null  // empty isn't an "error" — just disables Save
+  if (cleaned.length > MAX_NAME) return `Max ${MAX_NAME} characters.`
+  const m = NAME_BAD_CHARS.exec(cleaned)
+  if (m) {
+    const bad = m[0]
+    const nice = /\s/.test(bad) ? "a space" : `'${bad}'`
+    return `Can't contain ${nice}. Use letters, numbers, dashes, underscores, or dots — no spaces.`
+  }
+  if (cleaned === "." || cleaned === "..") return "Can't be '.' or '..'."
+  if (cleaned.startsWith(".") || cleaned.endsWith(".") || cleaned.endsWith(" ")) {
+    return "Can't start or end with a dot or space."
+  }
+  return null
+}
 
 interface ProjectTemplate {
   id: string
@@ -80,6 +152,14 @@ export function CreateProjectModal({ open, onClose, onCreated }: Props) {
   // Ownership
   const [leadUserId, setLeadUserId] = useState<string>("")
   const [repoUrl, setRepoUrl] = useState("")
+  // WS-06 — auto-create a private GitHub repo for this project on save.
+  // Default ON. When ON, the URL field is read-only and shows a live
+  // preview based on the project name. Toggle OFF to paste an existing
+  // repo URL.
+  const [createRepo, setCreateRepo] = useState(true)
+  // Per-project working tree feature — which scaffold to materialize.
+  // Default 'web-app' (matches backend default; most common case).
+  const [kind, setKind] = useState<ProjectKind>("web-app")
   // Workflow defaults
   const [defaultTeam, setDefaultTeam] = useState<string>("")  // "" = none
   const [targetDate, setTargetDate] = useState("")  // YYYY-MM-DD
@@ -102,6 +182,8 @@ export function CreateProjectModal({ open, onClose, onCreated }: Props) {
     setTagDraft("")
     setLeadUserId("")
     setRepoUrl("")
+    setCreateRepo(true)
+    setKind("web-app")
     setDefaultTeam("")
     setTargetDate("")
     setTemplateId("empty")
@@ -117,6 +199,10 @@ export function CreateProjectModal({ open, onClose, onCreated }: Props) {
   }, [open])
 
   if (!open) return null
+
+  // Live name validation — computed every render so the inline error
+  // updates as the user types. Save button is gated on it too.
+  const nameError = validateNameClient(name)
 
   const addTag = () => {
     const t = tagDraft.trim().toLowerCase()
@@ -134,6 +220,11 @@ export function CreateProjectModal({ open, onClose, onCreated }: Props) {
     const trimmed = name.trim()
     if (!trimmed) { setError("Name is required"); return }
     if (trimmed.length > MAX_NAME) { setError(`Name too long (max ${MAX_NAME})`); return }
+    // Belt + suspenders: the Save button is already gated on nameError,
+    // but if a keyboard shortcut or programmatic call gets through we
+    // still want to block before hitting the server.
+    const localErr = validateNameClient(trimmed)
+    if (localErr) { setError(localErr); return }
     setSubmitting(true)
     try {
       const body: any = {
@@ -142,11 +233,15 @@ export function CreateProjectModal({ open, onClose, onCreated }: Props) {
         color,
         icon,
         tags: tags.length > 0 ? tags : undefined,
+        kind,
         lead_user_id: leadUserId || undefined,
-        repo_url: repoUrl.trim() || undefined,
+        repo_url: createRepo ? undefined : (repoUrl.trim() || undefined),
         default_team: defaultTeam || undefined,
         target_date: targetDate || undefined,
         template_id: templateId || undefined,
+        // WS-03 — server auto-creates a private GitHub repo when this is
+        // true AND repo_url is blank. False when the user pasted a URL.
+        create_repo: createRepo,
       }
       const res = await api.post("/projects", body)
       onCreated({
@@ -222,9 +317,32 @@ export function CreateProjectModal({ open, onClose, onCreated }: Props) {
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value.slice(0, MAX_NAME))}
-                placeholder="Themes UI Redesign"
-                style={inputStyle}
+                placeholder="ThemesUIRedesign"
+                style={{
+                  ...inputStyle,
+                  borderColor: nameError ? "var(--danger)" : "var(--border)",
+                }}
+                aria-invalid={nameError ? "true" : "false"}
+                aria-describedby={nameError ? "name-error" : undefined}
               />
+              {nameError ? (
+                <div id="name-error" style={{
+                  marginTop: 4, fontSize: 11, color: "var(--danger)",
+                }}>
+                  {nameError}
+                </div>
+              ) : name.trim() ? (
+                <div style={{
+                  marginTop: 4, fontSize: 10, color: "var(--text-muted)",
+                  fontFamily: "var(--font-mono)",
+                }}>
+                  → folder: C:/ai-projects/{name.trim()}/
+                </div>
+              ) : (
+                <div style={{ marginTop: 4, fontSize: 10, color: "var(--text-muted)" }}>
+                  No spaces or special characters — the name becomes a folder on disk.
+                </div>
+              )}
             </Field>
 
             <Field label="Description" hint={`${description.length} / ${MAX_DESC}`}>
@@ -320,6 +438,61 @@ export function CreateProjectModal({ open, onClose, onCreated }: Props) {
             </Field>
           </Group>
 
+          {/* ── App Kind (per-project working tree) ── */}
+          <Group title="App kind">
+            <Field
+              label="Scaffold"
+              hint="Picks the starter template materialized into C:/ai-projects/<Name>/"
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {PROJECT_KINDS.map((k) => {
+                  const selected = kind === k.id
+                  return (
+                    <button
+                      key={k.id}
+                      type="button"
+                      onClick={() => setKind(k.id)}
+                      aria-pressed={selected}
+                      style={{
+                        display: "flex", alignItems: "flex-start", gap: 10,
+                        padding: "10px 12px", textAlign: "left",
+                        background: selected ? "var(--bg-hover)" : "transparent",
+                        border: "1px solid " + (selected ? "var(--accent)" : "var(--border)"),
+                        borderRadius: "var(--radius)",
+                        cursor: "pointer",
+                        color: "var(--text-primary)",
+                        fontFamily: "var(--font)",
+                      }}
+                    >
+                      <k.Icon size={18} style={{
+                        marginTop: 1,
+                        color: selected ? "var(--accent)" : "var(--text-muted)",
+                        flexShrink: 0,
+                      }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{
+                          display: "flex", justifyContent: "space-between",
+                          alignItems: "baseline", gap: 8, marginBottom: 2,
+                        }}>
+                          <span style={{ fontSize: 13, fontWeight: 600 }}>{k.label}</span>
+                          <span style={{
+                            fontSize: 10, color: "var(--text-muted)",
+                            fontFamily: "var(--font-mono)", whiteSpace: "nowrap",
+                          }}>
+                            {k.ports}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.4 }}>
+                          {k.description}
+                        </div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            </Field>
+          </Group>
+
           {/* ── Ownership ── */}
           <Group title="Ownership">
             <Field label="Lead">
@@ -333,12 +506,52 @@ export function CreateProjectModal({ open, onClose, onCreated }: Props) {
               </select>
             </Field>
 
-            <Field label="GitHub Repo URL" hint="optional">
-              <input type="url"
-                value={repoUrl}
-                onChange={(e) => setRepoUrl(e.target.value)}
-                placeholder="https://github.com/owner/repo"
-                style={inputStyle} />
+            <Field label="GitHub Repo" hint={createRepo ? "will be auto-created on Save" : "paste an existing repo URL"}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <label style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  fontSize: 12, color: "var(--text-primary)", cursor: "pointer",
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={createRepo}
+                    onChange={(e) => {
+                      setCreateRepo(e.target.checked)
+                      // Clear any pasted URL when switching back to auto-create;
+                      // server uses repo_url empty + create_repo=true as the
+                      // signal to create.
+                      if (e.target.checked) setRepoUrl("")
+                    }}
+                  />
+                  Create a new private GitHub repo for this project
+                </label>
+                {createRepo ? (
+                  <div style={{
+                    padding: "6px 10px", borderRadius: "var(--radius)",
+                    background: "var(--bg-hover)", border: "1px solid var(--border)",
+                    fontSize: 12, fontFamily: "var(--font-mono)",
+                    color: name.trim() ? "var(--accent)" : "var(--text-muted)",
+                  }}>
+                    {name.trim()
+                      ? `github.com/<your-user>/${projectRepoSlug(name) || "—"}`
+                      : "github.com/<your-user>/<project-slug>"}
+                    <span style={{
+                      marginLeft: 8, fontFamily: "var(--font)",
+                      fontSize: 10, color: "var(--text-muted)",
+                    }}>
+                      preview · private · auto-init README + main branch
+                    </span>
+                  </div>
+                ) : (
+                  <input
+                    type="url"
+                    value={repoUrl}
+                    onChange={(e) => setRepoUrl(e.target.value)}
+                    placeholder="https://github.com/owner/repo"
+                    style={inputStyle}
+                  />
+                )}
+              </div>
             </Field>
           </Group>
 
@@ -402,7 +615,17 @@ export function CreateProjectModal({ open, onClose, onCreated }: Props) {
           <button type="button" onClick={onClose} disabled={submitting} style={btnSecondary}>
             Cancel
           </button>
-          <button type="button" onClick={submit} disabled={submitting || !name.trim()} style={btnPrimary}>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={submitting || !name.trim() || !!nameError}
+            style={{
+              ...btnPrimary,
+              opacity: (submitting || !name.trim() || !!nameError) ? 0.5 : 1,
+              cursor: (submitting || !name.trim() || !!nameError) ? "not-allowed" : "pointer",
+            }}
+            title={nameError || (name.trim() ? "" : "Enter a project name")}
+          >
             <Plus size={14} />
             <span>{submitting ? "Creating…" : "Create"}</span>
           </button>

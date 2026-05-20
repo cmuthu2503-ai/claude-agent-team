@@ -270,6 +270,46 @@ PROJECT_ICON_SET: tuple[str, ...] = (
 UNASSIGNED_PROJECT_ID = "proj-unassigned"
 
 
+# Per-project deployable kinds. The string values match the
+# subdirectory names under ``config/project-templates/`` so the
+# scaffolder can look up the template by kind directly.
+class ProjectKind(StrEnum):
+    WEB_APP = "web-app"          # FastAPI backend + Vite/React frontend (2 ports)
+    API_SERVICE = "api-service"  # FastAPI only (1 port)
+    FRONTEND_APP = "frontend-app"  # Vite/React only (1 port)
+
+
+# Per-project deployment lifecycle. Stored on the projects row;
+# transitions driven by the Deploy/Stop endpoints (which flip to a
+# pending_* state) and the host-side supervisor (which picks pending
+# rows up, runs the `docker compose` commands, and flips to the
+# terminal state).
+#
+# State machine:
+#   stopped → pending_deploy → deploying → running | failed
+#   running → pending_stop → stopped | failed
+#
+# Why pending_* exists: the backend container can't run `docker compose`
+# directly (Docker-in-Docker path-resolution issue, same as the platform
+# supervisor). Backend marks the intent; host-side supervisor executes
+# it. UI polls the row to surface live status.
+class DeployStatus(StrEnum):
+    STOPPED = "stopped"                # initial state; no containers running
+    PENDING_DEPLOY = "pending_deploy"  # user clicked Deploy; supervisor will pick up
+    DEPLOYING = "deploying"            # supervisor running `docker compose up -d --build`
+    RUNNING = "running"                # healthcheck passed; launch URL is live
+    PENDING_STOP = "pending_stop"      # user clicked Stop; supervisor will pick up
+    STOPPING = "stopping"              # supervisor running `docker compose down`
+    FAILED = "failed"                  # last operation errored; see `deploy_error`
+
+
+# Base ports for per-project allocation. Sequential assignment from
+# these. Chosen to avoid collision with platform dev (8000/3000),
+# staging (8010/3010), prod (8020/3020), demo (8030/3030).
+PROJECT_BACKEND_PORT_BASE = 8100
+PROJECT_FRONTEND_PORT_BASE = 3100
+
+
 class Project(BaseModel):
     """A parent container for requests. PRD: docs/prd-projects-feature.md."""
 
@@ -287,6 +327,19 @@ class Project(BaseModel):
     default_team: DefaultTeam | None = None
     target_date: datetime | None = None
     template_id: str | None = None
+    # Per-project app scaffold + deploy (added in the per-project
+    # working-tree feature). Existing rows from before this feature
+    # default to ``kind = web-app`` and ``deploy_status = stopped`` —
+    # they won't have a scaffold on disk, so the Deploy endpoint
+    # rejects them with a clear error and offers a retro-scaffold
+    # button (not in v1).
+    kind: ProjectKind = ProjectKind.WEB_APP
+    deploy_backend_port: int | None = None  # allocated at create time
+    deploy_frontend_port: int | None = None
+    deploy_status: DeployStatus = DeployStatus.STOPPED
+    deploy_url: str = ""  # e.g. http://localhost:3100 when running
+    deploy_last_started_at: datetime | None = None
+    deploy_error: str | None = None  # last deploy attempt's error, if any
     # Audit
     created_by: str | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -322,6 +375,10 @@ class ProjectArtifact(BaseModel):
     updated_at: datetime | None = None  # PDB-43: last content mutation
     finalized_at: datetime | None = None
     finalized_by: str | None = None
+    # Review-driven regeneration. NULL for the first-draft of a kind
+    # (v0.1). Populated when this version was produced by the agent
+    # using the user's review comments against the prior version.
+    review_input: str | None = None
 
 
 # ── Project-driven Build: task list (PDB-14) ─────────
@@ -356,6 +413,11 @@ class ProjectTask(BaseModel):
     amended: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime | None = None
+    # Review-driven regeneration. NULL for the first-draft of a list
+    # version. Populated (same value on every row of that list_version)
+    # when the list was produced by the agent using the user's review
+    # comments against the prior task list.
+    review_input: str | None = None
 
 
 # ── Project-driven Build: chat with project_orchestrator (PDB-33) ────

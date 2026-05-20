@@ -31,11 +31,23 @@ interface NavItem {
   label: string
   icon: any
   adminOnly?: boolean
+  /** Extra route prefixes that should also light up this nav item.
+   * Example: per-request detail pages (`/request/:id`, `/stories/:id`)
+   * are reached from Command Center, so they highlight that entry.
+   * `/stories/project/:id` is the per-project Story Board, so it
+   * highlights Projects. */
+  alsoMatches?: string[]
 }
 
 const navItems: NavItem[] = [
-  { path: "/", label: "Command Center", icon: LayoutDashboard },
-  { path: "/projects", label: "Projects", icon: FolderGit2 },
+  {
+    path: "/", label: "Command Center", icon: LayoutDashboard,
+    alsoMatches: ["/request/", "/stories/"],  // per-request detail + per-request StoryBoard
+  },
+  {
+    path: "/projects", label: "Projects", icon: FolderGit2,
+    alsoMatches: ["/stories/project/"],  // per-project StoryBoard wins via longest-prefix
+  },
   { path: "/prompts", label: "Prompt Studio", icon: Wand2 },
   { path: "/diagrams", label: "Diagrams", icon: Workflow },
   { path: "/history", label: "History", icon: History },
@@ -45,6 +57,31 @@ const navItems: NavItem[] = [
   { path: "/users", label: "Users", icon: Shield, adminOnly: true },
 ]
 
+/** Picks which nav item is "active" for the given URL. Exact-match wins;
+ *  otherwise the longest matching prefix (across `path` + `alsoMatches`)
+ *  wins so `/stories/project/abc` correctly highlights Projects rather
+ *  than Command Center's broader `/stories/` rule. Root `/` is exact-only —
+ *  treating it as a prefix would match every URL. */
+function pickActivePath(pathname: string, items: NavItem[]): string | null {
+  for (const item of items) {
+    if (item.path === pathname) return item.path
+  }
+  let best: { path: string; len: number } | null = null
+  for (const item of items) {
+    const candidates =
+      item.path === "/"
+        ? item.alsoMatches ?? []
+        : [item.path, ...(item.alsoMatches ?? [])]
+    for (const c of candidates) {
+      const prefix = c.endsWith("/") ? c : c + "/"
+      if (pathname.startsWith(prefix) && prefix.length > (best?.len ?? 0)) {
+        best = { path: item.path, len: prefix.length }
+      }
+    }
+  }
+  return best?.path ?? null
+}
+
 export function Sidebar() {
   const location = useLocation()
   const { user, logout } = useAuthStore()
@@ -52,6 +89,7 @@ export function Sidebar() {
   const visibleItems = navItems.filter(
     (item) => !item.adminOnly || user?.role === "admin",
   )
+  const activePath = pickActivePath(location.pathname, visibleItems)
 
   return (
     <nav
@@ -92,25 +130,40 @@ export function Sidebar() {
         }}
       >
       {visibleItems.map(({ path, label, icon: Icon }) => {
-        const active = location.pathname === path
+        const active = activePath === path
         return (
           <Link
             key={path}
             to={path}
             aria-current={active ? "page" : undefined}
             style={{
+              position: "relative",
               display: "flex",
               alignItems: "center",
               gap: 10,
               padding: "10px 12px",
               borderRadius: "var(--radius)",
               fontSize: 13,
-              fontWeight: 500,
+              fontWeight: active ? 700 : 500,
               textDecoration: "none",
               color: active ? "var(--accent)" : "var(--text-secondary)",
               background: active ? "var(--accent-subtle)" : "transparent",
+              borderLeft: active ? "3px solid var(--accent)" : "3px solid transparent",
+              paddingLeft: active ? 10 : 12,  // compensate for border so labels don't shift
               transition: "background 0.15s, color 0.15s",
               whiteSpace: "nowrap",
+            }}
+            onMouseEnter={(e) => {
+              if (!active) {
+                e.currentTarget.style.background = "var(--bg-hover)"
+                e.currentTarget.style.color = "var(--text-primary)"
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!active) {
+                e.currentTarget.style.background = "transparent"
+                e.currentTarget.style.color = "var(--text-secondary)"
+              }
             }}
           >
             <Icon size={16} style={{ flexShrink: 0 }} />

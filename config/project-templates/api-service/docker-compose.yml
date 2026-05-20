@@ -1,0 +1,36 @@
+# Per-project Docker Compose for {{PROJECT_NAME}} (API service).
+#
+# Allocated port (claimed at project creation, persisted on the
+# `projects` row, free for the life of this project):
+#   - backend → host :{{BACKEND_PORT}}
+#
+# This is a backend-only template — no frontend service. The port
+# pair on the projects table still has `deploy_frontend_port` filled
+# in, but it goes unused here. Cheap to keep the allocation symmetric.
+name: project-{{PROJECT_SLUG}}
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: project-{{PROJECT_SLUG}}-backend
+    ports:
+      - "{{BACKEND_PORT}}:8000"
+    volumes:
+      - ./backend/app:/app/app
+    environment:
+      - PROJECT_NAME={{PROJECT_NAME}}
+      - LOG_LEVEL=INFO
+    networks:
+      - project-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+networks:
+  project-net:
+    name: project-{{PROJECT_SLUG}}-net

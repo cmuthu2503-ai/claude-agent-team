@@ -7,7 +7,7 @@
 
 | Field | Value |
 |-------|-------|
-| Document Version | 1.2 |
+| Document Version | 1.3 |
 | Created Date | 2026-05-17 |
 | Last Updated | 2026-05-17 |
 | Status | Draft |
@@ -616,3 +616,92 @@ Expanded scope: ~3 days split into 3 PRs.
 | 1.0 | 2026-05-17 | Chandramouli | Initial draft — explicit project creation + manual assignment + project-level rollup pages. Carries forward schema from the reverted auto-assign prototype; drops keyword matching + agent MERGE MODE + document UPSERT (kept simple). |
 | 1.1 | 2026-05-17 | Chandramouli | Scope expansion: every field previously in "Out of Scope (v1.1)" pulled into v1 — color (PRJ-009), icon (PRJ-010), tags (PRJ-011), lead user (PRJ-012), repo URL (PRJ-013), target date (PRJ-014), default team (PRJ-015), templates with starter checklist (PRJ-016, PRJ-017). Data model expanded with corresponding columns. Create modal mockup rewritten to show all v1 fields. Implementation estimate bumped 1.5 days → ~3 days. Still-out-of-scope list reduced to true v2 items (per-project RBAC, sub-projects, notifications, cross-project linking, auto-archive, bulk reassign, free-form colors/icons, tag taxonomies). |
 | 1.2 | 2026-05-17 | Chandramouli | Added Table of Contents at the top — top-level sections 0–15 plus all subsections (4.1–4.3, 5.1–5.4, 7.1–7.3) since this PRD has dense subsection structure throughout. GitHub-flavored anchor links for jump navigation. |
+| 1.3 | 2026-05-19 | Chandramouli | New Section 16 "Project Workspaces" — projects now own GitHub repos. Capabilities WS-01..WS-20 ship the auto-create repo flow at project creation, per-project routing of code commits and research artifacts, and a manual backfill button for existing repo-less projects. Adds new env var `PROJECT_WORKSPACES_DIR` (default `project-workspaces/`), new endpoint `POST /projects/:id/create_repo`, `extract_owner_repo` helper, `GitHubPublisher.create_repo` + per-call `repo=` on `commit_files`, `project_repo_slug` validator. Smoke-tested live: CrewAITeam → repo `cmuthu2503-ai/crewaiteam` → research artifacts pushed at commit ec9cdfa3. |
+
+---
+
+## 16. Project Workspaces (WS — v1.3)
+
+### 16.1 Vision
+
+A project is no longer just a label on database rows — it owns a private
+GitHub repo. Everything the platform produces for a project (research
+artifacts now; code commits next; deploy stack maybe later) lands in that
+repo, not in the platform's own repo. The result: cloning the project's
+repo gives you the whole project, just like a normal git project.
+
+This is the practical answer to "where is my new project physically
+stored?" — in its own GitHub repo.
+
+### 16.2 Three capabilities (all shipped in v1.3)
+
+| Capability | What ships | REQ group |
+|---|---|---|
+| **1. Auto-create repo** | New project triggers `POST /user/repos` (private, auto_init=true) under the GITHUB_TOKEN user's namespace. Repo URL goes into `project.repo_url`. | WS-01..WS-06, WS-16 |
+| **2. Code commits route to project repo** | `_handle_code_commit` resolves request → project → repo_url → `(owner, name)` and passes it as the publish target. Falls back to `GITHUB_REPO` env when the project has no repo (e.g. the platform itself). | WS-07..WS-11 |
+| **3. Research artifacts route to project repo** | `_handle_publish` resolves the same way. Local artifacts materialize at `project-workspaces/<slug>/docs/research/<request_folder>/`. GitHub commit goes to the project's repo at `docs/research/<request_folder>/` (no inner slug duplication). | WS-12..WS-15 |
+
+**Capability 4 (per-project supervisor / Docker stack) is intentionally NOT
+in v1.3.** Deferred — the platform doesn't deploy your projects for you;
+clone the project's repo and run it however you want.
+
+### 16.3 New API surface
+
+- `POST /api/v1/projects` body now accepts `create_repo: bool` (default
+  `true`). When true AND `repo_url` is blank, the server creates a private
+  GitHub repo named `project_repo_slug(name)` and writes the resulting
+  HTML URL back to `repo_url`.
+- `POST /api/v1/projects/:id/create_repo` — backfill endpoint for
+  existing projects whose `repo_url` is empty. 409 if the project already
+  has a `repo_url`. Use a `PATCH` to clear it first if you really want to
+  re-bind.
+
+### 16.4 New env vars
+
+- `GITHUB_PROJECT_ORG` (optional) — if set, repos are created under that
+  org via `POST /orgs/{org}/repos`. Otherwise under the GITHUB_TOKEN
+  user via `POST /user/repos`.
+- `PROJECT_WORKSPACES_DIR` (optional, default `project-workspaces/`) —
+  root directory under the platform repo for materialized per-project
+  artifact mirrors. `.gitignore`d from the platform repo.
+
+### 16.5 Failure modes
+
+| Situation | Behavior |
+|---|---|
+| `GITHUB_TOKEN` not set | Project creation succeeds with `repo_url=""`. User can backfill later via §16.6 button once the env var is set. |
+| Token lacks `repo` scope | `POST /projects` returns **403** with `{error: "github_repo_create_unauthorized", hint: "..."}`. Project is NOT created — fail before insert. |
+| Repo name already taken in namespace | **422** with `{error: "github_repo_name_taken", hint: "Pick a different project name."}`. Project not created. |
+| Network failure to GitHub | **502** with `{error: "github_repo_create_failed", status, message}`. Project not created. |
+| Research artifact push fails after repo create | Soft-fail — files stay locally at `project-workspaces/<slug>/...`, `publish_error` reported in the workflow result. The Request still completes. |
+
+### 16.6 Existing repo-less projects (backfill)
+
+Three projects existed before WS-01 shipped: Agent Team (legitimately
+points at the platform repo), TestAITeam (test artifact), CrewAITeam (the
+user's first real new project). Anyone with `repo_url=""` can backfill
+via the **"Create GitHub Repo"** button on the Project Detail page
+(visible only when `repo_url` is empty, not shown for proj-unassigned).
+Internally hits `POST /projects/:id/create_repo`.
+
+Bulk backfill via `scripts/backfill_project_repos.py` is deferred — three
+projects fit on two hands.
+
+### 16.7 Design choices worth flagging
+
+- **Repo deletion is NOT cascaded.** Deleting a project removes its DB
+  rows but leaves the GitHub repo alone. Treating external resources as
+  "owned by user, lives forever" matches how `repo_url` works for
+  user-pasted URLs.
+- **No git clones** — `project-workspaces/<slug>/` is a plain directory
+  mirror, not a `git clone` of the project's repo. The platform writes
+  artifacts there, then pushes via the GitHub Trees API. The local mirror
+  is gitignored. Promotes to full clones later if Capability 4 ships.
+- **Slug derived from project name** — `project_repo_slug(name)`
+  lowercases, replaces whitespace/dots/underscores with dashes, strips
+  non-alphanumeric, collapses runs of dashes, caps at 100 chars. Two
+  projects whose names slug to the same value will fail at GitHub with a
+  422 (per agreed collision policy).
+- **`project_repo_slug` runs in both Python and TypeScript** — backend
+  is canonical; frontend has a hand-mirrored implementation for the live
+  preview in `CreateProjectModal`. Any drift is corrected server-side.

@@ -558,9 +558,10 @@ export function CommandCenterPage() {
                       {r.request_id}
                     </Link>
                     <ProjectChip projectId={(r as any).project_id} />
-                    <span className="ch-card-eta" aria-hidden="true">
-                      · <span className="ch-live">●</span> {r.status.replace(/_/g, " ")}
-                    </span>
+                    {/* Removed redundant "· ● <status>" text — the StatusBadge
+                        on the right already shows it, and dropping it gives
+                        the row room to fit on a single line at 100% zoom with
+                        2 cards-per-row (was previously wrapping). */}
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                     <StatusBadge status={r.status} />

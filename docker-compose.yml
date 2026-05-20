@@ -44,6 +44,14 @@ services:
       # Any worktree-local doc edits won't be visible to the running container;
       # commit them to a branch first to make them accessible.
       - C:/ai-projects/claude-agent-team/docs:/app/docs
+      # PM-finalize feature — when a user clicks "Finalize PRD" or "Finalize
+      # Tasks" we write the markdown to C:/ai-projects/<ProjectName>/docs/
+      # on the host. The backend writes through this mount; inside the
+      # container the path is /host/ai-projects/<ProjectName>/docs/. The
+      # project-name validation rejects spaces and filesystem-unsafe chars
+      # (see src/core/project_validation.py::validate_name) so the path is
+      # safe to construct by string concat.
+      - C:/ai-projects:/host/ai-projects
       # `data` switched from named volume to host bind-mount so the supervisor
       # running on the HOST (not in Docker — see CLAUDE.md "Supervisor scope")
       # can read SQLite directly without needing Docker volume gymnastics.

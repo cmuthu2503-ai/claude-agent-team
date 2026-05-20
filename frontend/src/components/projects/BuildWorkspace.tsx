@@ -130,9 +130,24 @@ function BriefEditor({
   return (
     <Card>
       <Heading icon={<Sparkles size={16} />}>Build Workspace · Project Brief</Heading>
-      <p style={{ margin: "6px 0 12px 0", fontSize: 12, color: "var(--text-muted)" }}>
+      <p style={{ margin: "6px 0 10px 0", fontSize: 12, color: "var(--text-muted)" }}>
         Write a short brief (1–3 paragraphs) so the agent has context to draft a PRD.
       </p>
+      {/* 3-step roadmap so first-time users see the whole arc upfront,
+          not just the textarea in front of them. Step 1 is the active one
+          (this view); 2 and 3 are dimmed previews. */}
+      <div style={{
+        display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap",
+        fontSize: 11, fontFamily: "var(--font-mono)",
+      }}>
+        <RoadmapStep n={1} label="Write Brief" active />
+        <RoadmapArrow />
+        <RoadmapStep n={2} label="Generate PRD" />
+        <RoadmapArrow />
+        <RoadmapStep n={3} label="Generate Tasks" />
+        <RoadmapArrow />
+        <RoadmapStep n={4} label="Dispatch + Chat" />
+      </div>
       <textarea
         value={content}
         onChange={(e) => setContent(e.target.value.slice(0, BRIEF_MAX))}
@@ -240,9 +255,12 @@ function PRDEditor({
 }: { prd: Artifact; projectId: string; onUpdated: () => void }) {
   const [content, setContent] = useState(prd.content)
   const [dirty, setDirty] = useState(false)
-  const [busy, setBusy] = useState<"saving" | "regen" | "finalizing" | null>(null)
+  const [busy, setBusy] = useState<"saving" | "regen" | "finalizing" | "deleting" | null>(null)
   const [tab, setTab] = useState<"edit" | "preview" | "split">("split")
   const [err, setErr] = useState("")
+  // Review comments for the next regeneration. Transient — cleared on
+  // successful regen and never persisted between page loads (per spec).
+  const [reviewComments, setReviewComments] = useState("")
 
   // Pick up new content if the parent re-fetched (e.g. after regen).
   // Don't overwrite local edits — only resync when the artifact_id changes
@@ -250,6 +268,7 @@ function PRDEditor({
   useEffect(() => {
     setContent(prd.content)
     setDirty(false)
+    setReviewComments("")
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prd.artifact_id])
 
@@ -272,7 +291,13 @@ function PRDEditor({
     setBusy("regen")
     setErr("")
     try {
-      await api.post(`/projects/${projectId}/prd/generate`, {})
+      // Send review comments along when present. Empty string is treated
+      // the same as omitted on the server.
+      const body = reviewComments.trim()
+        ? { review_comments: reviewComments.trim() }
+        : {}
+      await api.post(`/projects/${projectId}/prd/generate`, body)
+      setReviewComments("")  // clear on success; useEffect would also clear on artifact_id change
       onUpdated()
     } catch (e: any) {
       setErr(parseDetail(e?.message) || "Regenerate failed")
@@ -291,14 +316,57 @@ function PRDEditor({
         return
       }
     }
-    if (!window.confirm("Finalize this PRD? You can still regenerate later, but downstream stages (task list) will use this version as input.")) return
+    if (!window.confirm("Finalize this PRD? You can still regenerate later, but downstream stages (task list) will use this version as input.\n\nThe PRD will also be written to C:/ai-projects/<ProjectName>/docs/PRD.md and pushed to your project's GitHub repo (if configured).")) return
     setBusy("finalizing")
     setErr("")
     try {
-      await api.patch(`/projects/${projectId}/prd`, { status: "finalized" })
+      const res = await api.patch(`/projects/${projectId}/prd`, { status: "finalized" })
+      // Surface where the file landed + whether the GitHub push went
+      // through. The backend returns `meta.host_write` and
+      // `meta.github_push` regardless of success — soft-fail by design.
+      const meta = (res as any)?.meta || {}
+      const hw = meta.host_write
+      const gh = meta.github_push
+      const lines: string[] = ["PRD finalized."]
+      if (hw?.ok) lines.push(`Saved to: ${hw.path}`)
+      else if (hw?.error) lines.push(`Local write failed: ${hw.error}`)
+      if (gh?.ok) lines.push(`Pushed to ${gh.repo} @ ${gh.short_sha}`)
+      else if (gh?.skipped === "no_repo_url") lines.push("(No GitHub repo configured for this project — skipped push)")
+      else if (gh?.error) lines.push(`GitHub push failed: ${gh.error}`)
+      // Use alert for now — a toast component would be nicer but the
+      // current codebase doesn't have one and this gives users
+      // immediate, dismissible feedback.
+      window.alert(lines.join("\n"))
       onUpdated()
     } catch (e: any) {
       setErr(parseDetail(e?.message) || "Finalize failed")
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // Hard-delete the PRD — all versions + host file. Confirm twice when
+  // the current version is finalized (since downstream tasks may
+  // reference it). Tasks themselves aren't touched.
+  const deletePrd = async () => {
+    const isFinal = prd.status === "finalized"
+    const msg = isFinal
+      ? "DELETE this PRD entirely?\n\nThis removes ALL versions from the database AND deletes C:/ai-projects/<ProjectName>/docs/PRD.md from your disk.\n\nTask rows already generated from this PRD will stay, but their parent PRD will be gone. The project will return to the 'Generate PRD' starting state."
+      : "DELETE this PRD draft and all prior versions?\n\nThis removes every PRD row from the database and deletes C:/ai-projects/<ProjectName>/docs/PRD.md from your disk."
+    if (!window.confirm(msg)) return
+    setBusy("deleting")
+    setErr("")
+    try {
+      const res = await api.delete(`/projects/${projectId}/prd`)
+      const meta = (res as any)?.meta || {}
+      const lines: string[] = [`Deleted ${meta.deleted_versions ?? 0} PRD version(s) from the database.`]
+      const hd = meta.host_delete
+      if (hd?.ok && hd?.path) lines.push(`Removed file: ${hd.path}`)
+      else if (hd && !hd.ok) lines.push(`Local file delete failed: ${hd.error}`)
+      window.alert(lines.join("\n"))
+      onUpdated()
+    } catch (e: any) {
+      setErr(parseDetail(e?.message) || "Delete failed")
     } finally {
       setBusy(null)
     }
@@ -369,14 +437,65 @@ function PRDEditor({
         )}
       </div>
 
+      {/* Review comments for the next regeneration. Sits between the
+          editor and the toolbar so it's visually anchored to "Regenerate".
+          Transient — clears on successful regen, never persisted. */}
+      <div style={{
+        marginTop: 12, padding: "10px 12px",
+        background: "var(--bg-hover)", border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+      }}>
+        <div style={{
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          marginBottom: 6, fontSize: 11, color: "var(--text-muted)",
+        }}>
+          <span>
+            Review comments for next regeneration <em>(optional)</em>
+          </span>
+          <span style={{
+            fontFamily: "var(--font-mono)",
+            color: reviewComments.length > 2000 ? "var(--danger)" : "var(--text-muted)",
+          }}>
+            {reviewComments.length}/2000
+          </span>
+        </div>
+        <textarea
+          value={reviewComments}
+          onChange={(e) => setReviewComments(e.target.value.slice(0, 2000))}
+          placeholder={
+            'e.g. "Remove section 9. Add rate limiting under Phase 5. ' +
+            'Shorten the data model to just the new tables."'
+          }
+          rows={3}
+          disabled={busy !== null}
+          style={{
+            width: "100%", padding: "8px 10px", fontSize: 12,
+            fontFamily: "var(--font)", lineHeight: 1.4,
+            color: "var(--text-primary)", background: "var(--bg-card)",
+            border: "1px solid var(--border)", borderRadius: "var(--radius)",
+            resize: "vertical", minHeight: 60, outline: "none",
+            boxSizing: "border-box",
+          }}
+        />
+      </div>
+
       <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
         <button
           type="button"
           onClick={regenerate}
           disabled={busy !== null}
           style={secondaryBtn(busy !== null)}
+          title={
+            reviewComments.trim()
+              ? "Regenerate the PRD using your review comments — keeps unaffected sections intact."
+              : "Regenerate a fresh PRD from the brief (discards all current content)."
+          }
         >
-          {busy === "regen" ? "Regenerating…" : "Regenerate"}
+          {busy === "regen"
+            ? "Regenerating…"
+            : reviewComments.trim()
+              ? "Regenerate with comments"
+              : "Regenerate"}
         </button>
         <button
           type="button"
@@ -387,6 +506,15 @@ function PRDEditor({
           {busy === "saving" ? "Saving…" : dirty ? "Save Draft" : "Saved"}
         </button>
         <div style={{ flex: 1 }} />
+        <button
+          type="button"
+          onClick={deletePrd}
+          disabled={busy !== null}
+          style={dangerBtn(busy !== null)}
+          title="Delete this PRD entirely (all versions) and remove the host-side PRD.md file. Returns the project to the 'Generate PRD' starting state."
+        >
+          {busy === "deleting" ? "Deleting…" : "Delete PRD"}
+        </button>
         <button
           type="button"
           onClick={finalize}
@@ -407,6 +535,40 @@ function PRDFinalized({
   prd, brief, projectId, reload,
 }: { prd: Artifact; brief: Artifact; projectId: string; reload: () => void }) {
   const [collapsed, setCollapsed] = useState(true)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteErr, setDeleteErr] = useState("")
+
+  // Hard-delete the finalized PRD. Heavier confirmation than the
+  // draft version because there may be downstream tasks / dispatches
+  // already referencing this PRD's contents.
+  const deletePrd = async () => {
+    const ok = window.confirm(
+      "DELETE this FINALIZED PRD entirely?\n\n" +
+      "• Removes ALL versions (drafts + finalized + archived) from the database\n" +
+      "• Deletes C:/ai-projects/<ProjectName>/docs/PRD.md from your disk\n" +
+      "• Tasks already generated from this PRD will remain but lose their parent\n" +
+      "• The project returns to the 'Generate PRD' starting state\n\n" +
+      "This cannot be undone."
+    )
+    if (!ok) return
+    setDeleting(true)
+    setDeleteErr("")
+    try {
+      const res = await api.delete(`/projects/${projectId}/prd`)
+      const meta = (res as any)?.meta || {}
+      const lines: string[] = [`Deleted ${meta.deleted_versions ?? 0} PRD version(s) from the database.`]
+      const hd = meta.host_delete
+      if (hd?.ok && hd?.path) lines.push(`Removed file: ${hd.path}`)
+      else if (hd && !hd.ok) lines.push(`Local file delete failed: ${hd.error}`)
+      window.alert(lines.join("\n"))
+      reload()
+    } catch (e: any) {
+      const msg = parseDetail(e?.message) || "Delete failed"
+      setDeleteErr(msg)
+    } finally {
+      setDeleting(false)
+    }
+  }
   // PDB-43: brief-changed-since-PRD-finalized banner. Fires only when both
   // timestamps exist AND the brief was touched strictly later than the
   // finalize timestamp. Non-blocking — just a hint to regenerate.
@@ -447,21 +609,52 @@ function PRDFinalized({
           <Heading icon={<CheckCircle2 size={16} color="var(--success)" />}>
             Build Workspace · PRD Finalized (v{prd.version})
           </Heading>
-          <button
-            type="button"
-            onClick={() => setCollapsed(!collapsed)}
-            style={{
-              display: "inline-flex", alignItems: "center", gap: 4,
-              padding: "4px 10px", fontSize: 11,
-              background: "transparent", color: "var(--text-muted)",
-              border: "1px solid var(--border)", borderRadius: "var(--radius)",
-              cursor: "pointer", fontFamily: "var(--font)",
-            }}
-          >
-            {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
-            {collapsed ? "Show PRD" : "Hide PRD"}
-          </button>
+          <div style={{ display: "inline-flex", gap: 6 }}>
+            <button
+              type="button"
+              onClick={deletePrd}
+              disabled={deleting}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 4,
+                padding: "4px 10px", fontSize: 11,
+                background: "transparent",
+                color: deleting ? "var(--text-muted)" : "var(--danger)",
+                border: "1px solid " + (deleting ? "var(--border)" : "var(--danger)"),
+                borderRadius: "var(--radius)",
+                cursor: deleting ? "not-allowed" : "pointer",
+                fontFamily: "var(--font)",
+                opacity: deleting ? 0.6 : 1,
+              }}
+              title="Delete this PRD entirely (DB + host file). Lets you regenerate from a clean slate."
+            >
+              {deleting ? "Deleting…" : "Delete PRD"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setCollapsed(!collapsed)}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 4,
+                padding: "4px 10px", fontSize: 11,
+                background: "transparent", color: "var(--text-muted)",
+                border: "1px solid var(--border)", borderRadius: "var(--radius)",
+                cursor: "pointer", fontFamily: "var(--font)",
+              }}
+            >
+              {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+              {collapsed ? "Show PRD" : "Hide PRD"}
+            </button>
+          </div>
         </div>
+        {deleteErr && (
+          <div style={{
+            marginTop: 10, padding: "8px 12px", borderRadius: "var(--radius)",
+            border: "1px solid var(--danger)",
+            background: "rgba(255, 59, 59, 0.08)",
+            color: "var(--danger)", fontSize: 12,
+          }}>
+            {deleteErr}
+          </div>
+        )}
         {!collapsed && (
           <div style={{
             marginTop: 10, padding: "12px 16px",
@@ -526,6 +719,37 @@ function Heading({ icon, children }: { icon: React.ReactNode; children: React.Re
   )
 }
 
+function RoadmapStep({ n, label, active }: { n: number; label: string; active?: boolean }) {
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 6,
+      padding: "4px 9px", borderRadius: 12,
+      background: active ? "var(--accent-subtle)" : "transparent",
+      color: active ? "var(--accent)" : "var(--text-muted)",
+      border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
+      fontWeight: active ? 700 : 500,
+    }}>
+      <span style={{
+        width: 16, height: 16, borderRadius: "50%",
+        background: active ? "var(--accent)" : "var(--bg-hover)",
+        color: active ? "#0a0014" : "var(--text-muted)",
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        fontSize: 9, fontWeight: 800,
+      }}>{n}</span>
+      <span>{label}</span>
+    </span>
+  )
+}
+
+function RoadmapArrow() {
+  return (
+    <span style={{
+      color: "var(--text-muted)", fontSize: 10,
+      display: "inline-flex", alignItems: "center",
+    }}>→</span>
+  )
+}
+
 function ErrorBanner({ children }: { children: React.ReactNode }) {
   return (
     <div style={{
@@ -558,6 +782,23 @@ function secondaryBtn(disabled: boolean): React.CSSProperties {
     background: "transparent",
     color: disabled ? "var(--text-muted)" : "var(--text-secondary)",
     border: "1px solid var(--border)",
+    borderRadius: "var(--radius)",
+    cursor: disabled ? "not-allowed" : "pointer",
+    whiteSpace: "nowrap", lineHeight: 1, fontFamily: "var(--font)",
+    opacity: disabled ? 0.6 : 1,
+  }
+}
+
+// Danger styling for destructive actions (Delete PRD). Bordered red,
+// no background fill — keeps it visually distinct from the primary
+// "Finalize" CTA without competing for emphasis.
+function dangerBtn(disabled: boolean): React.CSSProperties {
+  return {
+    display: "inline-flex", alignItems: "center", gap: 6,
+    padding: "6px 14px", fontSize: 12, fontWeight: 600,
+    background: "transparent",
+    color: disabled ? "var(--text-muted)" : "var(--danger)",
+    border: "1px solid " + (disabled ? "var(--border)" : "var(--danger)"),
     borderRadius: "var(--radius)",
     cursor: disabled ? "not-allowed" : "pointer",
     whiteSpace: "nowrap", lineHeight: 1, fontFamily: "var(--font)",

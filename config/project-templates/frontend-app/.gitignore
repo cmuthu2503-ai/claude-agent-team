@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.vite/
+*.log
+
+.env
+.env.local
+
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+.platform-deploy-state.json

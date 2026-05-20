@@ -57,9 +57,20 @@ coverage.xml
 reports/*.md
 reports/*.json
 
-# SQLite databases
+# SQLite databases (and their WAL / shared-memory sidecars)
 *.db
+*.db-wal
+*.db-shm
 *.sqlite3
+
+# Local runtime data — live SQLite, uploaded files, etc.
+# This directory is bind-mounted to the backend container at /app/data;
+# its contents are per-installation runtime state, not source.
+data/
 
 # Local debugging artifacts (error screenshots, dumps)
 error/
+
+# WS-13 — per-project workspaces (research + future code mirror).
+# These belong in each project's own GitHub repo, not in the platform repo.
+project-workspaces/

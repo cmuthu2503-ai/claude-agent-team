@@ -1,0 +1,33 @@
+# Per-project Docker Compose for {{PROJECT_NAME}} (frontend-only).
+#
+# Allocated port:
+#   - frontend → host :{{FRONTEND_PORT}}
+#
+# Frontend-only template — no backend service. `deploy_backend_port` is
+# still allocated on the projects row but unused here.
+name: project-{{PROJECT_SLUG}}
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: project-{{PROJECT_SLUG}}-frontend
+    ports:
+      - "{{FRONTEND_PORT}}:3000"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+    networks:
+      - project-net
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+networks:
+  project-net:
+    name: project-{{PROJECT_SLUG}}-net
