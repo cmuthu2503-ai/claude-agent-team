@@ -29,35 +29,97 @@ _FILE_LINE_RE = re.compile(
     r"(?P<path>[\w./\\-]+\.(?:py|ts|tsx|js|jsx)):(?P<line>\d+)(?::(?P<col>\d+))?",
 )
 
+# Matches the CodeWriter drop-guard rejection's `Refusing to overwrite 'PATH'`
+# preamble. The full message goes "Refusing to overwrite 'frontend/src/index.css':
+# line count dropped from 72 to 3 (96% reduction)" — we capture PATH so we can
+# embed the FULL current file content into the rework prompt. Without this the
+# agent gets the error text but no on-disk visibility, can't tell the system's
+# rejection from "I emitted what I intended", and re-emits the same shrink.
+_DROP_GUARD_PATH_RE = re.compile(
+    r"Refusing to overwrite '(?P<path>[^']+)':\s*line count dropped",
+)
+
+# Cap how much of a cited file we embed. 200 lines covers the common case
+# (most config + entry-point files are <200 LOC) without ballooning the
+# prompt for a 2000-line file. We also clamp total bytes per snippet so
+# a single dense minified file can't blow the budget.
+_MAX_FULL_FILE_LINES = 200
+_MAX_FULL_FILE_BYTES = 8_000
+
 
 def _enrich_error_with_line_snippets(
     error: str,
     project_root: "Any" = None,  # Path | None — Any to avoid the import here
 ) -> str:
-    """Append the current file content at each cited line to an error string.
+    """Append the current file content to the error string so the rework
+    agent can see what's actually on disk before deciding how to fix it.
 
-    Parses `path/to/file.py:LINE[:COL]` patterns out of `error`, reads
-    each file at `project_root / path`, and pulls a 5-line window
-    (LINE-2 .. LINE+2) for context. The augmented error has a clearly
-    delimited "CURRENT FILE CONTENT" section appended so the agent
-    receiving rework_instructions can see exactly what needs to change
-    WITHOUT calling `file_read` first.
+    Two complementary modes — both produce a "CURRENT FILE CONTENT" block
+    appended to the original error:
 
-    Soft-fails per-citation: a file we can't read (missing, permission)
-    is silently skipped — the error string still goes back unchanged
-    plus whatever snippets we could collect. Same caps as everywhere
-    else in this module: bounded loop, bounded file reads, no recursion.
+    1. **Line-snippet mode** (the original): triggered by ruff / tsc /
+       pytest errors that cite ``path/to/file.py:LINE[:COL]``. Reads each
+       cited file and embeds a 5-line context window around the cited
+       line, with a ``>`` marker on the exact line.
+
+    2. **Full-file mode** (new): triggered by the CodeWriter drop-guard
+       rejection (``Refusing to overwrite 'PATH': line count dropped
+       from N to M``). The drop guard doesn't cite a line — its complaint
+       is about file *shape*, not a specific line — so a 5-line window is
+       useless. We embed the FULL current file content (capped at
+       ``_MAX_FULL_FILE_LINES`` lines / ``_MAX_FULL_FILE_BYTES`` bytes)
+       so the agent can see what it would have clobbered and make an
+       informed choice between (a) re-emit a merged version that
+       preserves the lines it wants, (b) use ``search_replace`` for the
+       intended surgical edit, (c) declare the shrink genuinely
+       intentional (which the exempt list in code_writer.py covers
+       for known config-seed basenames).
+
+    Soft-fails per-citation. Bounded loops + reads. Never raises.
     """
     if not error or project_root is None:
         return error
-    # Dedupe — ruff often cites the same file:line twice (E501 in selectors
-    # and in the body) and reading the file twice helps nobody.
-    seen: set[tuple[str, int]] = set()
+
     snippets: list[str] = []
-    # Hard cap — a single error message that cites 50 different lines is
-    # almost certainly a different problem (e.g. mass-rename test failure);
-    # we don't want to balloon the rework prompt to 100KB.
     MAX_CITATIONS = 8
+
+    # ── Mode 2: drop-guard rejections ── Process FIRST so the full-file
+    # snippets render above the line-window snippets in the prompt (the
+    # drop-guard case is the higher-leverage information for the agent).
+    seen_full: set[str] = set()
+    for m in _DROP_GUARD_PATH_RE.finditer(error):
+        rel_path = m.group("path").replace("\\", "/")
+        if rel_path in seen_full:
+            continue
+        seen_full.add(rel_path)
+        if len(snippets) >= MAX_CITATIONS:
+            break
+        try:
+            abs_path = (project_root / rel_path).resolve()
+            if not str(abs_path).startswith(str(project_root.resolve())):
+                continue
+            if not abs_path.is_file():
+                continue
+            text = abs_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        lines = text.splitlines()
+        total_lines = len(lines)
+        truncated = False
+        if total_lines > _MAX_FULL_FILE_LINES:
+            lines = lines[:_MAX_FULL_FILE_LINES]
+            truncated = True
+        rendered_body = "\n".join(
+            f"  {i + 1:4d}  {ln}" for i, ln in enumerate(lines)
+        )
+        if len(rendered_body) > _MAX_FULL_FILE_BYTES:
+            rendered_body = rendered_body[:_MAX_FULL_FILE_BYTES] + "\n  ... [byte-cap truncated]"
+            truncated = True
+        head = f"--- CURRENT ON-DISK CONTENT: {rel_path} ({total_lines} lines{', truncated' if truncated else ''}) ---"
+        snippets.append(head + "\n" + rendered_body)
+
+    # ── Mode 1: line-snippet citations ──
+    seen_line: set[tuple[str, int]] = set()
     for m in _FILE_LINE_RE.finditer(error):
         if len(snippets) >= MAX_CITATIONS:
             break
@@ -67,12 +129,11 @@ def _enrich_error_with_line_snippets(
         except ValueError:
             continue
         key = (rel_path, line_no)
-        if key in seen:
+        if key in seen_line:
             continue
-        seen.add(key)
+        seen_line.add(key)
         try:
             abs_path = (project_root / rel_path).resolve()
-            # Belt-and-suspenders: don't traverse outside the project root.
             if not str(abs_path).startswith(str(project_root.resolve())):
                 continue
             if not abs_path.is_file():
@@ -85,19 +146,20 @@ def _enrich_error_with_line_snippets(
             continue
         start = max(0, line_no - 3)
         end = min(len(lines), line_no + 2)
-        # Render with line numbers + a `>` marker on the cited line so the
-        # agent sees the exact text to change.
         rendered: list[str] = []
         for i in range(start, end):
             marker = ">" if (i + 1) == line_no else " "
             rendered.append(f"  {marker} {i + 1:4d}  {lines[i]}")
         snippets.append(f"--- {rel_path}:{line_no} ---\n" + "\n".join(rendered))
+
     if not snippets:
         return error
     return (
         error
-        + "\n\n=== CURRENT FILE CONTENT AT EACH CITED LINE ===\n"
-        + "(`>` marks the cited line; surrounding lines shown for context)\n\n"
+        + "\n\n=== CURRENT FILE CONTENT AT EACH CITED LOCATION ===\n"
+        + "(Use this to decide between merging into the existing file, using\n"
+        + "`search_replace` for a surgical edit, or re-emitting a full file\n"
+        + "that preserves the lines you intended to keep.)\n\n"
         + "\n\n".join(snippets)
     )
 

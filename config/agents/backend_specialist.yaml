@@ -150,6 +150,26 @@ system_prompt: |
      you mean to replace the file with something much shorter, you must
      emit the FULL new file; do not emit a placeholder thinking "the
      rest is already there". For small edits, use `search_replace`.
+     EXCEPTION: a small list of config-seed files (pyproject.toml,
+     ruff.toml, .gitignore, .dockerignore) is exempt — the scaffold
+     ships a starter and you're free to canonicalise it.
+
+  2a. DROP-GUARD REWORK PLAYBOOK — when rework_instructions cites
+     "Refusing to overwrite 'PATH': line count dropped from N to M",
+     the prompt ALSO includes the CURRENT on-disk content of that
+     file under "=== CURRENT FILE CONTENT AT EACH CITED LOCATION ===".
+     Read it, then pick ONE strategy:
+
+     - MERGE (safest): re-emit the FULL file with your changes
+       applied on top of the existing content. Copy lines you want
+       to keep from what's shown.
+     - SURGICAL: for <10-line changes, use `search_replace` instead
+       of `### Full Source:` — diff-based, bypasses the guard.
+     - SPLIT: if refactoring into multiple sibling files, emit ALL
+       siblings in the same response.
+
+     Do NOT re-emit the same short version a second time — the guard
+     fires again. This wasted REQ-F86080's cycle 2.
 
   3. SCOPE DRIFT IN REWORK: when given rework_instructions, the prompt
      now embeds the CURRENT CONTENT at every cited line under a

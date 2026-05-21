@@ -433,3 +433,107 @@ async def test_update_project_deploy_preferences_round_trip(temp_store):
     await temp_store.update_project_deploy_preferences("proj-p", "")
     refetched = await temp_store.get_project("proj-p")
     assert refetched.deploy_judge_preferences == ""
+
+
+# ── _enrich_error_with_line_snippets — drop-guard rework mode ────────────────
+
+
+def test_enrich_drop_guard_embeds_full_file_content(tmp_path):
+    """REQ-F86080 retry regression. When CodeWriter rejects with the
+    drop-guard message, the orchestrator's enricher must append the FULL
+    current on-disk content of the cited file so the rework agent can
+    see what they would have clobbered and pick a sensible fix."""
+    from src.core.orchestrator import _enrich_error_with_line_snippets
+
+    # Mimic a real scaffold's index.css
+    target = tmp_path / "frontend" / "src" / "index.css"
+    target.parent.mkdir(parents=True)
+    legacy_css = (
+        ":root {\n"
+        "  --bg-primary: #0a0014;\n"
+        "  --bg-card: #11091f;\n"
+        "  --text-primary: #e0d4f0;\n"
+        "  --accent: #00f0ff;\n"
+        "  --danger: #ff2a6d;\n"
+        "}\n"
+        "body { background: var(--bg-primary); color: var(--text-primary); }\n"
+    )
+    target.write_text(legacy_css)
+
+    error_msg = (
+        "Refusing to overwrite 'frontend/src/index.css': "
+        "line count dropped from 8 to 1 (88% reduction)."
+    )
+    enriched = _enrich_error_with_line_snippets(error_msg, project_root=tmp_path)
+
+    # Original error still present
+    assert "Refusing to overwrite" in enriched
+    # Marker block introduces the on-disk content
+    assert "CURRENT FILE CONTENT" in enriched
+    assert "CURRENT ON-DISK CONTENT: frontend/src/index.css" in enriched
+    # Actual lines from the file are present so the agent can copy them
+    assert "--bg-primary: #0a0014" in enriched
+    assert "--accent: #00f0ff" in enriched
+    # Renders with line numbers
+    assert "   1  :root {" in enriched or "  1  :root {" in enriched
+
+
+def test_enrich_drop_guard_handles_missing_file_gracefully(tmp_path):
+    """If the cited file doesn't exist on disk (race condition, typo in
+    error), enrichment soft-fails: the original error string still goes
+    back unchanged, no exception."""
+    from src.core.orchestrator import _enrich_error_with_line_snippets
+
+    error_msg = (
+        "Refusing to overwrite 'frontend/src/nonexistent.css': "
+        "line count dropped from 50 to 2 (96% reduction)."
+    )
+    out = _enrich_error_with_line_snippets(error_msg, project_root=tmp_path)
+    # No on-disk content added (file doesn't exist), but error preserved
+    assert "Refusing to overwrite" in out
+    assert "CURRENT FILE CONTENT" not in out
+
+
+def test_enrich_drop_guard_truncates_large_files(tmp_path):
+    """A 1000-line file gets capped at _MAX_FULL_FILE_LINES so the
+    rework prompt doesn't balloon."""
+    from src.core.orchestrator import _enrich_error_with_line_snippets
+
+    target = tmp_path / "big.css"
+    big = "\n".join(f"/* line {i} */" for i in range(1000)) + "\n"
+    target.write_text(big)
+
+    error_msg = (
+        "Refusing to overwrite 'big.css': "
+        "line count dropped from 1000 to 5 (99% reduction)."
+    )
+    enriched = _enrich_error_with_line_snippets(error_msg, project_root=tmp_path)
+    assert "CURRENT ON-DISK CONTENT: big.css (1000 lines, truncated)" in enriched
+    # First lines present, far-future lines absent
+    assert "/* line 0 */" in enriched
+    assert "/* line 999 */" not in enriched
+
+
+def test_enrich_handles_both_modes_in_one_error(tmp_path):
+    """An error can carry both a drop-guard rejection AND a separate
+    ruff line citation. Both should be enriched in the same pass."""
+    from src.core.orchestrator import _enrich_error_with_line_snippets
+
+    target_css = tmp_path / "a.css"
+    target_css.write_text("body { color: red; }\n.x { color: blue; }\n")
+
+    target_py = tmp_path / "src" / "x.py"
+    target_py.parent.mkdir(parents=True)
+    target_py.write_text("def foo():\n    pass\n    return 1\n")
+
+    error_msg = (
+        "Refusing to overwrite 'a.css': line count dropped from 2 to 0.\n"
+        "Also: src/x.py:2:5 unexpected indent."
+    )
+    enriched = _enrich_error_with_line_snippets(error_msg, project_root=tmp_path)
+    # Drop-guard full-file block
+    assert "CURRENT ON-DISK CONTENT: a.css" in enriched
+    assert "color: red" in enriched
+    # Ruff line-window block
+    assert "--- src/x.py:2 ---" in enriched
+    assert "    pass" in enriched

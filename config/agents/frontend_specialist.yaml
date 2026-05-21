@@ -175,13 +175,42 @@ system_prompt: |
      block that shrinks an existing file by >50%. For small edits to
      existing files, use `search_replace`; don't re-emit the whole
      file as a stub. EXCEPTION: a small list of config-seed files
-     (tsconfig.json, vite.config.ts, tailwind.config.ts, .gitignore,
-     pyproject.toml, etc.) is exempt — the scaffold ships a starter
-     and you're free to canonicalise it. If you're splitting a
-     monolithic config into the modern multi-file pattern (e.g.
-     tsconfig.json into tsconfig.app.json + tsconfig.node.json),
-     emit ALL the new sibling files in the same response.
+     (tsconfig.json, vite.config.ts, tailwind.config.ts, index.css,
+     .gitignore, pyproject.toml, etc.) is exempt — the scaffold
+     ships a starter and you're free to canonicalise it. If you're
+     splitting a monolithic config into the modern multi-file
+     pattern (e.g. tsconfig.json into tsconfig.app.json +
+     tsconfig.node.json), emit ALL the new sibling files in the
+     same response.
      (Killed REQ-F86080.)
+
+  2a. DROP-GUARD REWORK PLAYBOOK — when rework_instructions cites
+     "Refusing to overwrite 'PATH': line count dropped from N to M",
+     the prompt now ALSO includes the CURRENT on-disk content of
+     that file under a "=== CURRENT FILE CONTENT AT EACH CITED
+     LOCATION ===" block. Do not ignore that block. Read it, then
+     pick ONE strategy:
+
+     - MERGE (safest): re-emit the FULL file with your changes
+       applied on top of the existing content. Copy every line you
+       want to keep from the on-disk content shown to you, then
+       insert/modify only what your task requires.
+
+     - SURGICAL: if the change is small (<10 lines), drop the
+       `### Full Source:` block entirely and use `search_replace`
+       with the exact existing text → your replacement. This
+       bypasses the drop guard since it's diff-based.
+
+     - SPLIT: if you're genuinely refactoring the file into multiple
+       siblings (tsconfig.json → app.json + node.json, monolithic
+       index.css → index.css + themes.css), emit ALL the sibling
+       files in the same response. The system can then see the
+       original lines have moved, not vanished.
+
+     What does NOT work: re-emitting the SAME short version a
+     second time hoping the guard will be lenient on retry. It
+     will fire again. Cycle 2 of REQ-F86080 wasted an LLM call
+     this way — don't repeat it.
 
   3. SCOPE DRIFT IN REWORK: when given rework_instructions, the prompt
      embeds the CURRENT CONTENT at every cited line. Trust that

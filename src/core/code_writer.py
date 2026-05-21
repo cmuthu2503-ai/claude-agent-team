@@ -64,6 +64,14 @@ _DROP_GUARD_EXEMPT_BASENAMES: frozenset[str] = frozenset({
     "postcss.config.cjs",
     "eslint.config.js",
     ".prettierrc",
+    # CSS entry-point files. Scaffolds ship a verbose index.css with
+    # baked-in theme tokens; agents are often instructed to delegate
+    # theming to a sibling themes.css and reduce index.css to just
+    # `@import './themes.css'; @tailwind base; ...`. That's a
+    # legitimate refactor that the guard would otherwise reject.
+    # (Killed REQ-F86080 retry attempt 2026-05-21.)
+    "index.css",
+    "main.css",
     # Dotfile configs frequently rewritten by the agent.
     ".gitignore",
     ".dockerignore",
@@ -590,14 +598,31 @@ class CodeWriter:
                         old_lines=old_lines, new_lines=new_lines,
                         drop_pct=round(drop_pct, 1),
                     )
+                    # Message designed to be consumed by the rework agent.
+                    # Lists three concrete options + tells the agent that
+                    # the current on-disk content will be appended by the
+                    # orchestrator's _enrich_error_with_line_snippets, so
+                    # the agent knows it has full visibility before
+                    # choosing a path. The runner injects this string
+                    # verbatim into rework_instructions.
                     raise CodeWriteError(
                         f"Refusing to overwrite '{file_path}': line count dropped "
                         f"from {old_lines} to {new_lines} ({drop_pct:.0f}% reduction). "
-                        f"This usually means the agent emitted a patch fragment or "
-                        f"accidentally truncated the file. CodeWriter does whole-file "
-                        f"replacement — emitting a short version DELETES the rest. "
-                        f"If the shrink is genuinely intended (large refactor), the "
-                        f"agent must re-emit the complete new file. Threshold: "
+                        f"CodeWriter does WHOLE-FILE replacement; a short emission "
+                        f"deletes the rest. Pick ONE of these three fixes:\n"
+                        f"  (1) MERGE: re-emit the complete file with your changes "
+                        f"applied on top of the existing content. The current on-disk "
+                        f"content is shown below — copy the lines you want to keep.\n"
+                        f"  (2) SURGICAL: use `search_replace` instead of "
+                        f"`### Full Source:` for the specific edit you intended. "
+                        f"search_replace bypasses this guard since it's diff-based.\n"
+                        f"  (3) SPLIT: if you're refactoring this file into multiple "
+                        f"siblings (e.g. splitting tsconfig.json into "
+                        f"tsconfig.app.json + tsconfig.node.json), emit ALL the new "
+                        f"sibling files in the same response — the system will then "
+                        f"see the original lines have moved, not vanished.\n"
+                        f"Do NOT just re-emit the same short version a second time — "
+                        f"the guard will fire again. Threshold: "
                         f"{_MAX_LINE_DROP_PCT}% drop on files ≥{_MIN_LINES_FOR_DROP_CHECK} lines."
                     )
 
