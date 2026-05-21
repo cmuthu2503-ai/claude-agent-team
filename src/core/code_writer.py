@@ -143,8 +143,24 @@ class CodeWriter:
         agent_outputs: dict[str, str],
         repo: str | None = None,
         project_root: Path | None = None,
+        materialized_files: dict[str, str] | None = None,
     ) -> DeploymentState:
         """Full code commit pipeline: parse → write → compile → test → publish.
+
+        Now factored into two halves so the workflow runner can split them
+        across stages:
+          - ``materialize_files()`` — Steps 1-6 (parse, write, guard, lint,
+            test). Run RIGHT AFTER development stage so review/test see
+            real on-disk content rather than scaffold + agent's pending
+            text emissions.
+          - ``_commit_to_github_only()`` — Steps 7-8 (publish + state).
+            Run at the code_commit stage.
+
+        When the workflow runner has already called materialize_files
+        (the new path), it passes the result here as ``materialized_files``
+        and we skip the materialize half. Without that arg (the legacy
+        path: direct callers or workflows without a materialize stage)
+        we run the full pipeline as before — backwards compatible.
 
         Args:
             request_id: The request ID this code belongs to
@@ -163,12 +179,85 @@ class CodeWriter:
                   ``project_workspace.project_root_dir(project.name)``.
                   Legacy requests with no project still write to the
                   platform tree via ``self.root``.
+            materialized_files: Optional pre-computed result from a prior
+                  ``materialize_files()`` call. When provided, skip the
+                  materialize half — files are already on disk and
+                  validated. The new workflow runner sets this after
+                  the development stage so review/test can see real
+                  files; we then just commit to GitHub.
 
         Returns:
             DeploymentState with step = code_committed (ready for sidecar)
 
         Raises:
             CodeWriteError if any step fails
+        """
+        # New-path short-circuit: when the workflow runner already
+        # materialized the files (by calling self.materialize_files
+        # after the development stage), it passes the result here so
+        # we skip the parse/write/lint/test work and just commit.
+        if materialized_files is not None:
+            return await self._commit_to_github_only(
+                request_id=request_id,
+                description=description,
+                all_file_content=materialized_files,
+                repo=repo,
+            )
+
+        # Legacy path: do the full pipeline in one go.
+        all_file_content = await self.materialize_files(
+            request_id=request_id,
+            description=description,
+            agent_outputs=agent_outputs,
+            project_root=project_root,
+        )
+        return await self._commit_to_github_only(
+            request_id=request_id,
+            description=description,
+            all_file_content=all_file_content,
+            repo=repo,
+        )
+
+    async def materialize_files(
+        self,
+        request_id: str,
+        description: str,
+        agent_outputs: dict[str, str],
+        project_root: Path | None = None,
+    ) -> dict[str, str]:
+        """Parse agent outputs, write files to disk, run lint + tests.
+
+        This is the "pre-commit" half of the pipeline — extracted from
+        ``commit_code`` so the workflow runner can call it RIGHT AFTER
+        the development stage, BEFORE review/testing. That way the
+        reviewer's ``file_read`` sees the agent's actual emission on
+        disk rather than the scaffold's starter content.
+
+        Before this split, ``### Full Source:`` blocks only got
+        materialised at the code_commit stage (which runs after
+        review/test), so the reviewer would file_read the scaffold,
+        not the agent's work, and (incorrectly) report "phantom
+        emission" on every cycle. The fix lets the reviewer see real
+        files at review time — exactly the architecture the reviewer's
+        prompt assumes.
+
+        Steps performed (raises CodeWriteError on any failure — caller
+        routes to rework):
+          1a. Parse ``### Full Source:`` blocks from each agent's text
+              output and write them to disk via the snapshot/validate
+              guard (truncation + drop-guard + suspicious-marker checks).
+          1b. Pick up files the agent edited via ``search_replace``
+              tool calls (those are already on disk; we just read them
+              back so they're included in the returned content map).
+          2.  Reject any files under guarded prefixes the request didn't
+              explicitly authorise (config/agents/**, etc.).
+          3.  Compile Python via ``ruff check`` on the diff.
+          4.  Compile TypeScript via the real prod ``npm run build``.
+          5.  Run pytest on any test files the agent emitted.
+
+        Returns the dict {rel_path: content} of materialised files so
+        the caller (orchestrator's materialize handler) can stash it
+        in artifacts for the later commit_code call to use directly.
         """
         # Resolve the effective root for THIS commit. The instance
         # attribute (`self.root`) stays at the platform tree so any
@@ -183,12 +272,6 @@ class CodeWriter:
             raise CodeWriteError(
                 f"Could not access project root {effective_root}: {e}"
             ) from e
-
-        deployment_id = f"deploy-{uuid.uuid4().hex[:8]}"
-        dep_state = DeploymentState(
-            deployment_id=deployment_id,
-            request_id=request_id,
-        )
         # The set of guarded path prefixes that this specific request is
         # ALLOWED to touch — only those explicitly named in the description.
         # Everything else under _GUARDED_PATH_PREFIXES will be rejected.
@@ -294,8 +377,11 @@ class CodeWriter:
                     )
 
             all_files = list(all_file_content.keys())
-            dep_state.files_committed = all_files
-            self._record_step(dep_state, "files_written", "done", f"{len(all_files)} files written")
+            logger.info(
+                "code_writer_materialized",
+                request_id=request_id, file_count=len(all_files),
+                files=all_files,
+            )
 
             # Step 2: Compile Python code — only the files we just wrote (lint-my-diff).
             # Linting the whole src/ tree would surface pre-existing E/F violations
@@ -303,14 +389,9 @@ class CodeWriter:
             python_files = [f for f in all_files if f.endswith(".py")]
             if python_files:
                 await self._compile_python(python_files, cwd=effective_root)
-                self._record_step(
-                    dep_state, "python_compiled", "done",
-                    f"ruff check passed on {len(python_files)} file(s)",
-                )
-            else:
-                self._record_step(
-                    dep_state, "python_compiled", "skipped",
-                    "no Python files in this commit",
+                logger.info(
+                    "code_writer_python_compiled",
+                    request_id=request_id, file_count=len(python_files),
                 )
 
             # Step 3: Run the real prod frontend build (not just tsc --noEmit)
@@ -328,9 +409,9 @@ class CodeWriter:
                 # Raises CodeWriteError only when npm IS available AND the build
                 # actually fails (real type errors, not env gaps).
                 await self._compile_typescript(cwd=effective_root)
-                self._record_step(
-                    dep_state, "typescript_compiled", "done",
-                    "frontend prod build verified (or skipped if npm unavailable)",
+                logger.info(
+                    "code_writer_typescript_compiled",
+                    request_id=request_id,
                 )
 
             # Step 4: Run tests — only when the agent specifically wrote/changed
@@ -353,14 +434,47 @@ class CodeWriter:
             ]
             if test_files_written:
                 await self._run_tests(test_files_written, cwd=effective_root)
-                self._record_step(dep_state, "tests_passed", "done", "pytest passed")
-            else:
-                self._record_step(
-                    dep_state, "tests_passed", "skipped",
-                    "frontend-only commit — pytest not relevant",
+                logger.info(
+                    "code_writer_tests_passed",
+                    request_id=request_id, test_files=test_files_written,
                 )
 
-            # Step 5: Publish to GitHub via Trees API (atomic multi-file commit)
+            return all_file_content
+
+        except CodeWriteError:
+            raise
+        except Exception as e:
+            # Unexpected internal error inside materialize. Wrap as
+            # CodeWriteError so the caller (orchestrator's materialize
+            # handler) can route to rework with the standard
+            # commit_status=failed contract.
+            raise CodeWriteError(f"Materialize failed: {e}") from e
+
+    async def _commit_to_github_only(
+        self,
+        request_id: str,
+        description: str,
+        all_file_content: dict[str, str],
+        repo: str | None,
+    ) -> DeploymentState:
+        """Step 7-8 of the original pipeline: publish to GitHub +
+        persist DeploymentState. Assumes ``all_file_content`` was
+        already produced by ``materialize_files()`` — no parsing, no
+        re-validation, no on-disk re-write. The files are already on
+        disk and already lint/tested clean."""
+        deployment_id = f"deploy-{uuid.uuid4().hex[:8]}"
+        dep_state = DeploymentState(
+            deployment_id=deployment_id,
+            request_id=request_id,
+        )
+        try:
+            all_files = list(all_file_content.keys())
+            dep_state.files_committed = all_files
+            self._record_step(
+                dep_state, "files_written", "done", f"{len(all_files)} files written",
+            )
+
+            # Publish to GitHub via Trees API (atomic multi-file commit).
             file_list = "\n".join(f"- {f}" for f in all_files)
             commit_msg = (
                 f"feat({request_id}): {description[:80]}\n\n"
@@ -371,7 +485,7 @@ class CodeWriter:
                 commit_info = await self.github.commit_files(
                     {p: c for p, c in all_file_content.items()},
                     commit_msg,
-                    repo=repo,  # WS-09 — None means fall back to GITHUB_REPO env
+                    repo=repo,
                 )
             except GitHubPublishError as e:
                 raise CodeWriteError(f"GitHub publish failed: {e}") from e
@@ -384,7 +498,6 @@ class CodeWriter:
                 f"Published to GitHub: {commit_info['short_sha']}",
             )
 
-            # Save state — sidecar will pick this up
             await self.state.create_deployment_state(dep_state)
             logger.info(
                 "code_committed",
@@ -393,7 +506,6 @@ class CodeWriter:
                 url=commit_info["url"],
                 files=len(all_files),
             )
-
             return dep_state
 
         except CodeWriteError:

@@ -197,6 +197,7 @@ class Orchestrator(AgentExecutor):
             executor=self,
             code_commit_handler=self._handle_code_commit,
             publish_handler=self._handle_publish,
+            materialize_handler=self._handle_materialize,
         )
         self._agent_executor: Any = None  # Set by agent system in Phase 3
         # Background tasks keyed by request_id so cancel() can find and kill a
@@ -581,6 +582,142 @@ class Orchestrator(AgentExecutor):
 
     # ── Code Commit Handler ────────────────────────
 
+    async def _handle_materialize(
+        self, request_id: str, artifacts: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Materialise the agent's emitted code to disk RIGHT AFTER the
+        development stage, BEFORE review/testing.
+
+        This is the "Fix A" architecture: previously ``### Full Source:``
+        blocks only got written at the ``code_commit`` stage, which runs
+        AFTER review + testing. So the reviewer's ``file_read`` saw the
+        scaffold's starter content rather than the agent's actual
+        emission, and (correctly!) reported "phantom emission" — but the
+        cycle couldn't recover because the agent's emission was already
+        correct, just not yet on disk.
+
+        Now: we call ``code_writer.materialize_files()`` right after the
+        development stage. It writes the agent's ``### Full Source:``
+        blocks to disk, runs the same lint/test gates the old commit
+        path ran, and stashes the resulting {path: content} dict on
+        ``artifacts`` so the later ``_handle_code_commit`` can skip the
+        re-write and go straight to ``commit_to_github``.
+
+        Failures here route to rework using the SAME shape as
+        ``_handle_code_commit`` failures (``commit_status="failed"`` +
+        error string) so the runner's existing rework branch picks
+        them up — no new runner state machine.
+
+        Returns dict with:
+          - materialize_status: "success" | "failed" | "skipped"
+          - materialized_files: dict[str, str] when success (stashed
+            in artifacts by the runner so _handle_code_commit can
+            short-circuit)
+          - commit_status: mirrors materialize_status for the runner's
+            existing rework-on-code_commit-failure branch (so we don't
+            need a new runner code path)
+          - error: failure message when status=failed
+        """
+        from src.core.code_writer import CodeWriteError
+
+        # Re-use the same agent_outputs collection logic as code_commit
+        # so we materialise EXACTLY what code_commit would have written.
+        agent_outputs = await self._collect_agent_outputs(request_id)
+        if not agent_outputs:
+            logger.info(
+                "materialize_skipped_no_outputs",
+                request_id=request_id,
+                reason=(
+                    "No backend/frontend specialist outputs yet. Common for "
+                    "workflows whose first stage isn't development "
+                    "(documentation_update, research) — they reach this "
+                    "hook with no code to write."
+                ),
+            )
+            return {"materialize_status": "skipped"}
+
+        description = artifacts.get("description", request_id)[:80]
+        project_root = await self._resolve_project_root_for_request(request_id)
+        try:
+            files = await self._code_writer.materialize_files(
+                request_id=request_id,
+                description=description,
+                agent_outputs=agent_outputs,
+                project_root=project_root,
+            )
+        except CodeWriteError as e:
+            # Same shape as _handle_code_commit failure so the runner's
+            # existing rework branch handles it without modification.
+            enriched_error = _enrich_error_with_line_snippets(
+                str(e), project_root,
+            )
+            await self.events.emit("materialize.failed", {
+                "request_id": request_id, "error": str(e),
+            })
+            logger.warning(
+                "materialize_failed",
+                request_id=request_id, error=str(e),
+            )
+            return {
+                "materialize_status": "failed",
+                # Mirror as commit_status so the runner's existing
+                # rework-on-code_commit-failure branch picks this up.
+                "commit_status": "failed",
+                "error": enriched_error,
+            }
+        await self.events.emit("materialize.completed", {
+            "request_id": request_id, "files": list(files.keys()),
+        })
+        logger.info(
+            "materialize_completed",
+            request_id=request_id, file_count=len(files),
+        )
+        return {
+            "materialize_status": "success",
+            "materialized_files": files,
+        }
+
+    async def _resolve_project_root_for_request(self, request_id: str):
+        """Look up request → project → project_root_dir. Returns None
+        for platform-level Requests so callers fall back to the
+        platform tree. Shared by the materialize handler and the
+        code_commit handler — both need the same per-project routing."""
+        from src.core.project_workspace import project_root_dir
+        from src.models.base import UNASSIGNED_PROJECT_ID
+        try:
+            req = await self.state.get_request(request_id)
+            if not req or not req.project_id:
+                return None
+            if req.project_id == UNASSIGNED_PROJECT_ID:
+                return None
+            proj = await self.state.get_project(req.project_id)
+            if not proj:
+                return None
+            return project_root_dir(proj.name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "orchestrator_project_root_resolve_failed",
+                request_id=request_id, error=str(e),
+            )
+            return None
+
+    async def _collect_agent_outputs(self, request_id: str) -> dict[str, str]:
+        """Collect backend/frontend specialist outputs across all subtask
+        cycles. Same logic used by both _handle_materialize and
+        _handle_code_commit so they materialise/commit EXACTLY the same
+        agent output set."""
+        agent_outputs: dict[str, str] = {}
+        subtasks = await self.state.get_subtasks_for_request(request_id)
+        code_agents = ("backend_specialist", "frontend_specialist")
+        for idx, st in enumerate(
+            sorted(
+                (s for s in subtasks if s.agent_id in code_agents and s.output_text),
+                key=lambda s: s.started_at,
+            )
+        ):
+            agent_outputs[f"{st.agent_id}_cycle_{idx:02d}"] = st.output_text
+        return agent_outputs
+
     async def _handle_code_commit(self, request_id: str, artifacts: dict[str, Any]) -> dict[str, Any]:
         """Parse agent code outputs, write to disk, compile, test, git push."""
         from src.core.code_writer import CodeWriteError
@@ -684,10 +821,21 @@ class Orchestrator(AgentExecutor):
             if not target_repo:
                 target_repo = _os.getenv("GITHUB_REPO") or None  # CodeWriter falls back too
 
+            # If the workflow runner already called _handle_materialize
+            # (Fix A path), it stashed the materialised files dict on
+            # ``artifacts``. Pass that to commit_code so it skips the
+            # parse/write/lint/test work — those are done; we're just
+            # committing to GitHub now.
+            materialized_files: dict[str, str] | None = (
+                artifacts.get("materialized_files") if isinstance(
+                    artifacts.get("materialized_files"), dict,
+                ) else None
+            )
             dep_state = await self._code_writer.commit_code(
                 request_id, description, agent_outputs,
                 repo=target_repo,
                 project_root=project_root,
+                materialized_files=materialized_files,
             )
 
             # Persist artifact metadata on the Request so the UI can display it after page reload

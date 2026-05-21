@@ -72,10 +72,19 @@ class WorkflowRunner:
         self, executor: AgentExecutor,
         code_commit_handler: Any = None,
         publish_handler: Any = None,
+        materialize_handler: Any = None,
     ) -> None:
         self.executor = executor
         self._code_commit_handler = code_commit_handler
         self._publish_handler = publish_handler
+        # Fix A: invoked RIGHT AFTER the development stage completes
+        # (before review/testing). Writes the agent's ``### Full Source:``
+        # blocks to disk + runs lint/test so the reviewer's file_read at
+        # the review stage sees the agent's actual emission instead of
+        # the scaffold. Returns dict with materialize_status; on failure
+        # mirrors commit_status="failed" so the existing rework branch
+        # catches it without a new state machine.
+        self._materialize_handler = materialize_handler
         self._rework_count: dict[str, int] = {}
 
     async def run(
@@ -123,12 +132,49 @@ class WorkflowRunner:
                 artifacts.update(result)
                 logger.info("workflow_stage_completed", stage=stage_id, request_id=request_id)
 
+                # Fix A — materialize hook. Fires AFTER the development
+                # stage completes and BEFORE review starts, so the
+                # reviewer's file_read sees the agent's actual emission
+                # on disk (the architecture the reviewer's prompt
+                # already assumes). On rework cycles, runs again with
+                # the latest agent_outputs so any updated emissions
+                # land on disk too. Failure here (drop guard, lint,
+                # tsc) routes to rework via the SAME branch as
+                # code_commit failures by mirroring commit_status.
+                if (
+                    stage_id == "development"
+                    and self._materialize_handler is not None
+                ):
+                    mat_result = await self._materialize_handler(request_id, artifacts)
+                    if isinstance(mat_result, dict):
+                        # Stash materialized_files so _handle_code_commit
+                        # can skip the re-parse + re-write.
+                        if mat_result.get("materialize_status") == "success":
+                            artifacts["materialized_files"] = mat_result.get(
+                                "materialized_files", {}
+                            )
+                        # On materialize failure, fall through to the
+                        # existing code_commit_failed rework branch by
+                        # treating the result as if code_commit had run
+                        # and failed. The branch below already knows
+                        # how to inject rework_instructions and jump
+                        # back to development.
+                        if mat_result.get("commit_status") == "failed":
+                            result = mat_result
+                            stage_id_for_rework = "code_commit"  # reuse the branch
+                        else:
+                            stage_id_for_rework = stage_id
+                    else:
+                        stage_id_for_rework = stage_id
+                else:
+                    stage_id_for_rework = stage_id
+
                 # Code-commit gate: if the orchestrator's commit handler returned
                 # commit_status="failed", treat it like a quality-gate failure so
                 # the existing rework machinery can recover. This catches the
                 # late-stage failure modes (truncation, ruff, tsc) that would
                 # otherwise kill the request after testing had already passed.
-                if stage_id == "code_commit" and isinstance(result, dict) and result.get("commit_status") == "failed":
+                if stage_id_for_rework == "code_commit" and isinstance(result, dict) and result.get("commit_status") == "failed":
                     rework_count = self._rework_count.get(request_id, 0)
                     commit_error = str(result.get("error", "Code commit failed"))
                     if rework_count < MAX_REWORK_CYCLES:

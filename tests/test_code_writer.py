@@ -229,6 +229,88 @@ name = "app"
     assert "marker" in str(exc.value).lower() or "fragment" in str(exc.value).lower()
 
 
+async def test_materialize_files_writes_to_disk_and_returns_dict(
+    writer: CodeWriter, tmp_path: Path,
+) -> None:
+    """Fix A: materialize_files is the new public method that writes
+    agent emissions to disk BEFORE review/test. Confirms it (a) writes
+    the file, (b) returns the {path: content} dict, (c) doesn't talk
+    to GitHub or persist any DeploymentState (those belong to the
+    later commit_to_github stage)."""
+    output = """
+### `frontend/src/Brand.tsx`
+```tsx
+export const Brand = () => <div>Hi</div>
+```
+
+## Files Modified
+- frontend/src/Brand.tsx
+"""
+    files = await writer.materialize_files(
+        request_id="REQ-MAT-1",
+        description="Test materialize",
+        agent_outputs={"frontend_specialist_cycle_00": output},
+    )
+    # File landed on disk
+    assert (tmp_path / "frontend/src/Brand.tsx").exists()
+    # Dict returned with content keyed by path
+    assert "frontend/src/Brand.tsx" in files
+    assert "Brand" in files["frontend/src/Brand.tsx"]
+    # No DeploymentState was persisted (commit_to_github wasn't called)
+    # — verified by the fact that writer.state is None in the fixture
+    # and we got here without an AttributeError.
+
+
+async def test_commit_code_short_circuits_when_given_materialized_files(
+    writer: CodeWriter, tmp_path: Path, monkeypatch,
+) -> None:
+    """Fix A: when ``materialized_files`` is passed to commit_code, the
+    materialize half is skipped — no re-parsing, no re-writing, no
+    repeat lint. This is what the workflow runner does on the new
+    path: materialize once after development, commit once at the
+    code_commit stage with the same files.
+
+    Verified by checking that commit_code goes straight to GitHub
+    publish without ever touching `_parse_and_write_files`."""
+    parse_calls: list = []
+    original_parse = writer._parse_and_write_files
+    monkeypatch.setattr(
+        writer, "_parse_and_write_files",
+        lambda *a, **kw: parse_calls.append(a) or original_parse(*a, **kw),
+    )
+
+    # Stub the github publish to avoid a real network call.
+    async def _fake_commit(files, msg, repo=None, branch=None):
+        return {
+            "sha": "deadbeef" * 5, "short_sha": "deadbeef",
+            "url": "https://github.com/test/test/commit/deadbeef",
+            "parent_sha": "cafebabe",
+        }
+    monkeypatch.setattr(writer.github, "commit_files", _fake_commit)
+
+    # Stub state.create_deployment_state — we don't need DB writes.
+    class _StubState:
+        async def create_deployment_state(self, state):
+            return None
+    writer.state = _StubState()
+
+    pre_materialized = {
+        "frontend/src/App.tsx": "export default function App(){return null}\n",
+    }
+
+    dep_state = await writer.commit_code(
+        request_id="REQ-MAT-2",
+        description="Test short-circuit",
+        agent_outputs={"backend_specialist_cycle_00": "(unused — short-circuit)"},
+        materialized_files=pre_materialized,
+    )
+    # The parser was NOT called — short-circuit worked.
+    assert parse_calls == []
+    # We still got a DeploymentState back with commit details.
+    assert dep_state.commit_sha == "deadbeef"
+    assert "frontend/src/App.tsx" in dep_state.files_committed
+
+
 def test_non_exempt_config_filename_still_guarded(
     writer: CodeWriter, tmp_path: Path,
 ) -> None:
