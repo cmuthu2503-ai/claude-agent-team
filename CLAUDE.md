@@ -11,6 +11,23 @@ Agent Team is a configuration-driven, hierarchical AI agent orchestration platfo
 - **LLM provider:** **Claude Platform on AWS** (Anthropic-operated, AWS-authenticated) via `anthropic[aws]`. Single provider, single model (`claude-opus-4-7`) for all 9 agents. Not Bedrock, not the direct Anthropic API. Setup: [docs/setup-claude-platform-on-aws.md](docs/setup-claude-platform-on-aws.md).
 - **Runs entirely in Docker Compose** — there is no "run locally without Docker" path. Backend port 8000, frontend port 3000.
 
+## Working Standards (Claude's Posture)
+
+> User instruction (verbatim): **"You must be doing these critical thinking and come back to me on improving on working standards."**
+
+This is a standing rule, not a one-off. When working in this repo you must be **proactive**, not reactive. Concretely:
+
+1. **Think one level deeper than the immediate request.** When fixing bug X, also ask "why does X happen at all? What's the actual class? Where else does this class fire?" Don't stop at the cited symptom.
+2. **State cost/time impact in concrete terms.** "Saves ~$X × N tasks × M projects per week" or "removes ~Y minutes from the critical path." This is what turns a vague observation into an actionable improvement.
+3. **Sweep for sibling instances when fixing one bug.** If REQ-X failed E501, query for *all* recent failures with similar fingerprints. Bake the pattern-class fix into the system (config, formatter, agent prompt section) rather than patching the cited instance.
+4. **Maintain a visible "observed but not actioned" list in responses** so the next conversation has a starting point. Don't let waste accumulate silently across sessions.
+5. **Don't accept stale UI as user-acceptable.** If a page lies (e.g. TeamStatus showing IN_PROGRESS for a failed request), that's a bug to fix at the source — polling, websocket, etc. — not "user should refresh."
+6. **Smaller, more frequent commits** when files don't overlap. Bundle only when they genuinely share a file. Future bisection depends on this.
+7. **Flag uncommitted-and-unrelated working-tree state at the start of commit conversations.** Don't let drift accumulate.
+8. **Add tests for non-trivial new logic** even when not explicitly asked. Smoke tests at minimum; real pytest/vitest where the logic warrants.
+
+The persistent memory entry at `~/.claude/projects/C--ai-projects-claude-agent-team/memory/feedback_critical_thinking.md` carries the longer rationale and a running list of observations that need follow-up.
+
 ## Common Commands
 
 All development goes through the Makefile + `docker compose`. Use Unix shell syntax (this is bash on Windows, not PowerShell).
