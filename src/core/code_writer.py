@@ -34,6 +34,48 @@ _MAX_LINE_DROP_PCT = 50.0
 has fewer than this percent of the original line count remaining. The
 case we're catching: 353-line themes.css → 85-line patch fragment = 76% drop."""
 
+# Files that ARE expected to shrink as the agent canonicalises them.
+# These are "config seeds" — the scaffold ships a starting version, but
+# the agent has authority to refactor them into the modern shape (e.g.
+# splitting a monolithic tsconfig.json into tsconfig.app.json +
+# tsconfig.node.json with a 7-line root referencing both). The
+# atomic-write drop guard would otherwise refuse the legitimate refactor.
+#
+# Match is on the file BASENAME (so it covers both top-level and
+# subdirectory placements like `frontend/tsconfig.json`). Keep this list
+# narrow — the guard is the only defence against patch-fragment emissions
+# on real source files. Adding `*.py` or `*.tsx` here would defeat it.
+#
+# This list was added in response to REQ-F86080, where the frontend
+# scaffold's 21-line legacy tsconfig.json was being replaced by the
+# 7-line modern project-references shape and the guard kept rejecting
+# the commit until MAX_REWORK_CYCLES was exhausted.
+_DROP_GUARD_EXEMPT_BASENAMES: frozenset[str] = frozenset({
+    # TypeScript project-references pattern — root tsconfig.json shrinks
+    # to ~7 lines when the agent splits compiler options into siblings.
+    "tsconfig.json",
+    # Frontend infra config: agents often replace the scaffold's
+    # starter with a project-tailored version.
+    "vite.config.ts",
+    "vite.config.js",
+    "tailwind.config.ts",
+    "tailwind.config.js",
+    "postcss.config.js",
+    "postcss.config.cjs",
+    "eslint.config.js",
+    ".prettierrc",
+    # Dotfile configs frequently rewritten by the agent.
+    ".gitignore",
+    ".dockerignore",
+    ".env.example",
+    # Backend infra config.
+    "pyproject.toml",
+    "ruff.toml",
+})
+"""Basenames where the line-drop guard is intentionally skipped. The
+marker-based guard (PATCH SCOPE, "rest of file unchanged", etc.) still
+applies — those signal accidental fragments regardless of file type."""
+
 _SUSPICIOUS_MARKERS: tuple[str, ...] = (
     # Explicit patch-style language from the agent
     "patch scope",
@@ -525,22 +567,39 @@ class CodeWriter:
         if old_lines >= _MIN_LINES_FOR_DROP_CHECK and new_lines < old_lines:
             drop_pct = (old_lines - new_lines) / old_lines * 100
             if drop_pct >= _MAX_LINE_DROP_PCT:
-                logger.error(
-                    "code_writer_line_count_drop",
-                    file=file_path, agent=agent_id,
-                    old_lines=old_lines, new_lines=new_lines,
-                    drop_pct=round(drop_pct, 1),
-                )
-                raise CodeWriteError(
-                    f"Refusing to overwrite '{file_path}': line count dropped "
-                    f"from {old_lines} to {new_lines} ({drop_pct:.0f}% reduction). "
-                    f"This usually means the agent emitted a patch fragment or "
-                    f"accidentally truncated the file. CodeWriter does whole-file "
-                    f"replacement — emitting a short version DELETES the rest. "
-                    f"If the shrink is genuinely intended (large refactor), the "
-                    f"agent must re-emit the complete new file. Threshold: "
-                    f"{_MAX_LINE_DROP_PCT}% drop on files ≥{_MIN_LINES_FOR_DROP_CHECK} lines."
-                )
+                # ── Config-seed exempt list ──
+                # Config files where the agent has authority to refactor —
+                # e.g. splitting tsconfig.json into the project-references
+                # pattern with two siblings. The marker check above still
+                # applies to these (so an accidental "rest of file unchanged"
+                # fragment still gets caught), but a large legitimate shrink
+                # doesn't fail the commit.
+                basename = file_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                if basename in _DROP_GUARD_EXEMPT_BASENAMES:
+                    logger.info(
+                        "code_writer_line_count_drop_exempt",
+                        file=file_path, agent=agent_id,
+                        old_lines=old_lines, new_lines=new_lines,
+                        drop_pct=round(drop_pct, 1),
+                        reason="config_seed_basename",
+                    )
+                else:
+                    logger.error(
+                        "code_writer_line_count_drop",
+                        file=file_path, agent=agent_id,
+                        old_lines=old_lines, new_lines=new_lines,
+                        drop_pct=round(drop_pct, 1),
+                    )
+                    raise CodeWriteError(
+                        f"Refusing to overwrite '{file_path}': line count dropped "
+                        f"from {old_lines} to {new_lines} ({drop_pct:.0f}% reduction). "
+                        f"This usually means the agent emitted a patch fragment or "
+                        f"accidentally truncated the file. CodeWriter does whole-file "
+                        f"replacement — emitting a short version DELETES the rest. "
+                        f"If the shrink is genuinely intended (large refactor), the "
+                        f"agent must re-emit the complete new file. Threshold: "
+                        f"{_MAX_LINE_DROP_PCT}% drop on files ≥{_MIN_LINES_FOR_DROP_CHECK} lines."
+                    )
 
     async def _compile_python(self, files: list[str], cwd: Path | None = None) -> None:
         """Run ruff check on the specific Python files the agent just wrote.

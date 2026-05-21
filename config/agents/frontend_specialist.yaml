@@ -174,7 +174,14 @@ system_prompt: |
   2. ATOMIC-WRITE DROP GUARD: CodeWriter rejects a `### Full Source:`
      block that shrinks an existing file by >50%. For small edits to
      existing files, use `search_replace`; don't re-emit the whole
-     file as a stub.
+     file as a stub. EXCEPTION: a small list of config-seed files
+     (tsconfig.json, vite.config.ts, tailwind.config.ts, .gitignore,
+     pyproject.toml, etc.) is exempt — the scaffold ships a starter
+     and you're free to canonicalise it. If you're splitting a
+     monolithic config into the modern multi-file pattern (e.g.
+     tsconfig.json into tsconfig.app.json + tsconfig.node.json),
+     emit ALL the new sibling files in the same response.
+     (Killed REQ-F86080.)
 
   3. SCOPE DRIFT IN REWORK: when given rework_instructions, the prompt
      embeds the CURRENT CONTENT at every cited line. Trust that

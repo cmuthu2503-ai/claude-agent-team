@@ -121,6 +121,134 @@ def test_major_shrink_rejected(writer: CodeWriter, tmp_path: Path) -> None:
     assert "line count" in msg or "dropped" in msg
 
 
+def test_config_seed_tsconfig_can_shrink_to_project_references_pattern(
+    writer: CodeWriter, tmp_path: Path,
+) -> None:
+    """REQ-F86080 regression. The scaffold's legacy 21-line tsconfig.json
+    being replaced by the modern 7-line project-references pattern must
+    succeed — tsconfig.json is in _DROP_GUARD_EXEMPT_BASENAMES so the
+    line-drop guard doesn't fire on it even at 67% reduction.
+
+    The marker-based guard still applies (this test doesn't have any
+    suspicious markers in the new content)."""
+    target = tmp_path / "frontend/tsconfig.json"
+    target.parent.mkdir(parents=True)
+    # 21-line legacy monolithic tsconfig (scaffold default)
+    legacy = (
+        '{\n'
+        '  "compilerOptions": {\n'
+        '    "target": "ES2022",\n'
+        '    "useDefineForClassFields": true,\n'
+        '    "lib": ["ES2022", "DOM", "DOM.Iterable"],\n'
+        '    "module": "ESNext",\n'
+        '    "skipLibCheck": true,\n'
+        '    "moduleResolution": "bundler",\n'
+        '    "allowImportingTsExtensions": true,\n'
+        '    "resolveJsonModule": true,\n'
+        '    "isolatedModules": true,\n'
+        '    "moduleDetection": "force",\n'
+        '    "noEmit": true,\n'
+        '    "jsx": "react-jsx",\n'
+        '    "strict": true,\n'
+        '    "noUnusedLocals": false,\n'
+        '    "noUnusedParameters": false,\n'
+        '    "noFallthroughCasesInSwitch": true\n'
+        '  },\n'
+        '  "include": ["src", "vite.config.ts"]\n'
+        '}\n'
+    )
+    target.write_text(legacy)
+    assert legacy.count("\n") == 21
+
+    # 7-line modern project-references root config
+    modern = """
+### `frontend/tsconfig.json`
+```json
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
+}
+```
+"""
+    files = writer._parse_and_write_files(modern, "frontend_specialist")
+    assert "frontend/tsconfig.json" in files
+    # Disk reflects the new shape, not the legacy
+    new_content = target.read_text()
+    assert '"files": []' in new_content
+    assert '"references"' in new_content
+    assert "compilerOptions" not in new_content  # legacy gone
+
+
+def test_config_seed_pyproject_can_shrink(
+    writer: CodeWriter, tmp_path: Path,
+) -> None:
+    """Backend-side counterpart: pyproject.toml is in the exempt list so
+    the scaffold's verbose starter can be replaced by a leaner one
+    without triggering the guard."""
+    target = tmp_path / "pyproject.toml"
+    target.write_text("\n".join([f'# line {i}' for i in range(40)]) + "\n")  # 40 lines
+
+    new_output = """
+### `pyproject.toml`
+```toml
+[project]
+name = "app"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+```
+"""
+    files = writer._parse_and_write_files(new_output, "backend_specialist")
+    assert "pyproject.toml" in files
+    assert "[tool.ruff]" in target.read_text()
+
+
+def test_config_seed_exempt_still_catches_patch_marker(
+    writer: CodeWriter, tmp_path: Path,
+) -> None:
+    """Exempt basename does NOT bypass the marker check — an agent emitting
+    `# ... existing ...` is still a fragment, regardless of file type."""
+    target = tmp_path / "pyproject.toml"
+    target.write_text("\n".join([f'# line {i}' for i in range(40)]) + "\n")
+
+    bad_output = """
+### `pyproject.toml`
+```toml
+[project]
+name = "app"
+# ... existing code ...
+```
+"""
+    with pytest.raises(CodeWriteError) as exc:
+        writer._parse_and_write_files(bad_output, "backend_specialist")
+    assert "marker" in str(exc.value).lower() or "fragment" in str(exc.value).lower()
+
+
+def test_non_exempt_config_filename_still_guarded(
+    writer: CodeWriter, tmp_path: Path,
+) -> None:
+    """A file that LOOKS like config but isn't in the exempt list still
+    triggers the drop guard. Catches accidental exempt-list bypasses
+    (e.g. tsconfig.foo.json with a typo)."""
+    target = tmp_path / "tsconfig.weird.json"
+    target.write_text("\n".join([f"// {i}" for i in range(40)]) + "\n")  # 40 lines
+
+    truncated = """
+### `tsconfig.weird.json`
+```json
+{ "foo": "bar" }
+```
+"""
+    with pytest.raises(CodeWriteError) as exc:
+        writer._parse_and_write_files(truncated, "frontend_specialist")
+    assert "line count" in str(exc.value).lower()
+
+
 def test_small_file_can_shrink_freely(writer: CodeWriter, tmp_path: Path) -> None:
     """A file with fewer than _MIN_LINES_FOR_DROP_CHECK lines (default 20) is
     exempt from the percentage check — tiny-file percentages are too noisy."""
