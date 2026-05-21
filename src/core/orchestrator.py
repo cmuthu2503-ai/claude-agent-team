@@ -21,6 +21,87 @@ from src.workflows.runner import AgentExecutor, WorkflowRunner
 
 logger = structlog.get_logger()
 
+
+# Matches `path/to/file.py:LINE:COL` style citations inside ruff / tsc /
+# pytest error messages. Used to fish the line + col out so the rework
+# prompt can include the actual file content at that line.
+_FILE_LINE_RE = re.compile(
+    r"(?P<path>[\w./\\-]+\.(?:py|ts|tsx|js|jsx)):(?P<line>\d+)(?::(?P<col>\d+))?",
+)
+
+
+def _enrich_error_with_line_snippets(
+    error: str,
+    project_root: "Any" = None,  # Path | None — Any to avoid the import here
+) -> str:
+    """Append the current file content at each cited line to an error string.
+
+    Parses `path/to/file.py:LINE[:COL]` patterns out of `error`, reads
+    each file at `project_root / path`, and pulls a 5-line window
+    (LINE-2 .. LINE+2) for context. The augmented error has a clearly
+    delimited "CURRENT FILE CONTENT" section appended so the agent
+    receiving rework_instructions can see exactly what needs to change
+    WITHOUT calling `file_read` first.
+
+    Soft-fails per-citation: a file we can't read (missing, permission)
+    is silently skipped — the error string still goes back unchanged
+    plus whatever snippets we could collect. Same caps as everywhere
+    else in this module: bounded loop, bounded file reads, no recursion.
+    """
+    if not error or project_root is None:
+        return error
+    # Dedupe — ruff often cites the same file:line twice (E501 in selectors
+    # and in the body) and reading the file twice helps nobody.
+    seen: set[tuple[str, int]] = set()
+    snippets: list[str] = []
+    # Hard cap — a single error message that cites 50 different lines is
+    # almost certainly a different problem (e.g. mass-rename test failure);
+    # we don't want to balloon the rework prompt to 100KB.
+    MAX_CITATIONS = 8
+    for m in _FILE_LINE_RE.finditer(error):
+        if len(snippets) >= MAX_CITATIONS:
+            break
+        rel_path = m.group("path").replace("\\", "/")
+        try:
+            line_no = int(m.group("line"))
+        except ValueError:
+            continue
+        key = (rel_path, line_no)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            abs_path = (project_root / rel_path).resolve()
+            # Belt-and-suspenders: don't traverse outside the project root.
+            if not str(abs_path).startswith(str(project_root.resolve())):
+                continue
+            if not abs_path.is_file():
+                continue
+            text = abs_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        lines = text.splitlines()
+        if not lines or line_no < 1 or line_no > len(lines):
+            continue
+        start = max(0, line_no - 3)
+        end = min(len(lines), line_no + 2)
+        # Render with line numbers + a `>` marker on the cited line so the
+        # agent sees the exact text to change.
+        rendered: list[str] = []
+        for i in range(start, end):
+            marker = ">" if (i + 1) == line_no else " "
+            rendered.append(f"  {marker} {i + 1:4d}  {lines[i]}")
+        snippets.append(f"--- {rel_path}:{line_no} ---\n" + "\n".join(rendered))
+    if not snippets:
+        return error
+    return (
+        error
+        + "\n\n=== CURRENT FILE CONTENT AT EACH CITED LINE ===\n"
+        + "(`>` marks the cited line; surrounding lines shown for context)\n\n"
+        + "\n\n".join(snippets)
+    )
+
+
 # Simulated processing time per agent (seconds) when using mock executor
 MOCK_AGENT_DELAYS: dict[str, tuple[float, float]] = {
     "engineering_lead": (1.5, 3.0),
@@ -552,6 +633,13 @@ class Orchestrator(AgentExecutor):
                 "request_id": request_id, "error": str(e),
             })
             logger.error("code_commit_failed", request_id=request_id, error=str(e))
+            # Enrich the error with the CURRENT content of every cited line
+            # before we hand it back. Previously the rework prompt said
+            # "errors.py:89:89 line too long" and the agent had to call
+            # file_read just to see what was there — now the line content
+            # (with 2 lines of context) is embedded inline so the agent
+            # can fix in the very next turn without an extra round-trip.
+            enriched_error = _enrich_error_with_line_snippets(str(e), project_root)
             # Return a failure result instead of raising. The runner inspects
             # commit_status=="failed" and decides whether to rework (if budget
             # remains) or escalate. This is what makes code_commit failures
@@ -559,7 +647,7 @@ class Orchestrator(AgentExecutor):
             # truncation/ruff/tsc errors that previously killed the request.
             return {
                 "commit_status": "failed",
-                "error": str(e),
+                "error": enriched_error,
             }
 
     async def _handle_publish(self, request_id: str, artifacts: dict[str, Any]) -> dict[str, Any]:

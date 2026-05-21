@@ -1,5 +1,6 @@
 """File tools — read, write, and search-replace files with path validation."""
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,63 @@ _MIN_LINES_FOR_SURGICAL_EDIT = 0  # we'll allow surgical edits on any size
 # more than this many times in the file, we refuse the edit and tell the agent
 # to provide a longer/more specific match. Prevents accidental mass-replacement.
 _MAX_MATCHES_FOR_UNIQUE_EDIT = 1
+
+# Hard cap on the autoformatter — generous (most files reformat in <2s) but
+# short enough that a hung ruff binary can't wedge a write call.
+_RUFF_FORMAT_TIMEOUT_S = 15
+
+
+async def _maybe_ruff_format(path: Path, content: str) -> tuple[str, bool]:
+    """If `path` is a .py file and `ruff` is on PATH, pipe `content` through
+    `ruff format -` and return the reformatted text. SOFT-FAIL: any error
+    (ruff missing, parse error, timeout) returns the original content with
+    `was_formatted=False` so the write never fails because of formatting.
+
+    Why this exists: agents repeatedly emit long lines that pass their own
+    "<100 char" mental rule but fail the project's actual ruff config
+    (E501). Formatting on write means the agent doesn't have to count
+    columns — ruff wraps lines to the project's `line-length` setting
+    automatically. Knocks out a large class of rework cycles before the
+    commit gate even runs.
+
+    Returns:
+        (content, was_formatted). When was_formatted is False, content is
+        the original unchanged input.
+    """
+    if path.suffix != ".py":
+        return content, False
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ruff", "format", "-",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(path.parent),  # so ruff finds the nearest pyproject.toml
+        )
+        try:
+            stdout, _stderr = await asyncio.wait_for(
+                proc.communicate(input=content.encode("utf-8")),
+                timeout=_RUFF_FORMAT_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            logger.warning("ruff_format_timeout", path=str(path))
+            return content, False
+        if proc.returncode == 0 and stdout:
+            formatted = stdout.decode("utf-8")
+            if formatted and formatted != content:
+                return formatted, True
+        # Non-zero exit usually means the file isn't parseable as Python
+        # (e.g. agent is mid-emission and emitted broken syntax). Don't
+        # block the write — let the commit-gate's ruff CHECK surface it.
+        return content, False
+    except FileNotFoundError:
+        # ruff not installed in this environment — leave content alone.
+        return content, False
+    except Exception as e:  # noqa: BLE001 — defensive catch-all
+        logger.warning("ruff_format_failed", path=str(path), err=str(e))
+        return content, False
 
 
 class FileReadTool:
@@ -171,6 +229,12 @@ class SearchReplaceTool:
 
         new_content = content.replace(old_string, new_string, 1)
 
+        # Auto-format the resulting file with ruff (only when it's .py and
+        # ruff is available). Soft-fails to unformatted content otherwise.
+        # Same rationale as FileWriteTool — agents shouldn't have to count
+        # columns; the project's pyproject.toml line-length wins.
+        new_content, was_formatted = await _maybe_ruff_format(path, new_content)
+
         try:
             path.write_text(new_content, encoding="utf-8")
         except Exception as e:
@@ -186,7 +250,7 @@ class SearchReplaceTool:
         logger.info(
             "search_replace_applied",
             path=path_str, old_len=len(old_string), new_len=len(new_string),
-            line_delta=delta,
+            line_delta=delta, auto_formatted=was_formatted,
         )
         # The success message ALSO instructs the agent to record this edit in
         # its `## Files Modified` final-output section. CodeWriter scans for
@@ -232,9 +296,16 @@ class FileWriteTool:
         path = self._resolve_path(params["path"])
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(params["content"], encoding="utf-8")
-            logger.info("file_written", path=str(path))
-            return f"File written: {params['path']}"
+            # Auto-format Python content with `ruff format` before persisting.
+            # Soft-fails to the original content on any error — the commit
+            # gate will still surface real lint problems.
+            content, was_formatted = await _maybe_ruff_format(path, params["content"])
+            path.write_text(content, encoding="utf-8")
+            logger.info(
+                "file_written", path=str(path), auto_formatted=was_formatted,
+            )
+            note = " (auto-formatted with ruff)" if was_formatted else ""
+            return f"File written: {params['path']}{note}"
         except Exception as e:
             return f"Error writing file: {e}"
 

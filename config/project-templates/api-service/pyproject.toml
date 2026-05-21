@@ -1,0 +1,43 @@
+# Per-project Python tooling config.
+#
+# Matches the Agent Team platform's own pyproject (see the platform repo's
+# pyproject.toml) so the platform's pre-commit lint gate and per-project
+# code commits both check against IDENTICAL rules. Previously this file
+# was absent and ruff fell back to its 88-char default, which conflicted
+# with the agent prompts that say "<100 chars" — every long-but-legal
+# line failed the commit gate. Pinning line-length=100 here closes that gap.
+
+[project]
+name = "{{PROJECT_SLUG}}-backend"
+version = "0.1.0"
+description = "API service for {{PROJECT_NAME}} (scaffolded by Agent Team)."
+requires-python = ">=3.12"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+# Same selection as the Agent Team platform.
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+]
+
+[tool.ruff.format]
+# Black-compatible defaults. Agents don't need to think about formatting —
+# the file_write / search_replace tools pipe Python content through
+# `ruff format -` before persisting, so emitted code lands here already
+# wrapped to line-length and consistently quoted.
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

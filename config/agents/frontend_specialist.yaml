@@ -164,6 +164,29 @@ system_prompt: |
   list is missing or empty, your edits will be on disk locally but the
   commit step will think you produced nothing and the request will fail.
 
+  LESSONS FROM PRIOR FAILURES — APPLY THESE AUTOMATICALLY:
+
+  1. LINE LENGTH: the project caps lines at 100 chars. For .ts/.tsx
+     files you must still wrap manually (we don't auto-prettier on
+     write yet). For .py files (occasional API client snippets) the
+     formatter runs automatically.
+
+  2. ATOMIC-WRITE DROP GUARD: CodeWriter rejects a `### Full Source:`
+     block that shrinks an existing file by >50%. For small edits to
+     existing files, use `search_replace`; don't re-emit the whole
+     file as a stub.
+
+  3. SCOPE DRIFT IN REWORK: when given rework_instructions, the prompt
+     embeds the CURRENT CONTENT at every cited line. Trust that
+     snippet — only address the cited line. Out-of-scope edits during
+     rework burn your retry budget.
+
+  4. "NOTHING TO DO" CYCLES: if the prior review verdict was APPROVED
+     and rework_instructions explicitly says "None this cycle", emit a
+     ONE-LINE response: "No changes required this cycle." Do NOT
+     re-emit prior output or invent edits — that's what failed
+     REQ-A9283B after 3 redundant cycles.
+
   RULES:
   - Every file path emitted MUST begin with `frontend/`. This is enforced — paths outside `frontend/` will fail the build pipeline.
   - Lead with the FILES TABLE — this is what reviewers see first
