@@ -741,10 +741,16 @@ PROJECT_HOST_ROOT = pathlib.Path(os.getenv("HOST_PROJECT_ROOT", "C:/ai-projects"
 
 
 def get_pending_project_deploys(db: sqlite3.Connection) -> list[dict]:
-    """Return projects whose deploy_status is pending_deploy or pending_stop."""
+    """Return projects whose deploy_status is pending_deploy or pending_stop.
+
+    Also pulls ``deploy_pending_action`` (set by the AI Deploy Judge's
+    Apply/Override endpoints) and ``last_deploy_commit_sha`` so
+    ``_run_project_deploy`` can dispatch the right docker invocation
+    instead of always doing a full rebuild-all."""
     cursor = db.execute(
         "SELECT project_id, name, kind, deploy_status, "
-        "deploy_backend_port, deploy_frontend_port "
+        "deploy_backend_port, deploy_frontend_port, "
+        "deploy_pending_action, last_deploy_commit_sha "
         "FROM projects "
         "WHERE deploy_status IN ('pending_deploy', 'pending_stop')"
     )
@@ -758,10 +764,17 @@ def update_project_deploy_status(
     status: str,
     url: str | None = None,
     error: str | None = None,
+    clear_pending_action: bool = False,
 ) -> None:
     """Write status/url/error back to the projects row. Mirrors the
     backend's ``update_project_deploy`` so the UI sees the same state
-    transitions whether the change came from the backend or here."""
+    transitions whether the change came from the backend or here.
+
+    When ``clear_pending_action=True``, also nulls out
+    ``deploy_pending_action``. Callers pass True when transitioning
+    to a terminal state (running, failed, stopped) so the next
+    pending_deploy doesn't accidentally inherit the previous
+    action."""
     sets = ["deploy_status = ?"]
     params: list = [status]
     if url is not None:
@@ -771,6 +784,8 @@ def update_project_deploy_status(
         sets.append("deploy_error = ?")
         # Empty string → NULL for tidiness, matches the backend convention.
         params.append(error or None)
+    if clear_pending_action:
+        sets.append("deploy_pending_action = NULL")
     sets.append("updated_at = ?")
     params.append(datetime.utcnow().isoformat())
     params.append(project_id)
@@ -806,6 +821,44 @@ def process_project_deploy_requests(db: sqlite3.Connection) -> None:
             _run_project_stop(db, row)
 
 
+# ── AI Deploy Judge → docker compose action mapping ───────────────
+#
+# Each action the judge can recommend maps to a specific docker compose
+# invocation. Per-tier restarts skip the build step entirely (~3-5s vs.
+# 30-60s rebuild) — the judge picks them when only source files
+# changed and no dependency was bumped. The rebuild-* actions force a
+# rebuild of the specific tier without disturbing the other one.
+# Unknown / NULL actions fall back to the legacy rebuild-all path so
+# manual Deploy button clicks (pre-judge) keep working.
+
+_ACTION_REBUILD_ALL = ("up", "-d", "--build")  # legacy default
+
+_ACTION_TO_COMPOSE_ARGS: dict[str, tuple[str, ...]] = {
+    "restart-backend":  ("restart", "backend"),
+    "restart-frontend": ("restart", "frontend"),
+    "rebuild-backend":  ("up", "-d", "--build", "backend"),
+    "rebuild-frontend": ("up", "-d", "--build", "frontend"),
+    "rebuild-all":      _ACTION_REBUILD_ALL,
+}
+
+
+def _compose_args_for_action(action: str | None) -> tuple[str, ...]:
+    """Resolve a DeployAction value to the args we append to
+    ``docker compose -p <slug> -f <path>``. Defaults to rebuild-all
+    for NULL / unknown actions so legacy manual deploys (which don't
+    set deploy_pending_action) keep their previous behaviour."""
+    if not action:
+        return _ACTION_REBUILD_ALL
+    args = _ACTION_TO_COMPOSE_ARGS.get(action)
+    if args is None:
+        # Unknown action (e.g. skip / hold that should have been
+        # handled in the backend) — be safe and rebuild-all rather
+        # than skip the action entirely.
+        log(f"  ⚠  unknown deploy action {action!r}; falling back to rebuild-all")
+        return _ACTION_REBUILD_ALL
+    return args
+
+
 def _project_compose_path(name: str) -> pathlib.Path:
     """``C:/ai-projects/<Name>/docker-compose.yml`` — what we hand to
     ``docker compose -f``. The backend already validated the name when
@@ -825,49 +878,75 @@ def _project_compose_project_name(name: str) -> str:
 
 
 def _run_project_deploy(db: sqlite3.Connection, row: dict) -> None:
-    """Run ``docker compose -f <project>/docker-compose.yml up -d --build``
-    and flip status to ``running`` on healthcheck pass, ``failed`` on
-    error. Updates ``deploy_url`` to ``http://localhost:<frontend_port>``
-    when the project is a web-app or frontend-app, or to the backend
-    port for api-service (so there's always a URL to click)."""
+    """Run the docker compose action selected by the AI Deploy Judge
+    (``row['deploy_pending_action']``), or the legacy
+    ``up -d --build`` if no action is set.
+
+    Action → docker compose args mapping lives in
+    ``_compose_args_for_action`` above. Restarts skip the build step
+    (~3-5s); rebuild-<tier> rebuilds just one container; rebuild-all
+    matches the pre-judge behaviour. Skip/hold are handled in the
+    backend route and never reach here.
+
+    Terminal states (running, failed) clear ``deploy_pending_action``
+    via ``update_project_deploy_status(clear_pending_action=True)`` so
+    the next pending_deploy starts from a clean slate."""
     pid = row["project_id"]
     name = row["name"]
     kind = row["kind"]
     backend_port = row["deploy_backend_port"]
     frontend_port = row["deploy_frontend_port"]
+    action = row.get("deploy_pending_action") or "rebuild-all"
 
-    log(f"📦 deploy: {name} ({pid}) kind={kind} backend={backend_port} frontend={frontend_port}")
+    log(
+        f"📦 deploy: {name} ({pid}) kind={kind} action={action} "
+        f"backend={backend_port} frontend={frontend_port}"
+    )
 
     compose_path = _project_compose_path(name)
     if not compose_path.exists():
         msg = f"docker-compose.yml not found at {compose_path}"
         log(f"  ❌ {msg}")
-        update_project_deploy_status(db, pid, status="failed", error=msg)
+        update_project_deploy_status(
+            db, pid, status="failed", error=msg, clear_pending_action=True,
+        )
         return
 
     # Transition pending_deploy → deploying so the UI shows progress.
+    # `deploy_pending_action` stays set until we hit a terminal state.
     update_project_deploy_status(db, pid, status="deploying", error="")
 
     project_name = _project_compose_project_name(name)
+    compose_args = _compose_args_for_action(action)
     cmd = [
         "docker", "compose",
         "-p", project_name,
         "-f", str(compose_path),
-        "up", "-d", "--build",
+        *compose_args,
     ]
+    log(f"  ▶  {' '.join(cmd)}")
+    # Restart actions are quick (<10s typically) — give them a tight
+    # timeout so a stuck container doesn't tie up the supervisor for
+    # 10 minutes. Rebuilds and rebuild-all keep the original 10-min cap.
+    is_restart = compose_args[0] == "restart"
+    timeout_s = 60 if is_restart else 600
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=600,  # 10min cap on first build
+            cmd, capture_output=True, text=True, timeout=timeout_s,
         )
     except subprocess.TimeoutExpired:
-        msg = "docker compose up timed out after 10 minutes"
+        msg = f"docker compose {action} timed out after {timeout_s}s"
         log(f"  ❌ {msg}")
-        update_project_deploy_status(db, pid, status="failed", error=msg)
+        update_project_deploy_status(
+            db, pid, status="failed", error=msg, clear_pending_action=True,
+        )
         return
     except Exception as e:
         msg = f"docker compose invocation failed: {e}"
         log(f"  ❌ {msg}")
-        update_project_deploy_status(db, pid, status="failed", error=msg)
+        update_project_deploy_status(
+            db, pid, status="failed", error=msg, clear_pending_action=True,
+        )
         return
 
     if result.returncode != 0:
@@ -875,8 +954,10 @@ def _run_project_deploy(db: sqlite3.Connection, row: dict) -> None:
         # deploy_error column / UI.
         tail = (result.stderr or result.stdout or "").splitlines()[-15:]
         msg = "\n".join(tail) or f"exit code {result.returncode}"
-        log(f"  ❌ deploy failed (exit {result.returncode}):\n{msg}")
-        update_project_deploy_status(db, pid, status="failed", error=msg)
+        log(f"  ❌ {action} failed (exit {result.returncode}):\n{msg}")
+        update_project_deploy_status(
+            db, pid, status="failed", error=msg, clear_pending_action=True,
+        )
         return
 
     # Pick the launch URL: frontend port for kinds that have one,
@@ -885,8 +966,10 @@ def _run_project_deploy(db: sqlite3.Connection, row: dict) -> None:
         url = f"http://localhost:{backend_port}" if backend_port else ""
     else:
         url = f"http://localhost:{frontend_port}" if frontend_port else ""
-    log(f"  ✅ deployed — {url}")
-    update_project_deploy_status(db, pid, status="running", url=url, error="")
+    log(f"  ✅ {action} ok — {url}")
+    update_project_deploy_status(
+        db, pid, status="running", url=url, error="", clear_pending_action=True,
+    )
 
 
 def _run_project_stop(db: sqlite3.Connection, row: dict) -> None:

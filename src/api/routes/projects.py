@@ -1113,12 +1113,17 @@ async def apply_deploy_judge(
         )
 
     await state.mark_decision_applied(decision.decision_id)
+    # Advance last_deploy_commit_sha optimistically — the supervisor
+    # will leave it intact on success, and if it fails the next judge
+    # call will re-evaluate against this SHA which is correct (the
+    # FAILED deploy still attempted to ship that commit).
     await state.update_project_deploy(
         project_id,
         deploy_status=DeployStatus.PENDING_DEPLOY,
         deploy_last_started_at=datetime.utcnow(),
         deploy_error="",
         deploy_pending_action=action,
+        last_deploy_commit_sha=decision.to_commit_sha or "",
     )
     events = request.app.state.events
     await events.emit("project.deploy_requested", {
@@ -1259,12 +1264,14 @@ async def override_deploy_judge(
             },
         )
 
+    # Same baseline advance as apply-docker — see comment there.
     await state.update_project_deploy(
         project_id,
         deploy_status=DeployStatus.PENDING_DEPLOY,
         deploy_last_started_at=datetime.utcnow(),
         deploy_error="",
         deploy_pending_action=chosen_action,
+        last_deploy_commit_sha=decision.to_commit_sha or "",
     )
     events = request.app.state.events
     await events.emit("project.deploy_requested", {
