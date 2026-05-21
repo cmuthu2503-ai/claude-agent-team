@@ -332,9 +332,35 @@ class Orchestrator(AgentExecutor):
             if reused_artifacts:
                 initial_artifacts.update(reused_artifacts)
 
+            # ── Retire per-task DevOps stage for project work ──
+            # When a Request belongs to a Project, the AI Deploy Judge
+            # owns the deploy decision (see src/core/project_deploy_judge.py
+            # + Phase 4/5 endpoints). Running the workflow's `deployment`
+            # stage would burn ~10 min of devops_specialist polling for a
+            # supervisor row that was marked `skipped` the instant it
+            # was written. Skip it.
+            #
+            # Platform-level Requests (project_id is null OR proj-unassigned)
+            # still go through the existing devops_specialist → supervisor
+            # judge flow — that's the original feature_development path
+            # and we preserve it.
+            effective_skip = list(skip_stages or [])
+            from src.models.base import UNASSIGNED_PROJECT_ID
+            if request.project_id and request.project_id != UNASSIGNED_PROJECT_ID:
+                effective_skip.append("deployment")
+                logger.info(
+                    "workflow_skip_deployment_for_project",
+                    request_id=request_id, project_id=request.project_id,
+                    reason=(
+                        "AI Deploy Judge owns per-project deploys; the "
+                        "workflow's deployment stage is vestigial for "
+                        "project-driven Requests."
+                    ),
+                )
+
             result = await self.runner.run(
                 workflow, request_id, initial_artifacts,
-                skip_stages=skip_stages or []
+                skip_stages=effective_skip,
             )
 
             # Check if pipeline was escalated (max rework cycles exceeded)
