@@ -340,6 +340,15 @@ class Project(BaseModel):
     deploy_url: str = ""  # e.g. http://localhost:3100 when running
     deploy_last_started_at: datetime | None = None
     deploy_error: str | None = None  # last deploy attempt's error, if any
+    # AI Deploy Judge baseline + per-project preferences. last_deploy_commit_sha
+    # is the commit the running container was built from — drift is measured
+    # by comparing it to the project's latest code_commit (the supervisor
+    # advances it on successful deploys). deploy_judge_preferences is free-text
+    # the user can edit to teach the judge ("treat any change in src/state/ as
+    # rebuild-backend", "skip is fine for docs/", etc.) — fed into the
+    # judge prompt as extra context. Empty by default.
+    last_deploy_commit_sha: str | None = None
+    deploy_judge_preferences: str = ""
     # Audit
     created_by: str | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -422,6 +431,82 @@ class ProjectTask(BaseModel):
     # when the list was produced by the agent using the user's review
     # comments against the prior task list.
     review_input: str | None = None
+
+
+# ── AI Deploy Judge (per-project) ────────────────
+# One row per judge decision or user override. The latest non-applied
+# row for a project is the "current recommendation" the UI shows.
+# See docs/agent-pitfalls.md and CLAUDE.md "Working Standards" — the
+# previous architecture had per-task DevOps polling that wasted 10 min
+# per task; this replaces that loop with a single AI judge call per
+# coalesced change set + a smart-route to the cheapest docker action.
+
+
+class DeployAction(StrEnum):
+    """The six actions the judge can recommend.
+
+    Mapping to docker:
+      skip               -> nothing; just advance last_deploy_commit_sha
+      restart-backend    -> `docker compose restart backend`
+      restart-frontend   -> `docker compose restart frontend`
+      rebuild-backend    -> `docker compose up -d --build backend`
+      rebuild-frontend   -> `docker compose up -d --build frontend`
+      rebuild-all        -> `docker compose up -d --build` (the existing path)
+      hold               -> nothing; row stays pending for manual override
+    """
+
+    SKIP = "skip"
+    RESTART_BACKEND = "restart-backend"
+    RESTART_FRONTEND = "restart-frontend"
+    REBUILD_BACKEND = "rebuild-backend"
+    REBUILD_FRONTEND = "rebuild-frontend"
+    REBUILD_ALL = "rebuild-all"
+    HOLD = "hold"
+
+
+class DeployRiskLevel(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class DeployDecisionStatus(StrEnum):
+    """Lifecycle of a single judge recommendation:
+
+      pending    — judge proposed it; user hasn't acted yet
+      applied    — Apply (or auto-apply for low-risk) was clicked / fired
+      overridden — user clicked a different action than recommended
+      superseded — a newer commit invalidated this decision before action
+    """
+
+    PENDING = "pending"
+    APPLIED = "applied"
+    OVERRIDDEN = "overridden"
+    SUPERSEDED = "superseded"
+
+
+class DeployDecision(BaseModel):
+    decision_id: str
+    project_id: str
+    # Snapshot of the drift the judge looked at — list of
+    # {commit_sha, files, added, removed}. Persisted as JSON in the
+    # column; surfaced to the UI verbatim so the panel can render
+    # "X commits since last deploy" without a fresh query.
+    drift_summary: list[dict[str, Any]] = Field(default_factory=list)
+    from_commit_sha: str | None = None
+    to_commit_sha: str | None = None
+    action: DeployAction
+    risk: DeployRiskLevel
+    confidence: DeployRiskLevel  # reusing low/medium/high
+    reasoning: str = ""
+    # 1 if judge LLM actually returned; 0 if we fell back to a safe
+    # default (no creds, API error, malformed JSON, etc.)
+    from_llm: bool = True
+    status: DeployDecisionStatus = DeployDecisionStatus.PENDING
+    # If overridden, the action the user actually chose. None otherwise.
+    overridden_action: DeployAction | None = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    applied_at: datetime | None = None
 
 
 # ── Project-driven Build: chat with project_orchestrator (PDB-33) ────

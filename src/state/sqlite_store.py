@@ -13,6 +13,7 @@ from src.models.base import (
     ArtifactKind,
     ArtifactStatus,
     BuildMessage,
+    DeployDecision,
     DeploymentState,
     Document,
     Artifact,
@@ -388,6 +389,47 @@ CREATE INDEX IF NOT EXISTS idx_documents_request ON documents(request_id);
 CREATE INDEX IF NOT EXISTS idx_projects_status_name ON projects(status, name);
 CREATE INDEX IF NOT EXISTS idx_projects_lead ON projects(lead_user_id);
 CREATE INDEX IF NOT EXISTS idx_requests_project ON requests(project_id);
+
+-- AI Deploy Judge (per-project) — audit trail + override learning.
+-- One row per judge decision OR user override. The latest non-applied
+-- row for a project is the "current recommendation" the UI shows.
+CREATE TABLE IF NOT EXISTS deploy_decisions (
+    decision_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    -- Snapshot of the drift the judge looked at — JSON array of
+    -- {commit_sha, files, added, removed}. Lets the UI render the
+    -- "X commits since last deploy" panel without re-querying.
+    drift_summary TEXT NOT NULL DEFAULT '[]',
+    -- Range of commits the decision covers (so we can detect "still
+    -- current?" by comparing to projects.last_deploy_commit_sha).
+    from_commit_sha TEXT,
+    to_commit_sha TEXT,
+    -- Judge output:
+    --   action: skip | restart-backend | restart-frontend |
+    --           rebuild-backend | rebuild-frontend | rebuild-all | hold
+    --   risk:    low | medium | high
+    --   confidence: low | medium | high
+    --   reasoning: free-text explanation (1-3 sentences)
+    --   from_llm: 1 if judge LLM actually ran; 0 if fallback default
+    action TEXT NOT NULL,
+    risk TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    reasoning TEXT NOT NULL DEFAULT '',
+    from_llm INTEGER NOT NULL DEFAULT 1,
+    -- Lifecycle:
+    --   pending  → judge has proposed, user hasn't acted
+    --   applied  → user clicked Apply (or recommendation was auto-applied)
+    --   overridden → user clicked a different button than recommended
+    --   superseded → newer commit landed before this was acted on
+    status TEXT NOT NULL DEFAULT 'pending',
+    -- If overridden, the action the user actually chose. NULL otherwise.
+    overridden_action TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    applied_at TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES projects(project_id)
+);
+CREATE INDEX IF NOT EXISTS idx_deploy_decisions_project_status
+  ON deploy_decisions(project_id, status, created_at);
 """
 
 
@@ -495,6 +537,41 @@ class SQLiteStateStore(StateStore):
             "  ON projects(deploy_backend_port) WHERE deploy_backend_port IS NOT NULL",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_deploy_frontend_port "
             "  ON projects(deploy_frontend_port) WHERE deploy_frontend_port IS NOT NULL",
+            # AI Deploy Judge (per-project) — Phase 1 of the smart-route
+            # feature. last_deploy_commit_sha is the "baseline" the judge
+            # measures drift from; deploy_judge_preferences is free-text
+            # that the user can edit to teach the judge their project's
+            # quirks ("tests are slow, prefer restart over rebuild" etc.)
+            # which we feed into the prompt as additional context.
+            "ALTER TABLE projects ADD COLUMN last_deploy_commit_sha TEXT",
+            "ALTER TABLE projects ADD COLUMN deploy_judge_preferences TEXT "
+            "  NOT NULL DEFAULT ''",
+            # The deploy_decisions table itself — added here so an
+            # existing DB without it gets the table on next boot. (The
+            # SCHEMA_SQL block above also has it, but executescript
+            # only runs CREATE TABLE IF NOT EXISTS, so this is a no-op
+            # on a fresh DB and a creation on an old one.)
+            (
+                "CREATE TABLE IF NOT EXISTS deploy_decisions ("
+                "  decision_id TEXT PRIMARY KEY,"
+                "  project_id TEXT NOT NULL,"
+                "  drift_summary TEXT NOT NULL DEFAULT '[]',"
+                "  from_commit_sha TEXT,"
+                "  to_commit_sha TEXT,"
+                "  action TEXT NOT NULL,"
+                "  risk TEXT NOT NULL,"
+                "  confidence TEXT NOT NULL,"
+                "  reasoning TEXT NOT NULL DEFAULT '',"
+                "  from_llm INTEGER NOT NULL DEFAULT 1,"
+                "  status TEXT NOT NULL DEFAULT 'pending',"
+                "  overridden_action TEXT,"
+                "  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                "  applied_at TIMESTAMP,"
+                "  FOREIGN KEY (project_id) REFERENCES projects(project_id)"
+                ")"
+            ),
+            "CREATE INDEX IF NOT EXISTS idx_deploy_decisions_project_status "
+            "  ON deploy_decisions(project_id, status, created_at)",
         ]
         for stmt in migrations:
             try:
@@ -1728,6 +1805,11 @@ class SQLiteStateStore(StateStore):
                 datetime.fromisoformat(deploy_started) if deploy_started else None
             ),
             deploy_error=_opt("deploy_error"),
+            # AI Deploy Judge baseline + preferences. Both defensively
+            # use _opt so reads against an old DB (pre-migration) still
+            # produce a Project rather than KeyError-ing.
+            last_deploy_commit_sha=_opt("last_deploy_commit_sha"),
+            deploy_judge_preferences=_opt("deploy_judge_preferences", "") or "",
         )
 
     async def update_project_deploy(
@@ -1738,6 +1820,7 @@ class SQLiteStateStore(StateStore):
         deploy_url: str | None = None,
         deploy_last_started_at: datetime | None = None,
         deploy_error: str | None = None,
+        last_deploy_commit_sha: str | None = None,
     ) -> None:
         """Targeted update for deploy-lifecycle fields only. Used by
         the Deploy / Stop endpoints to flip status between the
@@ -1747,7 +1830,11 @@ class SQLiteStateStore(StateStore):
 
         Pass ``None`` for any field to leave it unchanged. To explicitly
         clear ``deploy_error`` pass an empty string (the DB-side check
-        treats ``""`` as "set to NULL" — keeps the column tidy)."""
+        treats ``""`` as "set to NULL" — keeps the column tidy).
+
+        ``last_deploy_commit_sha`` is advanced by the supervisor on a
+        successful deploy (or by ``skip``-action decisions) so the AI
+        Deploy Judge measures drift from the right baseline."""
         sets = []
         params: list = []
         if deploy_status is not None:
@@ -1762,6 +1849,9 @@ class SQLiteStateStore(StateStore):
         if deploy_error is not None:
             sets.append("deploy_error = ?")
             params.append(deploy_error or None)  # "" → NULL for tidiness
+        if last_deploy_commit_sha is not None:
+            sets.append("last_deploy_commit_sha = ?")
+            params.append(last_deploy_commit_sha or None)
         if not sets:
             return
         sets.append("updated_at = ?")
@@ -1773,6 +1863,149 @@ class SQLiteStateStore(StateStore):
             tuple(params),
         )
         await db.commit()
+
+    async def update_project_deploy_preferences(
+        self,
+        project_id: str,
+        preferences: str,
+    ) -> None:
+        """Persist the user's free-text Deploy Judge preferences. Fed into
+        the judge's prompt as additional context so it learns the user's
+        idiosyncratic conventions ('treat src/state/ as rebuild-backend
+        always')."""
+        db = await self._get_db()
+        await db.execute(
+            "UPDATE projects SET deploy_judge_preferences = ?, updated_at = ? "
+            "WHERE project_id = ?",
+            (preferences or "", datetime.utcnow().isoformat(), project_id),
+        )
+        await db.commit()
+
+    # ── AI Deploy Judge (per-project) ────────────
+
+    async def create_deploy_decision(self, decision: DeployDecision) -> str:
+        """Insert a fresh judge recommendation. Caller should call
+        supersede_pending_decisions(project_id) first to mark any older
+        PENDING rows as SUPERSEDED — that keeps the UI's "current
+        recommendation" query (`get_latest_pending_decision`) returning
+        at most one row."""
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO deploy_decisions
+               (decision_id, project_id, drift_summary, from_commit_sha,
+                to_commit_sha, action, risk, confidence, reasoning,
+                from_llm, status, overridden_action, created_at,
+                applied_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                decision.decision_id,
+                decision.project_id,
+                json.dumps(decision.drift_summary),
+                decision.from_commit_sha,
+                decision.to_commit_sha,
+                str(decision.action),
+                str(decision.risk),
+                str(decision.confidence),
+                decision.reasoning,
+                1 if decision.from_llm else 0,
+                str(decision.status),
+                (
+                    str(decision.overridden_action)
+                    if decision.overridden_action is not None
+                    else None
+                ),
+                decision.created_at.isoformat(),
+                (
+                    decision.applied_at.isoformat()
+                    if decision.applied_at is not None
+                    else None
+                ),
+            ),
+        )
+        await db.commit()
+        return decision.decision_id
+
+    async def get_latest_pending_decision(
+        self, project_id: str,
+    ) -> DeployDecision | None:
+        db = await self._get_db()
+        async with db.execute(
+            """SELECT * FROM deploy_decisions
+               WHERE project_id = ? AND status = 'pending'
+               ORDER BY created_at DESC LIMIT 1""",
+            (project_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return self._row_to_deploy_decision(row) if row else None
+
+    async def supersede_pending_decisions(self, project_id: str) -> int:
+        """Mark all PENDING rows for this project SUPERSEDED so the
+        next get_latest_pending_decision returns the fresh one."""
+        db = await self._get_db()
+        cursor = await db.execute(
+            "UPDATE deploy_decisions SET status = 'superseded' "
+            "WHERE project_id = ? AND status = 'pending'",
+            (project_id,),
+        )
+        await db.commit()
+        return cursor.rowcount or 0
+
+    async def mark_decision_applied(self, decision_id: str) -> None:
+        db = await self._get_db()
+        await db.execute(
+            "UPDATE deploy_decisions SET status = 'applied', applied_at = ? "
+            "WHERE decision_id = ? AND status = 'pending'",
+            (datetime.utcnow().isoformat(), decision_id),
+        )
+        await db.commit()
+
+    async def mark_decision_overridden(
+        self,
+        decision_id: str,
+        overridden_action: str,
+    ) -> None:
+        db = await self._get_db()
+        await db.execute(
+            "UPDATE deploy_decisions SET status = 'overridden', "
+            "overridden_action = ?, applied_at = ? "
+            "WHERE decision_id = ? AND status = 'pending'",
+            (overridden_action, datetime.utcnow().isoformat(), decision_id),
+        )
+        await db.commit()
+
+    async def list_recent_overrides(
+        self, project_id: str, limit: int = 5,
+    ) -> list[DeployDecision]:
+        db = await self._get_db()
+        async with db.execute(
+            """SELECT * FROM deploy_decisions
+               WHERE project_id = ? AND status = 'overridden'
+               ORDER BY created_at DESC LIMIT ?""",
+            (project_id, limit),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_deploy_decision(r) for r in rows]
+
+    def _row_to_deploy_decision(self, row: aiosqlite.Row) -> DeployDecision:
+        return DeployDecision(
+            decision_id=row["decision_id"],
+            project_id=row["project_id"],
+            drift_summary=json.loads(row["drift_summary"] or "[]"),
+            from_commit_sha=row["from_commit_sha"],
+            to_commit_sha=row["to_commit_sha"],
+            action=row["action"],
+            risk=row["risk"],
+            confidence=row["confidence"],
+            reasoning=row["reasoning"] or "",
+            from_llm=bool(row["from_llm"]),
+            status=row["status"],
+            overridden_action=row["overridden_action"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            applied_at=(
+                datetime.fromisoformat(row["applied_at"])
+                if row["applied_at"] else None
+            ),
+        )
 
     # ── Project Artifacts (PDB-04) ───────────────
 

@@ -10,6 +10,7 @@ from src.models.base import (
     ArtifactKind,
     ArtifactStatus,
     BuildMessage,
+    DeployDecision,
     Deployment,
     Document,
     Metric,
@@ -271,10 +272,84 @@ class StateStore(ABC):
         deploy_url: str | None = None,
         deploy_last_started_at: datetime | None = None,
         deploy_error: str | None = None,
+        last_deploy_commit_sha: str | None = None,
     ) -> None:
         """Targeted update for the deploy-lifecycle fields only.
         Used by the Deploy / Stop endpoints; pass ``None`` to leave a
-        field unchanged."""
+        field unchanged.
+
+        ``last_deploy_commit_sha`` is advanced by the supervisor on a
+        successful deploy (or by ``skip``-action decisions) so the AI
+        Deploy Judge knows what to measure drift against."""
+        ...
+
+    @abstractmethod
+    async def update_project_deploy_preferences(
+        self,
+        project_id: str,
+        preferences: str,
+    ) -> None:
+        """Save the free-text preferences string the user can edit on
+        the project's Deploy panel ("treat any src/state/ change as
+        rebuild-backend", etc.). Fed into the judge prompt as
+        additional context on every decision."""
+        ...
+
+    # ── AI Deploy Judge (per-project) ────────────
+    # Decisions are the audit + cache layer for the judge:
+    #   - latest pending row for a project == "the current recommendation"
+    #   - applied / overridden rows are history (and inform override learning)
+    #   - superseded rows are the "newer commit landed before action" path
+
+    @abstractmethod
+    async def create_deploy_decision(self, decision: DeployDecision) -> str:
+        """Insert a new judge recommendation row. Returns decision_id.
+        Caller should mark prior PENDING rows for this project as
+        SUPERSEDED before calling (see supersede_pending_decisions)."""
+        ...
+
+    @abstractmethod
+    async def get_latest_pending_decision(
+        self, project_id: str,
+    ) -> DeployDecision | None:
+        """The "current recommendation" the UI panel renders. NULL if
+        no drift / no decision pending."""
+        ...
+
+    @abstractmethod
+    async def supersede_pending_decisions(self, project_id: str) -> int:
+        """Mark all PENDING decisions for this project as SUPERSEDED.
+        Called before inserting a fresh decision so the panel always
+        shows exactly one (or zero) pending recommendation. Returns
+        count of rows updated."""
+        ...
+
+    @abstractmethod
+    async def mark_decision_applied(
+        self, decision_id: str,
+    ) -> None:
+        """Transition pending → applied. Called by the Apply endpoint
+        AFTER it has queued the supervisor action."""
+        ...
+
+    @abstractmethod
+    async def mark_decision_overridden(
+        self,
+        decision_id: str,
+        overridden_action: str,
+    ) -> None:
+        """Transition pending → overridden. Records the user's actual
+        choice so override learning has training signal."""
+        ...
+
+    @abstractmethod
+    async def list_recent_overrides(
+        self, project_id: str, limit: int = 5,
+    ) -> list[DeployDecision]:
+        """Used by Phase 8 (override learning) — surfaces the last
+        N (recommended_action, overridden_action) pairs into the next
+        judge prompt so the LLM learns this user's quirks. Ordered
+        newest-first."""
         ...
 
     # ── Project Artifacts (PDB-03) ───────────────
