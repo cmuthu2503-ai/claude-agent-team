@@ -334,6 +334,14 @@ class StateStore(ABC):
         is allowed)."""
         ...
 
+    @abstractmethod
+    async def delete_artifact_by_id(self, artifact_id: str) -> bool:
+        """Hard-delete a single artifact row by id. Returns True if a
+        row was removed. Used by the generate routes to roll back an
+        empty draft they created up front when the agent call then
+        fails or returns empty content."""
+        ...
+
     # ── Project Tasks (PDB-15) ───────────────────
     # Structured rows for a project's task list. A project has at most one
     # `list_status='finalized'` version at a time; older versions flip to

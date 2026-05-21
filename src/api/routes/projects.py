@@ -619,19 +619,22 @@ async def delete_project(
       1. every Request the project owns (and all their subtasks /
          stories / documents / cost rows via :meth:`StateStore.delete_request`),
       2. the project's working tree on disk
-         (``C:/ai-projects/<ProjectName>/``), and
-      3. the project's GitHub repo (if ``project.repo_url`` is set and the
-         token has the ``delete_repo`` scope).
+         (``C:/ai-projects/<ProjectName>/``).
+
+    GitHub repo cleanup is INTENTIONALLY out of scope — the user
+    manages that side by side via the GitHub UI. Earlier versions of
+    this route did attempt repo deletion but it hit GitHub permission
+    issues that varied per token/account, so the policy is now: leave
+    the repo alone, log the URL, surface it in the response so the user
+    can click through.
 
     Without ``cascade=true`` the historical guard applies: the call is
     refused with 409 if the project has any requests, forcing the caller
     to reassign or delete them first.
 
-    Filesystem and GitHub cleanup are SOFT-FAILURE: if either step can't
-    complete (mount missing, token lacks ``delete_repo``, repo already
-    deleted, etc.), the DB delete still succeeds and the failure is
-    surfaced in the response body so the UI can show a hint. The
-    operator can then clean up by hand.
+    Filesystem cleanup is SOFT-FAILURE: if the mount is missing or rmtree
+    raises, the DB delete still succeeds and the error surfaces in the
+    response body so the UI can hint at it.
 
     Response (200) body shape::
 
@@ -639,7 +642,7 @@ async def delete_project(
           "project_id": "...",
           "deleted_requests": 5,
           "filesystem": {"ok": true,  "path": "/host/ai-projects/Foo", "bytes": 42},
-          "github":     {"ok": true,  "status": 204, "code": "deleted"},
+          "repo_url":   "https://github.com/.../...",  // null if unset
         }
     """
     state = request.app.state.state_store
@@ -694,38 +697,6 @@ async def delete_project(
     # ── 3. Remove the working tree on disk (soft-fail) ────────────────
     fs_result = delete_project_root(project.name).as_dict()
 
-    # ── 4. Remove the GitHub repo (soft-fail) ─────────────────────────
-    gh_result: dict[str, Any] = {
-        "ok": True, "status": None, "code": "skipped",
-        "error": None, "owner": None, "repo": None,
-    }
-    if project.repo_url:
-        parsed = extract_owner_repo(project.repo_url)
-        if not parsed:
-            gh_result = {
-                "ok": False, "status": None, "code": "invalid_repo_url",
-                "error": f"could not parse owner/repo from {project.repo_url!r}",
-                "owner": None, "repo": None,
-            }
-        else:
-            owner, repo = parsed
-            try:
-                publisher = GitHubPublisher()
-                raw = await publisher.delete_repo(owner, repo)
-                gh_result = {**raw, "owner": owner, "repo": repo}
-            except Exception as e:
-                # delete_repo() is documented to not raise, but we double-
-                # belt-and-suspender just in case so the route always returns.
-                logger.exception(
-                    "delete_project: github delete raised unexpectedly",
-                    project_id=project_id, repo_url=project.repo_url,
-                )
-                gh_result = {
-                    "ok": False, "status": None, "code": "http_error",
-                    "error": f"{type(e).__name__}: {e}",
-                    "owner": owner, "repo": repo,
-                }
-
     logger.info(
         "project_deleted",
         project_id=project_id,
@@ -733,7 +704,7 @@ async def delete_project(
         cascade=cascade,
         deleted_requests=deleted_requests,
         fs_ok=fs_result.get("ok"),
-        github_code=gh_result.get("code"),
+        repo_url=project.repo_url or None,
     )
     return {
         "data": {
@@ -741,7 +712,7 @@ async def delete_project(
             "name": project.name,
             "deleted_requests": deleted_requests,
             "filesystem": fs_result,
-            "github": gh_result,
+            "repo_url": project.repo_url or None,
         },
         "meta": None,
         "error": None,
@@ -1303,12 +1274,30 @@ async def generate_prd(
             max_tokens=32_000,
         )
     except Exception as e:
-        # Generation failed — the empty draft row remains, with the failure
-        # surfaced to the user. They can hit Regenerate to retry.
+        # Generation failed. Roll back the empty draft we created above —
+        # otherwise the orphaned empty row becomes the new "latest" PRD
+        # and the editor opens blank on every subsequent page load.
+        # Falls back to the previous version (or none) as the latest.
+        logger.exception(
+            "prd_generate_failed",
+            project_id=project_id,
+            artifact_id=new_art.artifact_id,
+            err=str(e),
+        )
+        await state.delete_artifact_by_id(new_art.artifact_id)
         raise HTTPException(status_code=502, detail=f"PRD generation failed: {e}")
 
     text = (result.get("text") or "").strip()
     if not text:
+        # Same cleanup as the exception path — agent returned nothing
+        # usable, so the empty draft would become the new "latest" PRD
+        # and the editor would open blank.
+        logger.warning(
+            "prd_generate_empty",
+            project_id=project_id,
+            artifact_id=new_art.artifact_id,
+        )
+        await state.delete_artifact_by_id(new_art.artifact_id)
         raise HTTPException(status_code=502, detail="Agent returned an empty PRD.")
 
     await state.update_artifact_content(new_art.artifact_id, text)
@@ -1714,10 +1703,26 @@ async def generate_api_spec(
             max_tokens=32_000,
         )
     except Exception as e:
+        # Roll back the empty draft (see /prd/generate for the same
+        # pattern + rationale) so the editor doesn't open blank on the
+        # next page load.
+        logger.exception(
+            "api_spec_generate_failed",
+            project_id=project_id,
+            artifact_id=new_art.artifact_id,
+            err=str(e),
+        )
+        await state.delete_artifact_by_id(new_art.artifact_id)
         raise HTTPException(status_code=502, detail=f"API spec generation failed: {e}")
 
     text = (result.get("text") or "").strip()
     if not text:
+        logger.warning(
+            "api_spec_generate_empty",
+            project_id=project_id,
+            artifact_id=new_art.artifact_id,
+        )
+        await state.delete_artifact_by_id(new_art.artifact_id)
         raise HTTPException(status_code=502, detail="Agent returned an empty API spec.")
     if len(text) > _API_SPEC_MAX:
         text = text[:_API_SPEC_MAX]

@@ -200,14 +200,16 @@ export function ProjectsPage() {
               busy={busyId === p.project_id}
               onDelete={async () => {
                 const reqCount = p.stats?.total ?? 0
-                // Cascade-delete: wipes requests + local FS + GitHub repo.
-                // We always pass cascade=true from the UI now — the server
-                // still supports cascade=false for scripted callers.
+                // Cascade-delete: wipes the project row, all child
+                // requests (with their subtasks/stories/documents/cost
+                // rows), and the local working tree. GitHub repo is
+                // intentionally OUT of scope — delete it manually from
+                // the GitHub UI.
                 const reqLine = reqCount > 0
                   ? `  • ${reqCount} request${reqCount === 1 ? "" : "s"} (and all subtasks, stories, documents, cost rows)\n`
                   : ""
-                const repoLine = p.repo_url
-                  ? `  • GitHub repo at ${p.repo_url}\n     (needs delete_repo scope on GITHUB_TOKEN — soft-fails otherwise)\n`
+                const repoReminder = p.repo_url
+                  ? `\nReminder: the GitHub repo at\n  ${p.repo_url}\nis NOT deleted by this action — remove it manually from GitHub if you want it gone.\n`
                   : ""
                 const message =
                   `Permanently delete "${p.name}" (${p.project_id})?\n\n` +
@@ -215,7 +217,7 @@ export function ProjectsPage() {
                   `  • The project row from the database\n` +
                   reqLine +
                   `  • The local working tree at C:/ai-projects/${p.name}/\n` +
-                  repoLine +
+                  repoReminder +
                   `\nCannot be undone.`
                 if (!window.confirm(message)) return
                 setBusyId(p.project_id)
@@ -224,21 +226,15 @@ export function ProjectsPage() {
                   invalidateProjectsCache()
                   await load()
 
-                  // Surface a non-blocking summary if anything soft-failed
-                  // so the admin knows to clean up by hand.
+                  // Surface a non-blocking summary if the local FS
+                  // cleanup soft-failed (mount missing, permission denied,
+                  // etc.) so the admin knows to clean up by hand.
                   const data = res?.data
-                  const warnings: string[] = []
                   if (data?.filesystem && !data.filesystem.ok) {
-                    warnings.push(`Local FS: ${data.filesystem.error || "failed"}`)
-                  }
-                  if (data?.github && data.github.code !== "skipped" && !data.github.ok) {
-                    warnings.push(`GitHub: ${data.github.error || "failed"} (code: ${data.github.code})`)
-                  }
-                  if (warnings.length > 0) {
                     alert(
-                      `Project "${p.name}" deleted, but with warnings:\n\n` +
-                      warnings.map((w) => "  • " + w).join("\n") +
-                      "\n\nYou may need to clean these up manually.",
+                      `Project "${p.name}" deleted, but local FS cleanup failed:\n\n` +
+                      `  • ${data.filesystem.error || "unknown error"}\n\n` +
+                      `You may need to remove C:/ai-projects/${p.name}/ manually.`,
                     )
                   }
                 } catch (e: any) {

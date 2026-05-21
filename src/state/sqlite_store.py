@@ -1918,6 +1918,21 @@ class SQLiteStateStore(StateStore):
         await db.commit()
         return deleted
 
+    async def delete_artifact_by_id(self, artifact_id: str) -> bool:
+        """Hard-delete a single artifact row by id. Returns True if a row
+        was removed. Used by the generate-PRD / generate-API-spec routes
+        to clean up the empty draft they create up front when the agent
+        call then fails or returns empty — otherwise the orphaned empty
+        draft becomes the latest version and the UI shows a blank editor
+        next time the user opens the project."""
+        db = await self._get_db()
+        cursor = await db.execute(
+            "DELETE FROM project_artifacts WHERE artifact_id = ?",
+            (artifact_id,),
+        )
+        await db.commit()
+        return (cursor.rowcount or 0) > 0
+
     def _row_to_artifact(self, row: aiosqlite.Row) -> ProjectArtifact:
         # `updated_at` + `review_input` may be missing on rows from before
         # the migration that added them — defend with try/except.
