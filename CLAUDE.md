@@ -28,6 +28,48 @@ This is a standing rule, not a one-off. When working in this repo you must be **
 
 The persistent memory entry at `~/.claude/projects/C--ai-projects-claude-agent-team/memory/feedback_critical_thinking.md` carries the longer rationale and a running list of observations that need follow-up.
 
+## Self-Learning Loop for Production Agents
+
+> User instruction: *"Please record all the learnings and ensure the respective AI agents don't make same mistakes again. It must be always a self-learning loop for agents to perform better every time."*
+
+The platform's code-writing agents (`backend_specialist`,
+`frontend_specialist`, `code_reviewer`, `tester_specialist`,
+`devops_specialist`) load **`docs/agent-lessons-learned.md`** into their
+system prompt at every invocation. That doc is the canonical record of
+production failure patterns — observed in real Requests — and the fix
+for each. New lessons appended to the doc are picked up on the **next
+agent invocation** without a container restart or code change.
+
+**Loading mechanism:** `src/agents/base.py::_build_system_prompt` reads
+the doc and wraps it in a `=== CROSS-AGENT LESSONS LEARNED ===` block,
+prepended to the agent's static YAML `system_prompt`. Soft-fails (silent
+omission) if the file is missing. 30KB hard cap to bound prompt budget.
+Only the `_LESSONS_CONSUMER_AGENTS` set sees it; non-code agents (PRD,
+user stories, research, content) skip the load to keep their context lean.
+
+**Workflow for adding a new lesson** (when you observe a new failure
+pattern that the agents should avoid):
+
+1. Open `docs/agent-lessons-learned.md`
+2. Append a new section `## L<NN> — <one-line title>` with:
+   - **Signature** (the verbatim error / log line so agents can
+     pattern-match)
+   - **Cause** (what the agent was doing wrong)
+   - **Fix** (concrete action, not philosophy)
+   - **Observed in** (REQ-XXX so the audit trail survives)
+3. Commit the doc to the repo (Git history = lesson history)
+4. No backend restart needed — next agent invocation re-reads it
+
+**What NOT to put in this doc:**
+- One-off bugs that don't represent a pattern (use a regular bug fix)
+- UI / product-design lessons (those live in per-agent YAML)
+- Lessons for non-code agents (those live in their YAML directly)
+- Anything that breaks the "stable, succinct, append-only" rule —
+  rewriting old lessons retroactively confuses audit; append updates
+  with a `[Update YYYY-MM-DD]` note instead.
+
+The doc's maintenance log section tracks when major lessons were added.
+
 ## Common Commands
 
 All development goes through the Makefile + `docker compose`. Use Unix shell syntax (this is bash on Windows, not PowerShell).

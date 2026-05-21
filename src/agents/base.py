@@ -220,7 +220,19 @@ class BaseAgent(ABC):
         return self._tool_registry.get_schemas_for_agent(self.agent_id)
 
     def _build_system_prompt(self) -> str:
-        """Inject the current date so the model doesn't fall back to its training-era clock."""
+        """Inject the current date AND the cross-agent lessons learned
+        so the model doesn't fall back to its training-era clock or
+        repeat known failure patterns.
+
+        The lessons doc lives in the repo at ``docs/agent-lessons-learned.md``
+        — it's a versioned, runtime-loaded record of every production
+        failure pattern we've observed and the fix for it. Loaded fresh
+        on EVERY system-prompt build so a freshly-added lesson is
+        picked up by the next agent invocation without a code change
+        or container restart. Only code-writing agents see it; PRD /
+        story / research / content agents don't (their lessons live
+        in their own YAML).
+        """
         from datetime import datetime
         today = datetime.utcnow()
         date_header = (
@@ -231,7 +243,57 @@ class BaseAgent(ABC):
             f'"today" and THIS year as "current". Never default to an earlier year '
             f"from your training data.\n\n"
         )
-        return date_header + self.system_prompt
+        lessons_block = self._load_cross_agent_lessons()
+        return date_header + lessons_block + self.system_prompt
+
+    # Agents that consume cross-agent lessons. Other agents (PRD,
+    # user_story, research, content) don't write code so the lessons
+    # would be noise in their context budget — keep their prompt lean.
+    _LESSONS_CONSUMER_AGENTS: frozenset[str] = frozenset({
+        "backend_specialist",
+        "frontend_specialist",
+        "code_reviewer",
+        "tester_specialist",
+        "devops_specialist",
+    })
+
+    def _load_cross_agent_lessons(self) -> str:
+        """Load docs/agent-lessons-learned.md and wrap it for inclusion
+        in the system prompt. Soft-fails (returns "") if the file is
+        missing — preserves agent operation even if the doc gets
+        renamed or deleted.
+
+        File path is resolved RELATIVE TO THIS MODULE so the loader
+        works whether the backend runs from /app/ in Docker or from
+        the repo root in unit tests."""
+        if self.agent_id not in self._LESSONS_CONSUMER_AGENTS:
+            return ""
+        try:
+            from pathlib import Path as _Path
+            # src/agents/base.py → repo root is parents[2]
+            repo_root = _Path(__file__).resolve().parents[2]
+            lessons_path = repo_root / "docs" / "agent-lessons-learned.md"
+            if not lessons_path.is_file():
+                return ""
+            text = lessons_path.read_text(encoding="utf-8")
+            # Hard cap so a runaway doc edit doesn't blow the prompt
+            # budget. 30KB ≈ 8K tokens, plenty for the global lessons.
+            if len(text) > 30_000:
+                text = text[:30_000] + "\n\n[... truncated; trim docs/agent-lessons-learned.md]"
+            return (
+                "=== CROSS-AGENT LESSONS LEARNED (read this BEFORE acting on the task) ===\n"
+                "This is the canonical record of failure patterns we've observed in\n"
+                "production and how to avoid them. New lessons are appended over time;\n"
+                "they apply to EVERY code-writing task you handle.\n\n"
+                f"{text}\n\n"
+                "=== END LESSONS ===\n\n"
+            )
+        except Exception as e:  # noqa: BLE001 — never block agent on doc-load error
+            logger.warning(
+                "agent_lessons_doc_load_failed",
+                agent_id=self.agent_id, err=str(e),
+            )
+            return ""
 
     # Hard wall-clock timeout for a single LLM call. The Anthropic SDK does not
     # impose its own end-to-end timeout — long-tail requests can hang indefinitely
