@@ -149,6 +149,43 @@ class AgentSystemExecutor:
             tools=len(self.tool_registry.list_tools()),
         )
 
+    async def _resolve_project_root_for_request(
+        self, request_id: str,
+    ) -> "Path | None":
+        """Look up the request's project (if any) and resolve its
+        per-project working tree path.
+
+        Returns None for platform-level Requests (no project_id, or
+        project_id == proj-unassigned). When non-None, gets threaded
+        through ``process_task`` → ``_execute_tool`` → tool registry →
+        FileReadTool / FileWriteTool / SearchReplaceTool's path
+        resolver, so filesystem operations land in the per-project
+        tree (e.g. ``C:/ai-projects/CrewAI/``) instead of the
+        platform's ``/app`` tree.
+
+        Soft-fails (returns None) on any lookup error — better to fall
+        back to platform-tree behaviour than to crash an agent
+        invocation because of a transient DB issue.
+        """
+        try:
+            from src.core.project_workspace import project_root_dir
+            from src.models.base import UNASSIGNED_PROJECT_ID
+            request = await self.state.get_request(request_id)
+            if not request or not request.project_id:
+                return None
+            if request.project_id == UNASSIGNED_PROJECT_ID:
+                return None
+            project = await self.state.get_project(request.project_id)
+            if not project:
+                return None
+            return project_root_dir(project.name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "agent_executor_project_root_resolve_failed",
+                request_id=request_id, error=str(e),
+            )
+            return None
+
     async def execute(
         self, agent_id: str, request_id: str, inputs: dict[str, Any],
     ) -> dict[str, Any]:
@@ -163,17 +200,32 @@ class AgentSystemExecutor:
                 "artifacts": [],
             }
 
+        # Resolve the per-project working tree ONCE per invocation. None
+        # means "platform-level work" (no project_id or
+        # proj-unassigned), which preserves the legacy behaviour where
+        # filesystem tools resolve under the platform's project_root.
+        project_root = await self._resolve_project_root_for_request(request_id)
+
         if not self.anthropic_client:
             agent.set_llm_client(None)
-            logger.info("agent_executing_mock", agent_id=agent_id, request_id=request_id)
-            return await agent.process_task(request_id, inputs)
+            logger.info(
+                "agent_executing_mock",
+                agent_id=agent_id, request_id=request_id,
+                project_root=str(project_root) if project_root else "platform",
+            )
+            return await agent.process_task(
+                request_id, inputs, project_root=project_root,
+            )
 
         logger.info(
             "agent_executing",
             agent_id=agent_id, request_id=request_id, model=agent.model,
             inference_geo=self.inference_geo or "global",
+            project_root=str(project_root) if project_root else "platform",
         )
-        return await agent.process_task(request_id, inputs)
+        return await agent.process_task(
+            request_id, inputs, project_root=project_root,
+        )
 
     async def single_agent_call(
         self,

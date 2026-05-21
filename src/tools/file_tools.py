@@ -1,4 +1,17 @@
-"""File tools — read, write, and search-replace files with path validation."""
+"""File tools — read, write, and search-replace files with path validation.
+
+Each tool accepts an optional ``project_root`` override on every
+``execute()`` call. The default ``project_root`` set at construction
+time is the PLATFORM tree (``/app`` in the backend container). When an
+agent is dispatched on a per-project Request, the executor passes the
+per-project working tree (e.g. ``C:/ai-projects/CrewAI/``) so the same
+relative path like ``frontend/src/App.tsx`` resolves to the right tree.
+
+Without the override, an agent task targeting CrewAI would scribble
+into the platform's frontend source — that broke the platform's Vite
+build on 2026-05-21 16:50 when an agent's search_replace landed in the
+platform's App.tsx instead of CrewAI's.
+"""
 
 import asyncio
 import os
@@ -96,8 +109,11 @@ class FileReadTool:
             },
         }
 
-    async def execute(self, params: dict) -> str:
-        path = self._resolve_path(params["path"])
+    async def execute(self, params: dict, *, project_root: Path | None = None) -> str:
+        try:
+            path = self._resolve_path(params["path"], project_root)
+        except ValueError as e:
+            return f"Error: {e}"
         if not path.exists():
             return f"Error: File not found: {params['path']}"
         try:
@@ -105,9 +121,19 @@ class FileReadTool:
         except Exception as e:
             return f"Error reading file: {e}"
 
-    def _resolve_path(self, relative_path: str) -> Path:
-        resolved = (self.project_root / relative_path).resolve()
-        if not str(resolved).startswith(str(self.project_root)):
+    def _resolve_path(
+        self, relative_path: str, project_root: Path | None = None,
+    ) -> Path:
+        """Resolve ``relative_path`` under the EFFECTIVE project root.
+
+        ``project_root`` (when passed by the executor) wins over
+        ``self.project_root``. Path-traversal guard always uses the
+        effective root, so a per-project task can't escape into the
+        platform tree even with `..` shenanigans.
+        """
+        effective_root = (project_root.resolve() if project_root else self.project_root)
+        resolved = (effective_root / relative_path).resolve()
+        if not str(resolved).startswith(str(effective_root)):
             raise ValueError(f"Path escapes project root: {relative_path}")
         return resolved
 
@@ -176,7 +202,7 @@ class SearchReplaceTool:
             },
         }
 
-    async def execute(self, params: dict) -> str:
+    async def execute(self, params: dict, *, project_root: Path | None = None) -> str:
         path_str = params.get("path", "")
         old_string = params.get("old_string", "")
         new_string = params.get("new_string", "")
@@ -191,7 +217,7 @@ class SearchReplaceTool:
             )
 
         try:
-            path = self._resolve_path(path_str)
+            path = self._resolve_path(path_str, project_root)
         except ValueError as e:
             return f"Error: {e}"
 
@@ -265,9 +291,13 @@ class SearchReplaceTool:
             f"edit will be on disk locally but NOT pushed to GitHub."
         )
 
-    def _resolve_path(self, relative_path: str) -> Path:
-        resolved = (self.project_root / relative_path).resolve()
-        if not str(resolved).startswith(str(self.project_root)):
+    def _resolve_path(
+        self, relative_path: str, project_root: Path | None = None,
+    ) -> Path:
+        """Resolve under the effective root — same semantics as FileReadTool."""
+        effective_root = (project_root.resolve() if project_root else self.project_root)
+        resolved = (effective_root / relative_path).resolve()
+        if not str(resolved).startswith(str(effective_root)):
             raise ValueError(f"Path escapes project root: {relative_path}")
         return resolved
 
@@ -292,8 +322,11 @@ class FileWriteTool:
             },
         }
 
-    async def execute(self, params: dict) -> str:
-        path = self._resolve_path(params["path"])
+    async def execute(self, params: dict, *, project_root: Path | None = None) -> str:
+        try:
+            path = self._resolve_path(params["path"], project_root)
+        except ValueError as e:
+            return f"Error: {e}"
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             # Auto-format Python content with `ruff format` before persisting.
@@ -309,8 +342,12 @@ class FileWriteTool:
         except Exception as e:
             return f"Error writing file: {e}"
 
-    def _resolve_path(self, relative_path: str) -> Path:
-        resolved = (self.project_root / relative_path).resolve()
-        if not str(resolved).startswith(str(self.project_root)):
+    def _resolve_path(
+        self, relative_path: str, project_root: Path | None = None,
+    ) -> Path:
+        """Resolve under the effective root — same semantics as FileReadTool."""
+        effective_root = (project_root.resolve() if project_root else self.project_root)
+        resolved = (effective_root / relative_path).resolve()
+        if not str(resolved).startswith(str(effective_root)):
             raise ValueError(f"Path escapes project root: {relative_path}")
         return resolved

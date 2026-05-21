@@ -7,6 +7,7 @@ US-pinned vs global data routing.
 """
 
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -65,10 +66,26 @@ class BaseAgent(ABC):
         self._inference_geo = geo
 
     async def process_task(
-        self, request_id: str, inputs: dict[str, Any]
+        self, request_id: str, inputs: dict[str, Any],
+        *, project_root: "Path | None" = None,
     ) -> dict[str, Any]:
-        """Iterative tool-use loop: messages → LLM → tools → repeat until text."""
-        logger.info("agent_processing_task", agent=self.agent_id, request_id=request_id)
+        """Iterative tool-use loop: messages → LLM → tools → repeat until text.
+
+        ``project_root`` (when set by the executor for a per-project
+        Request) is stashed on ``self._current_project_root`` and
+        forwarded to every tool invocation. Filesystem tools then
+        resolve paths against this root instead of the platform default
+        — without this, an agent task on CrewAI could (and did) scribble
+        into the platform's ``frontend/src/App.tsx``. See file_tools.py
+        for the resolution logic.
+        """
+        # Stashed so _execute_tool can forward without an explicit pass.
+        self._current_project_root: "Path | None" = project_root
+        logger.info(
+            "agent_processing_task",
+            agent=self.agent_id, request_id=request_id,
+            project_root=str(project_root) if project_root else "platform",
+        )
 
         if not self._llm_client:
             return self._mock_result(inputs)
@@ -239,6 +256,7 @@ class BaseAgent(ABC):
         messages: list[dict],
         tool_schemas: list[dict],
         max_tokens: int | None = None,
+        disable_parallel_tool_use: bool = False,
     ) -> dict[str, Any]:
         """Call the Messages API on Claude Platform on AWS with retry
         on rate limits.
@@ -253,6 +271,14 @@ class BaseAgent(ABC):
         with very high max_tokens because they may exceed the 10-minute
         cap). The text + tool_calls are collected from the streamed
         events; the final Message object provides the usage counts.
+
+        ``disable_parallel_tool_use`` forces the model to call tools
+        one-at-a-time within a turn. Default off — most tool-use loops
+        benefit from parallel calls. Set True for the project
+        orchestrator, where the model needs to read list_tasks output
+        BEFORE deciding whether to dispatch (otherwise it fires
+        list_tasks + dispatch_task × N in parallel and the dispatches
+        fail because the list status hasn't been observed yet).
         """
         import asyncio as _asyncio
 
@@ -274,6 +300,15 @@ class BaseAgent(ABC):
                 }
                 if tool_schemas:
                     kwargs["tools"] = tool_schemas
+                    if disable_parallel_tool_use:
+                        # tool_choice.auto + disable_parallel_tool_use:
+                        # model picks WHETHER to call a tool, but if
+                        # it does, only one at a time. See Anthropic
+                        # docs for the exact shape.
+                        kwargs["tool_choice"] = {
+                            "type": "auto",
+                            "disable_parallel_tool_use": True,
+                        }
                 if self._inference_geo:
                     # Per docs: inference_geo is rejected on models older than 4.6.
                     # claude-opus-4-7 supports it; legacy YAML overrides do not.
@@ -377,7 +412,13 @@ class BaseAgent(ABC):
             return f"Tool '{tool_name}' not available (no registry)"
         try:
             return await self._tool_registry.execute(
-                tool_name=tool_name, agent_id=self.agent_id, params=tool_input,
+                tool_name=tool_name,
+                agent_id=self.agent_id,
+                params=tool_input,
+                # Forward the per-Request project root (set in process_task)
+                # so filesystem tools resolve under the per-project working
+                # tree, not the platform's /app/ tree.
+                project_root=getattr(self, "_current_project_root", None),
             )
         except Exception as e:
             return f"Tool error: {e}"

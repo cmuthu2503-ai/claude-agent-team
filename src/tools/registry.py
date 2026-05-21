@@ -67,8 +67,27 @@ class ToolRegistry:
                 })
         return schemas
 
-    async def execute(self, tool_name: str, agent_id: str, params: dict) -> str:
-        """Execute a tool, checking permissions first."""
+    async def execute(
+        self,
+        tool_name: str,
+        agent_id: str,
+        params: dict,
+        *,
+        project_root: "Path | None" = None,
+    ) -> str:
+        """Execute a tool, checking permissions first.
+
+        ``project_root`` (when provided) is threaded into the tool's
+        ``execute()`` as a keyword arg. Tools that care about filesystem
+        scope (file_read / file_write / search_replace) use it as the
+        effective project root for path resolution AND for the
+        path-traversal guard, so a per-project agent task can't scribble
+        into the platform tree. Tools that ignore it (web_search,
+        wait_for_deployment, etc.) just don't bind the kwarg —
+        ``inspect.signature`` would catch a mismatch loudly during
+        development, but in practice every tool's ``execute()`` is
+        defined with ``**kwargs`` or an explicit ``project_root=None``.
+        """
         if not self.is_permitted(tool_name, agent_id):
             raise ToolPermissionError(
                 f"Agent '{agent_id}' does not have permission to use tool '{tool_name}'"
@@ -76,6 +95,19 @@ class ToolRegistry:
         impl = self._implementations.get(tool_name)
         if not impl:
             return f"Tool '{tool_name}' has no implementation registered"
+        # Forward project_root only to tools that accept it. Cheap inspection
+        # at call time prevents a TypeError on tools whose execute() still
+        # uses the legacy single-arg signature.
+        import inspect
+        try:
+            sig = inspect.signature(impl.execute)
+            if "project_root" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                return await impl.execute(params, project_root=project_root)
+        except (TypeError, ValueError):
+            # Couldn't introspect — fall through to the legacy path.
+            pass
         return await impl.execute(params)
 
     def list_tools(self) -> list[str]:
