@@ -25,6 +25,7 @@ import { BuildWorkspace } from "../components/projects/BuildWorkspace"
 import { PopupWindow } from "../components/board/PopupWindow"
 import { TaskDrillIn } from "../components/board/TaskDrillIn"
 import type { CardData, TaskStatus } from "../components/board/types"
+import { DeployJudgePanel } from "../components/projects/DeployJudgePanel"
 
 const ICON_MAP: Record<string, React.ComponentType<{ size?: number; color?: string }>> = {
   folder: Folder, rocket: Rocket, layers: Layers, code: Code,
@@ -62,6 +63,12 @@ interface ProjectDetail {
   deploy_url: string
   deploy_last_started_at: string | null
   deploy_error: string | null
+  // AI Deploy Judge — Phases 4/7. The first two are surfaced by the
+  // backend in _serialize(); the panel reads them from this row
+  // instead of doing a separate fetch.
+  last_deploy_commit_sha: string | null
+  deploy_judge_preferences: string
+  deploy_pending_action: string | null
   stats: { total: number; active: number; completed: number; failed: number }
   requests: Array<{
     request_id: string
@@ -327,6 +334,7 @@ export function ProjectDetailPage() {
           url={data.deploy_url}
           error={data.deploy_error}
           lastStartedAt={data.deploy_last_started_at}
+          judgePreferences={data.deploy_judge_preferences || ""}
           onChanged={load}
         />
       )}
@@ -719,12 +727,16 @@ interface DeploymentCardProps {
   url: string
   error: string | null
   lastStartedAt: string | null
+  // AI Deploy Judge — initial value of the per-project preferences
+  // textarea. Empty string by default. The panel manages its own
+  // state from here; parent doesn't track edits in flight.
+  judgePreferences: string
   onChanged: () => void   // called after a successful deploy/stop request — parent reloads
 }
 
 function DeploymentCard({
   projectId, kind, backendPort, frontendPort, status, url, error,
-  lastStartedAt, onChanged,
+  lastStartedAt, judgePreferences, onChanged,
 }: DeploymentCardProps) {
   const [busy, setBusy] = useState<"deploy" | "stop" | null>(null)
   const [clientErr, setClientErr] = useState<string>("")
@@ -908,6 +920,19 @@ function DeploymentCard({
           {clientErr}
         </div>
       )}
+
+      {/* AI Deploy Judge panel — drives the smart-route deploy flow
+          (see src/core/project_deploy_judge.py). Renders 8 states
+          based on drift + judge recommendation. Self-fetches and
+          self-polls; parent only notifies it of project state
+          changes via the existing onChanged. */}
+      <DeployJudgePanel
+        projectId={projectId}
+        deployStatus={status}
+        deployError={error}
+        initialPreferences={judgePreferences}
+        onProjectChanged={onChanged}
+      />
 
       {/* Inline keyframes for the spinner — keeps the component
           self-contained; no global CSS edits needed. */}
