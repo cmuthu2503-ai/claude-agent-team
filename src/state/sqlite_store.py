@@ -1740,6 +1740,63 @@ class SQLiteStateStore(StateStore):
             rows = await cursor.fetchall()
         return [self._row_to_request(r) for r in rows]
 
+    async def list_commits_since_deploy(
+        self,
+        project_id: str,
+        since: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return committed Requests for this project, ordered oldest-first.
+
+        Drives the AI Deploy Judge's drift computation. A "commit" here
+        is a Request whose code_commit stage published files to GitHub
+        (i.e. commit_sha is non-NULL). Filtered to those completed after
+        ``since`` when provided — usually the project's last successful
+        deploy timestamp.
+
+        Returns a list of dicts (not a Pydantic model) because the shape
+        is consumed directly by the judge prompt's JSON renderer and by
+        the UI panel's drift summary. Dict keys:
+          - request_id, commit_sha
+          - description (request description, truncated to 200 chars)
+          - files (list[str] from published_files)
+          - file_count (len(files); convenience for the UI)
+          - completed_at (ISO string)
+        """
+        db = await self._get_db()
+        sql = (
+            "SELECT request_id, description, commit_sha, published_files, "
+            "       completed_at "
+            "FROM requests "
+            "WHERE project_id = ? "
+            "  AND commit_sha IS NOT NULL AND commit_sha != '' "
+            "  AND completed_at IS NOT NULL"
+        )
+        params: list = [project_id]
+        if since is not None:
+            sql += " AND completed_at > ?"
+            params.append(since.isoformat())
+        sql += " ORDER BY completed_at ASC"
+        async with db.execute(sql, params) as cursor:
+            rows = await cursor.fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            files_raw = r["published_files"] or "[]"
+            try:
+                files = json.loads(files_raw)
+                if not isinstance(files, list):
+                    files = []
+            except (ValueError, TypeError):
+                files = []
+            out.append({
+                "request_id": r["request_id"],
+                "commit_sha": r["commit_sha"],
+                "description": (r["description"] or "")[:200],
+                "files": files,
+                "file_count": len(files),
+                "completed_at": r["completed_at"],
+            })
+        return out
+
     async def count_requests_for_project(self, project_id: str) -> dict[str, int]:
         """Per-status counts for the project detail page stat cards (PUI-003).
         Returns {total, active, completed, failed} with `active` meaning any

@@ -352,6 +352,23 @@ class StateStore(ABC):
         newest-first."""
         ...
 
+    @abstractmethod
+    async def list_commits_since_deploy(
+        self,
+        project_id: str,
+        since: datetime | None = None,
+    ) -> list[dict]:
+        """Return completed-and-committed Requests for this project,
+        oldest-first, optionally filtered to those completed after
+        ``since`` (the project's last successful deploy timestamp).
+
+        Drives the AI Deploy Judge's drift computation. Returns plain
+        dicts (not a Pydantic model) because the shape is consumed
+        directly by the judge's JSON prompt input and by the UI panel's
+        drift summary. See SQLiteStateStore.list_commits_since_deploy
+        for the dict keys."""
+        ...
+
     # ── Project Artifacts (PDB-03) ───────────────
     # Versioned brief + PRD per project. Tasks live in their own structured
     # table (Phase B). At most one row per (project_id, kind) has
