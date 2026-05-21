@@ -546,6 +546,15 @@ class SQLiteStateStore(StateStore):
             "ALTER TABLE projects ADD COLUMN last_deploy_commit_sha TEXT",
             "ALTER TABLE projects ADD COLUMN deploy_judge_preferences TEXT "
             "  NOT NULL DEFAULT ''",
+            # AI Deploy Judge (per-project) — Phase 4. When the user clicks
+            # Apply / Override, the backend writes the chosen action here
+            # AND flips deploy_status to pending_deploy. The supervisor's
+            # next poll picks up both fields and dispatches the matching
+            # docker compose invocation (Phase 5). NULL means "default to
+            # the existing rebuild-all behaviour" — preserves backward
+            # compatibility with manual Deploy button clicks that haven't
+            # gone through the judge.
+            "ALTER TABLE projects ADD COLUMN deploy_pending_action TEXT",
             # The deploy_decisions table itself — added here so an
             # existing DB without it gets the table on next boot. (The
             # SCHEMA_SQL block above also has it, but executescript
@@ -1867,6 +1876,7 @@ class SQLiteStateStore(StateStore):
             # produce a Project rather than KeyError-ing.
             last_deploy_commit_sha=_opt("last_deploy_commit_sha"),
             deploy_judge_preferences=_opt("deploy_judge_preferences", "") or "",
+            deploy_pending_action=_opt("deploy_pending_action"),
         )
 
     async def update_project_deploy(
@@ -1878,6 +1888,7 @@ class SQLiteStateStore(StateStore):
         deploy_last_started_at: datetime | None = None,
         deploy_error: str | None = None,
         last_deploy_commit_sha: str | None = None,
+        deploy_pending_action: str | None = None,
     ) -> None:
         """Targeted update for deploy-lifecycle fields only. Used by
         the Deploy / Stop endpoints to flip status between the
@@ -1891,7 +1902,13 @@ class SQLiteStateStore(StateStore):
 
         ``last_deploy_commit_sha`` is advanced by the supervisor on a
         successful deploy (or by ``skip``-action decisions) so the AI
-        Deploy Judge measures drift from the right baseline."""
+        Deploy Judge measures drift from the right baseline.
+
+        ``deploy_pending_action`` is set by the AI Deploy Judge's
+        Apply/Override endpoints to tell the supervisor which docker
+        compose invocation to run when it picks up the pending_deploy
+        row. Pass empty string to clear (e.g. when supervisor finishes
+        and the project is back to running)."""
         sets = []
         params: list = []
         if deploy_status is not None:
@@ -1909,6 +1926,9 @@ class SQLiteStateStore(StateStore):
         if last_deploy_commit_sha is not None:
             sets.append("last_deploy_commit_sha = ?")
             params.append(last_deploy_commit_sha or None)
+        if deploy_pending_action is not None:
+            sets.append("deploy_pending_action = ?")
+            params.append(deploy_pending_action or None)
         if not sets:
             return
         sets.append("updated_at = ?")

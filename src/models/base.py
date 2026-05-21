@@ -349,6 +349,11 @@ class Project(BaseModel):
     # judge prompt as extra context. Empty by default.
     last_deploy_commit_sha: str | None = None
     deploy_judge_preferences: str = ""
+    # AI Deploy Judge — chosen action that the supervisor will execute
+    # on the next pending_deploy pickup. NULL means "fall back to the
+    # legacy rebuild-all behaviour" (manual Deploy button clicks that
+    # never went through the judge).
+    deploy_pending_action: str | None = None
     # Audit
     created_by: str | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)

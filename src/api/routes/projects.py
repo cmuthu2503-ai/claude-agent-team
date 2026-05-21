@@ -52,9 +52,14 @@ from src.core.project_workspace import (
     write_finalized_prd,
     write_finalized_tasks,
 )
+from src.core.deploy_drift import ProjectDrift, compute_drift
+from src.core.project_deploy_judge import evaluate_project_deploy
 from src.models.base import (
     ArtifactKind,
     ArtifactStatus,
+    DeployAction,
+    DeployDecision,
+    DeployDecisionStatus,
     DeployStatus,
     Project,
     ProjectArtifact,
@@ -171,6 +176,13 @@ def _serialize(p: Project, *, with_stats: dict[str, int] | None = None) -> dict[
             p.deploy_last_started_at.isoformat() if p.deploy_last_started_at else None
         ),
         "deploy_error": p.deploy_error,
+        # AI Deploy Judge fields. Surfaced so the Deploy panel can
+        # render the "X commits since last deploy" subtitle without a
+        # separate fetch, and so the user's preferences textarea has
+        # an initial value.
+        "last_deploy_commit_sha": p.last_deploy_commit_sha,
+        "deploy_judge_preferences": p.deploy_judge_preferences,
+        "deploy_pending_action": p.deploy_pending_action,
     }
     if with_stats:
         out["stats"] = with_stats
@@ -824,6 +836,496 @@ def _project_deployable(project: Project) -> tuple[bool, str]:
             f"the project, or re-run the scaffold via support tools."
         )
     return True, ""
+
+
+# ─────────────────────── AI Deploy Judge (per-project) ──────────────────────
+
+class _DeployJudgeApplyBody(BaseModel):
+    """POST /projects/:id/deploy/judge/apply — opt body. ``decision_id``
+    is omitted in the common case (apply the current pending decision)."""
+    decision_id: str | None = None
+
+
+class _DeployJudgeOverrideBody(BaseModel):
+    """POST /projects/:id/deploy/judge/override — user picked a different
+    action than the judge recommended. Records the override so Phase 8
+    can feed it back into future judge calls."""
+    action: str  # one of DeployAction values
+    decision_id: str | None = None  # optional pinning to a specific decision
+
+
+class _DeployJudgePreferencesBody(BaseModel):
+    """PUT /projects/:id/deploy/judge/preferences — user-authored free-text
+    that the judge prompt picks up as additional context."""
+    preferences: str
+
+
+def _serialize_decision(d: "DeployDecision") -> dict[str, Any]:
+    """DeployDecision → JSON dict matching the UI panel's expected shape."""
+    return {
+        "decision_id": d.decision_id,
+        "project_id": d.project_id,
+        "drift_summary": d.drift_summary,
+        "from_commit_sha": d.from_commit_sha,
+        "to_commit_sha": d.to_commit_sha,
+        "action": d.action,
+        "risk": d.risk,
+        "confidence": d.confidence,
+        "reasoning": d.reasoning,
+        "from_llm": d.from_llm,
+        "status": d.status,
+        "overridden_action": d.overridden_action,
+        "created_at": d.created_at.isoformat(),
+        "applied_at": d.applied_at.isoformat() if d.applied_at else None,
+    }
+
+
+@router.get("/{project_id}/deploy/judge")
+async def get_deploy_judge(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Return the current drift + judge recommendation for the project.
+
+    Lifecycle:
+      1. Compute drift via ``compute_drift(state, project)``.
+      2. If no drift → return ``{drift: empty, decision: null}`` — UI
+         renders State 1 (Up to date).
+      3. If a PENDING decision exists AND its to_commit_sha matches
+         the current drift's to_commit_sha → return it (cache hit).
+         The UI renders the current recommendation; no fresh LLM call.
+      4. Otherwise: supersede prior pending decisions, run the judge,
+         persist the new decision row, return it.
+
+    All errors fold into a 200 with a safe-default decision so the UI
+    is never blocked from rendering something. See
+    ``project_deploy_judge.evaluate_project_deploy`` docs.
+    """
+    state = request.app.state.state_store
+    project = await state.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project {project_id!r} not found.")
+
+    drift = await compute_drift(state, project)
+
+    if not drift.has_drift:
+        return {
+            "data": {
+                "drift": _drift_to_dict(drift),
+                "decision": None,
+            },
+            "meta": None,
+            "error": None,
+        }
+
+    # Cache check — if there's a pending decision against the same
+    # to_commit_sha, return it without re-running the judge. Lets the
+    # UI poll cheaply.
+    existing = await state.get_latest_pending_decision(project_id)
+    if existing and existing.to_commit_sha == drift.to_commit_sha:
+        return {
+            "data": {
+                "drift": _drift_to_dict(drift),
+                "decision": _serialize_decision(existing),
+            },
+            "meta": {"cached": True},
+            "error": None,
+        }
+
+    # Fresh judge call. Supersede any stale pending decision first so
+    # the UI's "current recommendation" lookup returns exactly one row.
+    await state.supersede_pending_decisions(project_id)
+
+    # Override learning input — surface this project's last N
+    # (recommended, overridden) pairs into the judge prompt.
+    prior_overrides = await state.list_recent_overrides(project_id, limit=5)
+
+    result = await evaluate_project_deploy(
+        project=project,
+        drift=drift,
+        prior_overrides=prior_overrides,
+    )
+
+    decision = DeployDecision(
+        decision_id=f"dd-{uuid.uuid4().hex[:12]}",
+        project_id=project_id,
+        drift_summary=drift.commits,
+        from_commit_sha=drift.from_commit_sha,
+        to_commit_sha=drift.to_commit_sha,
+        action=result.action,
+        risk=result.risk,
+        confidence=result.confidence,
+        reasoning=result.reasoning,
+        from_llm=result.from_llm,
+        status=DeployDecisionStatus.PENDING,
+    )
+    await state.create_deploy_decision(decision)
+
+    logger.info(
+        "deploy_judge.decided",
+        project_id=project_id,
+        action=result.action,
+        risk=result.risk,
+        confidence=result.confidence,
+        commits=drift.commit_count,
+        from_llm=result.from_llm,
+    )
+    return {
+        "data": {
+            "drift": _drift_to_dict(drift),
+            "decision": _serialize_decision(decision),
+        },
+        "meta": {"cached": False},
+        "error": None,
+    }
+
+
+def _drift_to_dict(drift: "ProjectDrift") -> dict[str, Any]:
+    """ProjectDrift → JSON dict for the UI panel."""
+    return {
+        "project_id": drift.project_id,
+        "has_drift": drift.has_drift,
+        "commit_count": drift.commit_count,
+        "from_commit_sha": drift.from_commit_sha,
+        "to_commit_sha": drift.to_commit_sha,
+        "commits": drift.commits,
+        "files_touched": drift.files_touched,
+        "over_limit": drift.over_limit,
+    }
+
+
+@router.post("/{project_id}/deploy/judge/apply", status_code=202)
+async def apply_deploy_judge(
+    project_id: str,
+    request: Request,
+    body: _DeployJudgeApplyBody | None = None,
+    user: dict = Depends(get_current_user),
+):
+    """User clicked Apply on the judge's recommendation.
+
+      1. Resolve the decision row — body.decision_id if given, else the
+         current PENDING decision for the project.
+      2. Mark it APPLIED.
+      3. Special-case ``skip``: advance ``last_deploy_commit_sha`` to
+         the decision's to_commit_sha. No docker, no supervisor handoff.
+      4. Special-case ``hold``: refuse — Apply doesn't make sense for
+         a "do nothing manually" action.
+      5. Otherwise: write the chosen action into
+         ``projects.deploy_pending_action`` and flip
+         ``deploy_status = pending_deploy``. The supervisor's next poll
+         picks both up and runs the matching docker invocation (Phase 5).
+    """
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    project = await state.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project {project_id!r} not found.")
+
+    decision_id = (body.decision_id if body else None)
+    if decision_id:
+        # Pin to a specific decision (UI may have stale view)
+        existing = await state.get_latest_pending_decision(project_id)
+        if not existing or existing.decision_id != decision_id:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "decision_superseded",
+                    "hint": (
+                        "This recommendation has been superseded — refresh "
+                        "the page to see the current one."
+                    ),
+                },
+            )
+        decision = existing
+    else:
+        decision = await state.get_latest_pending_decision(project_id)
+        if not decision:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "no_pending_decision", "hint": "Compute drift first via GET /deploy/judge."},
+            )
+
+    action = decision.action
+
+    if action == str(DeployAction.HOLD):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "cannot_apply_hold",
+                "hint": (
+                    "Hold means 'do nothing automatically'. Pick a different "
+                    "action via Override, or wait for human review."
+                ),
+            },
+        )
+
+    if action == str(DeployAction.SKIP):
+        # No docker work — just advance the baseline so the next drift
+        # check sees an empty list. Both fields advance together:
+        # last_deploy_commit_sha for human-readable audit, and
+        # deploy_last_started_at for compute_drift's cutoff query.
+        await state.mark_decision_applied(decision.decision_id)
+        await state.update_project_deploy(
+            project_id,
+            last_deploy_commit_sha=decision.to_commit_sha or "",
+            deploy_last_started_at=datetime.utcnow(),
+        )
+        logger.info(
+            "deploy_judge.applied.skip",
+            project_id=project_id, decision_id=decision.decision_id,
+            advanced_to=decision.to_commit_sha,
+        )
+        # Re-read so response reflects the just-flipped state.
+        project = await state.get_project(project_id)
+        return {
+            "data": _serialize(project) if project else None,
+            "meta": {
+                "action_taken": action,
+                "decision_id": decision.decision_id,
+                "hint": "No docker action — baseline advanced.",
+            },
+            "error": None,
+        }
+
+    # Real docker action — flip pending_deploy with the chosen action.
+    # Pre-flight: refuse if the project isn't deployable (no scaffold,
+    # already running mid-deploy).
+    ok, reason = _project_deployable(project)
+    if not ok:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "not_deployable", "hint": reason},
+        )
+    if project.deploy_status in (
+        DeployStatus.DEPLOYING, DeployStatus.PENDING_DEPLOY,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "already_active",
+                "current_status": project.deploy_status,
+                "hint": "Wait for the current deploy to finish, then re-apply.",
+            },
+        )
+
+    await state.mark_decision_applied(decision.decision_id)
+    await state.update_project_deploy(
+        project_id,
+        deploy_status=DeployStatus.PENDING_DEPLOY,
+        deploy_last_started_at=datetime.utcnow(),
+        deploy_error="",
+        deploy_pending_action=action,
+    )
+    events = request.app.state.events
+    await events.emit("project.deploy_requested", {
+        "project_id": project_id,
+        "name": project.name,
+        "kind": project.kind,
+        "action": action,
+        "from_judge": True,
+        "decision_id": decision.decision_id,
+    })
+    project = await state.get_project(project_id)
+    logger.info(
+        "deploy_judge.applied",
+        project_id=project_id, decision_id=decision.decision_id, action=action,
+    )
+    return {
+        "data": _serialize(project) if project else None,
+        "meta": {
+            "action_taken": action,
+            "decision_id": decision.decision_id,
+            "hint": "Deploy queued. Poll GET /projects/{id} for status.",
+        },
+        "error": None,
+    }
+
+
+@router.post("/{project_id}/deploy/judge/override", status_code=202)
+async def override_deploy_judge(
+    project_id: str,
+    body: _DeployJudgeOverrideBody,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """User picked a different action than the judge recommended.
+
+    Records the override (Phase 8 feeds these into future judge prompts
+    as learning signal), then applies the user's chosen action through
+    the same supervisor handoff as the regular Apply endpoint.
+    """
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    project = await state.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project {project_id!r} not found.")
+
+    chosen_action = (body.action or "").strip().lower()
+    if chosen_action not in tuple(str(a) for a in DeployAction):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_action",
+                "hint": (
+                    f"action must be one of: "
+                    f"{', '.join(str(a) for a in DeployAction)}"
+                ),
+            },
+        )
+
+    decision_id = body.decision_id
+    decision = await state.get_latest_pending_decision(project_id)
+    if not decision:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "no_pending_decision",
+                "hint": "Compute drift first via GET /deploy/judge.",
+            },
+        )
+    if decision_id and decision.decision_id != decision_id:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "decision_superseded"},
+        )
+
+    await state.mark_decision_overridden(decision.decision_id, chosen_action)
+
+    # ── Then act on the user's choice (mirrors apply_deploy_judge) ──
+    if chosen_action == str(DeployAction.HOLD):
+        # Hold = explicit "do nothing". No supervisor handoff; the
+        # override row is the audit trail.
+        logger.info(
+            "deploy_judge.overridden.hold",
+            project_id=project_id, decision_id=decision.decision_id,
+        )
+        return {
+            "data": _serialize(project),
+            "meta": {
+                "action_taken": chosen_action,
+                "decision_id": decision.decision_id,
+                "hint": "Held — no docker action. Re-evaluate when ready.",
+            },
+            "error": None,
+        }
+
+    if chosen_action == str(DeployAction.SKIP):
+        # Same baseline-advance as apply-skip — advance BOTH the SHA
+        # and the timestamp so compute_drift's cutoff catches the
+        # advance.
+        await state.update_project_deploy(
+            project_id,
+            last_deploy_commit_sha=decision.to_commit_sha or "",
+            deploy_last_started_at=datetime.utcnow(),
+        )
+        project = await state.get_project(project_id)
+        logger.info(
+            "deploy_judge.overridden.skip",
+            project_id=project_id, decision_id=decision.decision_id,
+        )
+        return {
+            "data": _serialize(project) if project else None,
+            "meta": {
+                "action_taken": chosen_action,
+                "decision_id": decision.decision_id,
+                "hint": "Skipped — baseline advanced.",
+            },
+            "error": None,
+        }
+
+    # Docker action.
+    ok, reason = _project_deployable(project)
+    if not ok:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "not_deployable", "hint": reason},
+        )
+    if project.deploy_status in (
+        DeployStatus.DEPLOYING, DeployStatus.PENDING_DEPLOY,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "already_active",
+                "current_status": project.deploy_status,
+                "hint": "Wait for the current deploy to finish, then re-override.",
+            },
+        )
+
+    await state.update_project_deploy(
+        project_id,
+        deploy_status=DeployStatus.PENDING_DEPLOY,
+        deploy_last_started_at=datetime.utcnow(),
+        deploy_error="",
+        deploy_pending_action=chosen_action,
+    )
+    events = request.app.state.events
+    await events.emit("project.deploy_requested", {
+        "project_id": project_id,
+        "name": project.name,
+        "kind": project.kind,
+        "action": chosen_action,
+        "from_judge": False,
+        "decision_id": decision.decision_id,
+    })
+    project = await state.get_project(project_id)
+    logger.info(
+        "deploy_judge.overridden",
+        project_id=project_id, decision_id=decision.decision_id,
+        recommended=decision.action, chose=chosen_action,
+    )
+    return {
+        "data": _serialize(project) if project else None,
+        "meta": {
+            "action_taken": chosen_action,
+            "decision_id": decision.decision_id,
+            "hint": "Deploy queued. Poll GET /projects/{id} for status.",
+        },
+        "error": None,
+    }
+
+
+@router.put("/{project_id}/deploy/judge/preferences")
+async def put_deploy_judge_preferences(
+    project_id: str,
+    body: _DeployJudgePreferencesBody,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Persist the user's free-text preferences for this project's judge.
+    Fed into the prompt on every future judge call as additional context.
+    Empty string clears them."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    project = await state.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project {project_id!r} not found.")
+    prefs = (body.preferences or "").strip()
+    if len(prefs) > 2000:
+        raise HTTPException(
+            status_code=400,
+            detail="preferences must be ≤ 2000 characters.",
+        )
+    await state.update_project_deploy_preferences(project_id, prefs)
+    project = await state.get_project(project_id)
+    return {
+        "data": _serialize(project) if project else None,
+        "meta": None,
+        "error": None,
+    }
+
+
+# ─────────────────────── /AI Deploy Judge ──────────────────────────────────
 
 
 @router.post("/{project_id}/deploy", status_code=202)
@@ -2662,9 +3164,20 @@ async def dispatch_tasks(
 
     orchestrator = request.app.state.orchestrator
     dispatched: list[dict[str, Any]] = []
+    # BLD-004 (extended for retry): only IN-FLIGHT and DEPLOYED rows are
+    # no-op short-circuits. Terminal-but-not-deployed rows (FAILED,
+    # CANCELLED) ARE eligible for re-dispatch — they fall through and
+    # get a fresh request_id; the old failed request stays in History
+    # so the user can compare cycles. This is what powers the UI's
+    # "Dispatch Selected" button on a row with status `failed`.
+    _IN_FLIGHT_STATUSES = {
+        TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS,
+        TaskStatus.REVIEW, TaskStatus.TESTING,
+    }
     for tid, task in tasks_by_id.items():
-        # BLD-004: idempotent. If already dispatched, just echo the link.
-        if task.task_status != TaskStatus.BACKLOG and task.request_id:
+        is_in_flight = task.task_status in _IN_FLIGHT_STATUSES
+        is_already_done = task.task_status == TaskStatus.DEPLOYED
+        if (is_in_flight or is_already_done) and task.request_id:
             dispatched.append({
                 "task_id": tid,
                 "request_id": task.request_id,

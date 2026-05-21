@@ -273,6 +273,7 @@ class StateStore(ABC):
         deploy_last_started_at: datetime | None = None,
         deploy_error: str | None = None,
         last_deploy_commit_sha: str | None = None,
+        deploy_pending_action: str | None = None,
     ) -> None:
         """Targeted update for the deploy-lifecycle fields only.
         Used by the Deploy / Stop endpoints; pass ``None`` to leave a
@@ -280,7 +281,11 @@ class StateStore(ABC):
 
         ``last_deploy_commit_sha`` is advanced by the supervisor on a
         successful deploy (or by ``skip``-action decisions) so the AI
-        Deploy Judge knows what to measure drift against."""
+        Deploy Judge knows what to measure drift against.
+
+        ``deploy_pending_action`` is set by the judge's Apply/Override
+        endpoints so the supervisor knows which docker compose
+        invocation to run when it picks up the pending_deploy row."""
         ...
 
     @abstractmethod
