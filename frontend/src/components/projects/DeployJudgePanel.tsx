@@ -6,7 +6,7 @@
  *
  *   1. NO DRIFT       — clean baseline; hidden body, just "Up to date"
  *   2. SKIP           — docs-only / no-op commits; one-click "Mark deployed"
- *   3. LOW-RISK       — restart-*/rebuild-* at risk=low; primary CTA pulses
+ *   3. LOW-RISK       — restart-X / rebuild-X at risk=low; primary CTA pulses
  *   4. HIGH-RISK      — judge wants caution; no primary CTA, manual choice
  *   5. THINKING       — first fetch in-flight
  *   6. APPLYING       — supervisor is running the chosen action
