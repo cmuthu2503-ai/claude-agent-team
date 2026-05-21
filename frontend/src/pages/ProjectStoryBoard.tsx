@@ -1,20 +1,29 @@
 /**
- * ProjectStoryBoard — Project-driven Build, Phase C (PDB-27 → PDB-31).
+ * ProjectStoryBoard — the consolidated per-project Build Board.
  *
- * The Story Board in project mode. Rows = the project's finalized tasks;
- * columns = task_status (Backlog / In Progress / Review / Testing / Deployed
- * / Failed). Cards with a request_id click through to the existing per-request
- * Story Board at /stories/:requestId (the drill-down).
+ * Lives at /stories/project/:projectId. Rows = the project's finalized
+ * tasks; columns = task_status (Backlog / In Progress / Review /
+ * Testing / Deployed / Failed).
  *
- * Lives at /stories/project/:projectId. The per-request board at
- * /stories/:requestId is untouched.
+ * Click any card → opens a floating, draggable PopupWindow with the
+ * task detail (workflow stage strip, description, agent timeline,
+ * outputs, errors). Board stays clickable behind the popup so you
+ * can compare or open another task without closing the current one.
+ *
+ * The per-request Story Board at /stories/:requestId stays accessible
+ * via a deep-link footer inside the popup — no longer the primary
+ * navigation choice.
  */
 
-import { useEffect, useMemo, useState, useRef } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useParams } from "react-router-dom"
-import { ArrowLeft, Github, Rocket } from "lucide-react"
+import { ArrowLeft } from "lucide-react"
 import { api } from "../lib/api"
 import { ProjectChip } from "../components/projects/ProjectChip"
+import { EnrichedTaskCard } from "../components/board/EnrichedTaskCard"
+import { PopupWindow } from "../components/board/PopupWindow"
+import { TaskDrillIn } from "../components/board/TaskDrillIn"
+import type { CardData, TaskStatus, WorkflowStage } from "../components/board/types"
 
 interface ProjectTask {
   task_id: string
@@ -31,53 +40,72 @@ interface ProjectTask {
   request_id: string | null
 }
 
-type TaskStatus =
-  | "backlog" | "dispatched" | "in_progress"
-  | "review" | "testing" | "deployed" | "failed" | "cancelled"
-
-const COLUMNS: { key: TaskStatus | "active" ; label: string; match: (s: TaskStatus) => boolean; accent: string }[] = [
-  {
-    key: "backlog", label: "Backlog",
-    match: (s) => s === "backlog",
-    accent: "var(--text-muted)",
-  },
-  {
-    key: "active", label: "In Progress",
-    match: (s) => s === "dispatched" || s === "in_progress",
-    accent: "var(--accent)",
-  },
-  {
-    key: "review", label: "Review",
-    match: (s) => s === "review",
-    accent: "var(--info, var(--accent))",
-  },
-  {
-    key: "testing", label: "Testing",
-    match: (s) => s === "testing",
-    accent: "var(--warning, #f59e0b)",
-  },
-  {
-    key: "deployed", label: "Deployed",
-    match: (s) => s === "deployed",
-    accent: "var(--success)",
-  },
-  {
-    key: "failed", label: "Failed",
-    match: (s) => s === "failed" || s === "cancelled",
-    accent: "var(--danger)",
-  },
+const COLUMNS: {
+  key: TaskStatus | "active"
+  label: string
+  match: (s: TaskStatus) => boolean
+  accent: string
+}[] = [
+  { key: "backlog",  label: "Backlog",     match: (s) => s === "backlog",                                 accent: "var(--text-muted)" },
+  { key: "active",   label: "In Progress", match: (s) => s === "dispatched" || s === "in_progress",        accent: "var(--accent)" },
+  { key: "review",   label: "Review",      match: (s) => s === "review",                                  accent: "#b026ff" },
+  { key: "testing",  label: "Testing",     match: (s) => s === "testing",                                 accent: "var(--warning, #f59e0b)" },
+  { key: "deployed", label: "Deployed",    match: (s) => s === "deployed",                                accent: "var(--success)" },
+  { key: "failed",   label: "Failed",      match: (s) => s === "failed" || s === "cancelled",             accent: "var(--danger)" },
 ]
+
+// Map task_status → the workflow stage the agent is most likely
+// currently working in. Approximate — the card's stage strip is a
+// visual hint; the popup fetches the real subtask history.
+function statusToStage(s: TaskStatus): WorkflowStage | null {
+  switch (s) {
+    case "dispatched":
+    case "in_progress": return "development"
+    case "review":      return "review"
+    case "testing":     return "testing"
+    case "deployed":    return "deploy"
+    case "failed":
+    case "cancelled":   return "code_commit"  // most failures happen here
+    default:            return null
+  }
+}
+
+function projectTaskToCard(t: ProjectTask): CardData {
+  // Extract phase prefix from title: "Phase 1: Foundation — Build X" →
+  // phase = "Phase 1: Foundation", title = "Build X".
+  let phase: string | null = null
+  let title = t.title
+  const m = t.title.match(/^(Phase\s+\d+:\s*[^—\-]+?)\s*[—\-]\s*(.+)$/)
+  if (m) {
+    phase = m[1].trim()
+    title = m[2].trim()
+  }
+  return {
+    id: t.task_id,
+    task_id: t.task_id,
+    request_id: t.request_id,
+    phase,
+    title,
+    description: t.description,
+    type: t.estimated_agent?.replace("_specialist", "").replace("_", " ") || null,
+    agent: t.estimated_agent,
+    priority: (t.priority as "high" | "medium" | "low") || "medium",
+    status: t.task_status,
+    current_stage: statusToStage(t.task_status),
+  }
+}
 
 export function ProjectStoryBoardPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const [tasks, setTasks] = useState<ProjectTask[] | null>(null)
   const [error, setError] = useState("")
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
 
   const load = async () => {
     if (!projectId) return
     try {
-      const res = await api.get(`/projects/${projectId}/tasks`)
+      const res = await api.get<{ data: ProjectTask[] }>(`/projects/${projectId}/tasks`)
       setTasks((res.data || []) as ProjectTask[])
     } catch (e: any) {
       setError(e?.message || "Failed to load tasks")
@@ -85,17 +113,13 @@ export function ProjectStoryBoardPage() {
   }
 
   useEffect(() => {
-    load()
-    // Polling fallback: refresh every 5s in case the WS handler drops
-    // an event. The board is read-only; over-polling is harmless.
+    void load()
     const id = window.setInterval(load, 5000)
     return () => window.clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
 
-  // Live updates via the existing /ws/activity stream. The PDB-25 handler
-  // already writes to project_tasks server-side; we just need to refresh
-  // our local view when relevant events fire.
+  // Live updates via WebSocket — refresh on relevant events.
   useEffect(() => {
     if (!projectId) return
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
@@ -105,8 +129,6 @@ export function ProjectStoryBoardPage() {
       try {
         const msg = JSON.parse(event.data)
         const t = msg.type || ""
-        // Any request-status change OR a task-finalize against THIS project
-        // should refresh the board.
         if (
           t === "request.status_changed" ||
           t === "request.completed" ||
@@ -137,12 +159,14 @@ export function ProjectStoryBoardPage() {
     return map
   }, [tasks])
 
-  if (error) {
-    return <div style={{ padding: 24, color: "var(--danger)" }}>{error}</div>
-  }
-  if (!tasks) {
-    return <div style={{ padding: 24, color: "var(--text-muted)" }}>Loading board…</div>
-  }
+  const selectedCard = useMemo<CardData | null>(() => {
+    if (!selectedTaskId || !tasks) return null
+    const t = tasks.find((x) => x.task_id === selectedTaskId)
+    return t ? projectTaskToCard(t) : null
+  }, [selectedTaskId, tasks])
+
+  if (error) return <div style={{ padding: 24, color: "var(--danger)" }}>{error}</div>
+  if (!tasks) return <div style={{ padding: 24, color: "var(--text-muted)" }}>Loading board…</div>
 
   return (
     <div style={{
@@ -150,7 +174,7 @@ export function ProjectStoryBoardPage() {
       display: "flex", flexDirection: "column",
       fontFamily: "var(--font)",
     }}>
-      {/* Breadcrumb (BRD-006) */}
+      {/* Breadcrumb */}
       <div style={{
         padding: "12px 24px",
         background: "var(--bg-card)",
@@ -203,9 +227,24 @@ export function ProjectStoryBoardPage() {
               label={col.label}
               accent={col.accent}
               tasks={byColumn.get(col.key) || []}
+              selectedTaskId={selectedTaskId}
+              onSelect={(id) =>
+                setSelectedTaskId(id === selectedTaskId ? null : id)
+              }
             />
           ))}
         </div>
+      )}
+
+      {/* Popup window — opens over the board, draggable, non-modal */}
+      {selectedCard && (
+        <PopupWindow
+          subtitle={selectedCard.task_id}
+          title={selectedCard.title}
+          onClose={() => setSelectedTaskId(null)}
+        >
+          <TaskDrillIn card={selectedCard} />
+        </PopupWindow>
       )}
     </div>
   )
@@ -213,7 +252,15 @@ export function ProjectStoryBoardPage() {
 
 // ── Column ──────────────────────────────────────────────────────────────
 
-function Column({ label, accent, tasks }: { label: string; accent: string; tasks: ProjectTask[] }) {
+function Column({
+  label, accent, tasks, selectedTaskId, onSelect,
+}: {
+  label: string
+  accent: string
+  tasks: ProjectTask[]
+  selectedTaskId: string | null
+  onSelect: (taskId: string) => void
+}) {
   return (
     <div style={{
       background: "var(--bg-card)",
@@ -252,91 +299,16 @@ function Column({ label, accent, tasks }: { label: string; accent: string; tasks
             textAlign: "center", padding: "20px 8px",
           }}>(empty)</div>
         ) : (
-          tasks.map((t) => <TaskCard key={t.task_id} task={t} accent={accent} />)
+          tasks.map((t) => (
+            <EnrichedTaskCard
+              key={t.task_id}
+              card={projectTaskToCard(t)}
+              isSelected={t.task_id === selectedTaskId}
+              onClick={() => onSelect(t.task_id)}
+            />
+          ))
         )}
       </div>
     </div>
   )
-}
-
-// ── Card ────────────────────────────────────────────────────────────────
-
-function TaskCard({ task, accent }: { task: ProjectTask; accent: string }) {
-  const drillTarget = task.request_id ? `/stories/${task.request_id}` : null
-  const inner = (
-    <div style={{
-      padding: "8px 10px",
-      background: "var(--bg-hover)",
-      border: `1px solid var(--border)`,
-      borderLeft: `3px solid ${accent}`,
-      borderRadius: "var(--radius)",
-      cursor: drillTarget ? "pointer" : "default",
-      transition: "border-color 0.15s, background 0.15s",
-    }}
-      onMouseEnter={(e) => {
-        if (drillTarget) {
-          e.currentTarget.style.borderColor = "var(--accent)"
-          e.currentTarget.style.borderLeftColor = accent
-        }
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "var(--border)"
-        e.currentTarget.style.borderLeftColor = accent
-      }}
-    >
-      <div style={{
-        display: "flex", alignItems: "center", gap: 4,
-        fontSize: 10, fontFamily: "var(--font-mono)",
-        color: "var(--text-muted)", marginBottom: 4,
-      }}>
-        <span>{task.task_id}</span>
-        {task.priority === "high" && (
-          <span style={{
-            marginLeft: "auto", color: "var(--danger)",
-            textTransform: "uppercase",
-          }}>● high</span>
-        )}
-      </div>
-      <div style={{
-        fontSize: 12, fontWeight: 600, color: "var(--text-primary)",
-        lineHeight: 1.3, marginBottom: 4,
-      }}>
-        {task.title}
-      </div>
-      <div style={{
-        display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap",
-        fontSize: 10, color: "var(--text-muted)",
-      }}>
-        {task.estimated_agent && (
-          <span style={{
-            padding: "1px 5px", borderRadius: 3,
-            background: "var(--bg-card)", border: "1px solid var(--border)",
-            fontFamily: "var(--font-mono)",
-          }}>
-            {task.estimated_agent.replace("_specialist", "").replace("_", " ")}
-          </span>
-        )}
-        {task.request_id && (
-          <span style={{
-            display: "inline-flex", alignItems: "center", gap: 3,
-            color: "var(--accent)", fontFamily: "var(--font-mono)",
-          }}>
-            <Rocket size={9} />
-            {task.request_id}
-          </span>
-        )}
-        {task.task_status === "deployed" && (
-          <Github size={10} style={{ marginLeft: "auto", color: "var(--success)" }} />
-        )}
-      </div>
-    </div>
-  )
-  if (drillTarget) {
-    return (
-      <Link to={drillTarget} style={{ textDecoration: "none", color: "inherit" }}>
-        {inner}
-      </Link>
-    )
-  }
-  return inner
 }

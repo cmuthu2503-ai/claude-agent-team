@@ -630,7 +630,9 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
                 </Td>
                 <Td width={isFinalized ? 170 : 100}>
                   {/* Backlog rows in a finalized list get a Dispatch chip;
-                      already-dispatched rows show a link to /stories/:requestId. */}
+                      already-dispatched rows show a status · request_id
+                      badge (no navigation — drill in via the Build Board
+                      link at the top of this editor). */}
                   {isFinalized && t.task_status === "backlog" && (
                     <button
                       type="button"
@@ -644,19 +646,21 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
                     </button>
                   )}
                   {isFinalized && t.task_status !== "backlog" && t.request_id && (
-                    <Link
-                      to={`/stories/${t.request_id}`}
+                    /* Plain badge — old Link to the legacy /stories/:request_id
+                       page was removed. Drill in via the Build Board (link
+                       at the top of this editor → `/stories/project/:id`). */
+                    <span
                       style={{
                         display: "inline-flex", alignItems: "center", gap: 4,
                         fontSize: 10, fontFamily: "var(--font-mono)",
-                        color: "var(--accent)", textDecoration: "none",
+                        color: "var(--text-secondary)",
                         padding: "2px 6px", borderRadius: 3,
                         background: "var(--bg-card)", border: "1px solid var(--border)",
                       }}
-                      title="Open per-request Story Board"
+                      title={`Open the Build Board to drill into ${t.request_id}`}
                     >
                       {t.task_status} · {t.request_id}
-                    </Link>
+                    </span>
                   )}
                   {(!isFinalized || (!t.request_id && t.task_status !== "backlog")) && (
                     <Badge>{t.task_status}</Badge>

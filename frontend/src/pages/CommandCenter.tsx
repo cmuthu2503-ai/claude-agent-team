@@ -2,11 +2,14 @@ import { useState, useEffect, useRef } from "react"
 import { api } from "../lib/api"
 import { StatusBadge } from "../components/ui/StatusBadge"
 import { RichTextInput, type RichTextInputHandle } from "../components/ui/RichTextInput"
-import { Link, useSearchParams } from "react-router-dom"
+import { useSearchParams } from "react-router-dom"
 import { Plus, Send, X, Trash2 } from "lucide-react"
 import { useAuthStore } from "../stores/auth"
 import { CreateProjectModal, type CreatedProject } from "../components/projects/CreateProjectModal"
 import { ProjectChip } from "../components/projects/ProjectChip"
+import { PopupWindow } from "../components/board/PopupWindow"
+import { TaskDrillIn } from "../components/board/TaskDrillIn"
+import type { CardData, TaskStatus } from "../components/board/types"
 
 // Lightweight Project shape for the dropdown — we only need the fields
 // that affect the New Request form (id, name, default_team).
@@ -215,7 +218,32 @@ export function CommandCenterPage() {
 
   // Track per-request in-flight cancel/delete so buttons disable while action runs
   const [busyId, setBusyId] = useState<string | null>(null)
+  // Selected request for the popup-window drill-in. Clicking a row in
+  // either the "In Flight" or "Recently Completed" sections opens this.
+  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null)
   const currentUser = useAuthStore((s) => s.user)
+
+  /** Map a one-off request into the unified CardData shape consumed by
+   * TaskDrillIn. CommandCenter rows don't have a task_id; we pass the
+   * request_id as both `id` and the popup subtitle. */
+  const requestToCard = (r: RequestItem): CardData => ({
+    id: r.request_id,
+    request_id: r.request_id,
+    task_id: null,
+    phase: null,
+    title: r.description,
+    description: r.description,
+    type: r.task_type?.replace("_request", ""),
+    agent: null,
+    priority: ((r.priority as "high" | "medium" | "low") || "medium"),
+    status: r.status as TaskStatus,
+    current_stage: null,  // drill-in derives stage from subtasks
+  })
+  const selectedCard: CardData | null = selectedRequestId
+    ? (requests.find((x) => x.request_id === selectedRequestId)
+        ? requestToCard(requests.find((x) => x.request_id === selectedRequestId)!)
+        : null)
+    : null
 
   const canMutate = (r: RequestItem): boolean => {
     // Matches backend permission: admin OR creator (owner) can cancel/delete.
@@ -545,18 +573,20 @@ export function CommandCenterPage() {
                 >
                   <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flexWrap: "wrap", rowGap: 4 }}>
                     <span className={`ch-card-dot ch-card-dot-${r.status}`} aria-hidden="true" />
-                    <Link
-                      to={`/request/${r.request_id}`}
+                    {/* Plain span — the parent card body owns the click and
+                        opens the popup drill-in. Old Link to /request/:id
+                        was removed; we no longer navigate to the legacy
+                        per-request page. */}
+                    <span
                       className="ch-request-id"
                       style={{
                         fontSize: 12,
                         fontFamily: "var(--font-mono)",
                         color: "var(--text-muted)",
-                        textDecoration: "none",
                       }}
                     >
                       {r.request_id}
-                    </Link>
+                    </span>
                     <ProjectChip projectId={(r as any).project_id} />
                     {/* Removed redundant "· ● <status>" text — the StatusBadge
                         on the right already shows it, and dropping it gives
@@ -605,15 +635,16 @@ export function CommandCenterPage() {
                   </div>
                 </div>
 
-                {/* Body — description + meta. Wrapped in its own Link so the body
-                    is clickable to navigate, but the cancel button isn't fighting
-                    a parent click handler. */}
-                <Link
-                  to={`/request/${r.request_id}`}
+                {/* Body — description + meta. Click opens the popup-window
+                    drill-in (no navigation away from Command Center). The
+                    Cancel button has stopPropagation so it doesn't open the
+                    popup. */}
+                <div
+                  onClick={() => setSelectedRequestId(r.request_id)}
                   style={{
                     display: "block",
                     padding: "8px 16px 16px",
-                    textDecoration: "none",
+                    cursor: "pointer",
                     color: "inherit",
                   }}
                 >
@@ -625,7 +656,7 @@ export function CommandCenterPage() {
                     <span>·</span>
                     <span style={{ textTransform: "capitalize" }}>{r.priority}</span>
                   </div>
-                </Link>
+                </div>
                 <div className={`ch-progress ch-progress-${r.status}`} aria-hidden="true">
                   <div className="ch-progress-bar" />
                 </div>
@@ -669,15 +700,15 @@ export function CommandCenterPage() {
                 onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)" }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = "transparent" }}
               >
-                <Link
-                  to={`/request/${r.request_id}`}
+                <div
+                  onClick={() => setSelectedRequestId(r.request_id)}
                   style={{
                     flex: 1,
                     minWidth: 0,
                     display: "flex",
                     alignItems: "center",
                     gap: 12,
-                    textDecoration: "none",
+                    cursor: "pointer",
                   }}
                 >
                   <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-muted)", flexShrink: 0 }}>
@@ -687,7 +718,7 @@ export function CommandCenterPage() {
                   <span style={{ fontSize: 14, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {r.description}
                   </span>
-                </Link>
+                </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                   <StatusBadge status={r.status} />
                   {canMutate(r) && (
@@ -846,6 +877,19 @@ export function CommandCenterPage() {
           }
         }}
       />
+
+      {/* Floating popup-window drill-in for one-off requests. Opens on
+          click of any row in either the In Flight or Recently Completed
+          sections. Non-modal — the page stays interactive behind it. */}
+      {selectedCard && (
+        <PopupWindow
+          subtitle={selectedCard.request_id}
+          title={selectedCard.title}
+          onClose={() => setSelectedRequestId(null)}
+        >
+          <TaskDrillIn card={selectedCard} />
+        </PopupWindow>
+      )}
     </div>
   )
 }

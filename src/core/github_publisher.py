@@ -316,3 +316,100 @@ class GitHubPublisher:
                 raise GitHubRepoCreateError(
                     f"GitHub HTTP error: {e}", status_code=None,
                 ) from e
+
+    async def delete_repo(self, owner: str, repo: str) -> dict[str, Any]:
+        """DELETE /repos/{owner}/{repo} — permanently remove a GitHub repo.
+
+        Used by the project-delete flow: when a project is hard-deleted,
+        its GitHub repo is torn down too so we don't leave stale
+        per-project repos under the user/org namespace.
+
+        Auth requirements:
+          - Token must have the ``delete_repo`` scope (separate from
+            ``repo``). Most existing tokens lack it — in that case the
+            API returns 403 and we surface a structured ``not_authorized``
+            result rather than raising. Caller decides whether to treat
+            that as a fatal error or a soft warning.
+          - The token's account must have admin rights on the repo
+            (always true when the token created the repo via
+            :meth:`create_repo`).
+
+        Returns a dict with:
+          - ``ok``: True if the repo is gone (204) or was already gone (404)
+          - ``status``: HTTP status code from GitHub (204/403/404/etc.)
+          - ``error``: human-readable reason on failure, else None
+          - ``code``: one of ``"deleted"``, ``"not_found"``, ``"not_authorized"``,
+            ``"not_configured"``, ``"http_error"``
+
+        Never raises — all paths fold into the result dict so the caller
+        (the project-delete route) can continue cleaning up other things
+        even when this step fails.
+        """
+        if not (self.token and not self.token.startswith("ghp_xxxxx")):
+            return {
+                "ok": False,
+                "status": None,
+                "error": "GitHubPublisher not configured: set GITHUB_TOKEN",
+                "code": "not_configured",
+            }
+        if not owner or not repo:
+            return {
+                "ok": False,
+                "status": None,
+                "error": f"invalid owner/repo: {owner!r}/{repo!r}",
+                "code": "http_error",
+            }
+
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        url = f"{GITHUB_API}/repos/{owner}/{repo}"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                r = await client.delete(url, headers=headers)
+            except httpx.HTTPError as e:
+                logger.warning(
+                    "github_repo_delete_http_error", owner=owner, repo=repo, err=str(e),
+                )
+                return {
+                    "ok": False, "status": None,
+                    "error": f"GitHub HTTP error: {e}", "code": "http_error",
+                }
+
+        if r.status_code == 204:
+            logger.info("github_repo_deleted", owner=owner, repo=repo)
+            return {"ok": True, "status": 204, "error": None, "code": "deleted"}
+        if r.status_code == 404:
+            # Already gone — treat as success so re-runs are idempotent.
+            logger.info(
+                "github_repo_delete_already_gone", owner=owner, repo=repo,
+            )
+            return {"ok": True, "status": 404, "error": None, "code": "not_found"}
+        if r.status_code == 403:
+            # Missing delete_repo scope is the common case. Extract the
+            # GitHub-provided message so the user knows to upgrade the
+            # token rather than seeing a generic 403.
+            msg = "missing delete_repo scope"
+            try:
+                body = r.json()
+                if isinstance(body, dict) and body.get("message"):
+                    msg = body["message"]
+            except Exception:
+                pass
+            logger.warning(
+                "github_repo_delete_forbidden", owner=owner, repo=repo, detail=msg,
+            )
+            return {"ok": False, "status": 403, "error": msg, "code": "not_authorized"}
+
+        # Any other non-2xx — surface the body for the operator log.
+        detail = r.text[:300] if r.text else f"HTTP {r.status_code}"
+        logger.warning(
+            "github_repo_delete_failed",
+            owner=owner, repo=repo, status=r.status_code, detail=detail[:200],
+        )
+        return {
+            "ok": False, "status": r.status_code,
+            "error": detail, "code": "http_error",
+        }

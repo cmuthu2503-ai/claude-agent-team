@@ -1,8 +1,8 @@
-"""Document endpoints — search, list, retrieve persisted agent outputs."""
+"""Document endpoints — search, list, retrieve, delete persisted agent outputs."""
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from src.auth.service import get_current_user
+from src.auth.service import get_current_user, require_role
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 
@@ -100,3 +100,26 @@ async def get_document(
         "meta": None,
         "error": None,
     }
+
+
+@router.delete("/{document_id}", status_code=204)
+async def delete_document(
+    document_id: str,
+    request: Request,
+    user: dict = Depends(require_role("developer", "admin")),
+):
+    """Hard-delete a single document (PRD, code-review report, test report, etc.).
+
+    No state-machine check — documents are passive artifacts, not in-flight
+    workflow rows. Developer + admin can delete; viewer cannot. If the doc
+    doesn't exist, returns 404.
+    """
+    state = request.app.state.state_store
+    doc = await state.get_document(document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    removed = await state.delete_document(document_id)
+    if not removed:
+        # Lost-race fallback — somebody beat us to it.
+        raise HTTPException(status_code=404, detail="Document not found")
+    return None

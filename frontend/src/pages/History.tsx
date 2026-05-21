@@ -1,11 +1,13 @@
 import { useState, useEffect } from "react"
 import { api } from "../lib/api"
 import { StatusBadge } from "../components/ui/StatusBadge"
-import { Link } from "react-router-dom"
 import { Trash2, X } from "lucide-react"
 import { useAuthStore } from "../stores/auth"
 import { useProjectsCache } from "../hooks/useProjectsCache"
 import { ProjectChip } from "../components/projects/ProjectChip"
+import { PopupWindow } from "../components/board/PopupWindow"
+import { TaskDrillIn } from "../components/board/TaskDrillIn"
+import type { CardData, TaskStatus } from "../components/board/types"
 
 const TERMINAL_STATUSES = ["completed", "failed", "cancelled"]
 function isTerminal(status: string): boolean {
@@ -17,6 +19,9 @@ export function HistoryPage() {
   const [statusFilter, setStatusFilter] = useState("")
   const [projectFilter, setProjectFilter] = useState("")  // PM-42
   const [busyId, setBusyId] = useState<string | null>(null)
+  // Click an ID → open the popup drill-in instead of navigating to the
+  // legacy /request/:id page. Keeps users inside the new UX.
+  const [popupRequestId, setPopupRequestId] = useState<string | null>(null)
   const currentUser = useAuthStore((s) => s.user)
   const { all: allProjects } = useProjectsCache()
 
@@ -116,9 +121,13 @@ export function HistoryPage() {
               return (
                 <tr key={r.request_id} className="hover:bg-[var(--bg-hover)]">
                   <td className="px-4 py-3">
-                    <Link to={`/request/${r.request_id}`} className="font-mono text-[var(--accent)] hover:underline">
+                    <button
+                      type="button"
+                      onClick={() => setPopupRequestId(r.request_id)}
+                      className="font-mono text-[var(--accent)] hover:underline bg-transparent border-0 p-0 cursor-pointer"
+                    >
                       {r.request_id}
-                    </Link>
+                    </button>
                   </td>
                   <td className="px-4 py-3"><ProjectChip projectId={r.project_id} /></td>
                   <td className="max-w-xs truncate px-4 py-3 text-[var(--text-primary)]">{r.description}</td>
@@ -161,6 +170,33 @@ export function HistoryPage() {
           <div className="py-12 text-center text-[var(--text-muted)]">No requests found</div>
         )}
       </div>
+
+      {/* ── Popup drill-in (replaces nav to legacy /request/:id) ── */}
+      {popupRequestId && (() => {
+        const r = requests.find((x) => x.request_id === popupRequestId)
+        const card: CardData = {
+          id: popupRequestId,
+          task_id: null,
+          request_id: popupRequestId,
+          phase: null,
+          title: r?.description || popupRequestId,
+          description: r?.description || "",
+          type: r?.task_type || null,
+          agent: null,
+          priority: ((r?.priority || "medium") as "high" | "medium" | "low"),
+          status: ((r?.status || "in_progress") as TaskStatus),
+          current_stage: null,
+        }
+        return (
+          <PopupWindow
+            subtitle={popupRequestId}
+            title={card.title}
+            onClose={() => setPopupRequestId(null)}
+          >
+            <TaskDrillIn card={card} />
+          </PopupWindow>
+        )
+      })()}
     </div>
   )
 }

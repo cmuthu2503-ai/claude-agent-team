@@ -153,6 +153,81 @@ def write_finalized_api_spec(project_name: str, content: str) -> HostWriteResult
     return _write_markdown(project_name, "api-spec.md", content)
 
 
+def delete_project_root(project_name: str) -> HostWriteResult:
+    """Recursively delete ``<host>/<ProjectName>/`` — the project's entire
+    working tree on the bind-mounted host filesystem.
+
+    Defensive guards (in order):
+
+    1. ``validate_name`` rejects anything that isn't a filesystem-safe
+       project name (no separators, no `..`, no reserved chars).
+    2. We re-resolve both the host root and the target with ``resolve()``
+       and assert the target lives strictly *underneath* the host root —
+       a symlink-traversal attempt would fail this check.
+    3. The host root itself is refused; only a project subdirectory is
+       eligible.
+
+    Soft-fail semantics match the rest of this module: missing tree → ok,
+    permission/io errors → ``ok=False`` with the error captured. The DB
+    delete and the API response must NOT be rolled back if the FS step
+    fails — the user can retry by hand from a shell.
+
+    Returns a ``HostWriteResult`` whose ``bytes_written`` field is
+    repurposed as the number of file entries removed (best-effort count
+    from a pre-walk; left at 0 if the tree is missing).
+    """
+    import shutil
+
+    try:
+        safe_name = validate_name(project_name)
+    except ValueError as e:
+        logger.warning("delete_project_root rejected name: %s", e)
+        return HostWriteResult(ok=False, path="", error=str(e))
+
+    host_root = _host_root().resolve()
+    target = (host_root / safe_name).resolve()
+
+    # Guard against symlink-traversal and any other path that escapes the
+    # bind mount. Path.is_relative_to() requires Python 3.9+ (we're on
+    # 3.12, so this is safe).
+    try:
+        is_under = target.is_relative_to(host_root)
+    except AttributeError:  # pragma: no cover — defensive for very old Python
+        is_under = str(target).startswith(str(host_root))
+    if not is_under or target == host_root:
+        msg = f"refusing to delete path outside host root: {target}"
+        logger.warning("delete_project_root rejected: %s", msg)
+        return HostWriteResult(ok=False, path=str(target), error=msg)
+
+    if not target.exists():
+        # Idempotent — nothing to do is success.
+        return HostWriteResult(ok=True, path=str(target), bytes_written=0)
+
+    # Best-effort entry count for the operator log / API response.
+    entries = 0
+    try:
+        for _root, _dirs, files in os.walk(target):
+            entries += len(files)
+    except OSError:
+        pass
+
+    try:
+        shutil.rmtree(target)
+        logger.info(
+            "delete_project_root ok project=%s path=%s entries=%d",
+            project_name, target, entries,
+        )
+        return HostWriteResult(ok=True, path=str(target), bytes_written=entries)
+    except OSError as e:
+        logger.error(
+            "delete_project_root failed project=%s path=%s err=%s",
+            project_name, target, e,
+        )
+        return HostWriteResult(
+            ok=False, path=str(target), error=f"{type(e).__name__}: {e}"
+        )
+
+
 def delete_host_file(project_name: str, filename: str) -> HostWriteResult:
     """Remove ``<host>/<ProjectName>/docs/<filename>``. Mirrors the
     write helpers — soft-fail with a structured result. No-op (still

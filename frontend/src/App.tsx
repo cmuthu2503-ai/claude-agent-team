@@ -18,6 +18,7 @@ import { MermaidViewerPage } from "./pages/MermaidViewer"
 import { ProjectsPage } from "./pages/Projects"
 import { ProjectDetailPage } from "./pages/ProjectDetail"
 import { ProjectStoryBoardPage } from "./pages/ProjectStoryBoard"
+import { BoardPreviewPage } from "./pages/BoardPreview"
 import "./themes.css"
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -74,6 +75,9 @@ function App() {
                     <Route path="/cost" element={<CostDashboardPage />} />
                     <Route path="/diagrams" element={<MermaidViewerPage />} />
                     <Route path="/users" element={<UserManagementPage />} />
+                    {/* Standalone preview page — pick your click-to-drill behavior
+                        before we wire the real Build Board / Command Center. */}
+                    <Route path="/preview/board" element={<BoardPreviewPage />} />
                   </Routes>
                 </Layout>
               </RequireAuth>

@@ -1469,6 +1469,20 @@ class SQLiteStateStore(StateStore):
         )
         await db.commit()
 
+    async def delete_document(self, document_id: str) -> bool:
+        """Hard-delete a document by id. Returns True if a row was removed.
+
+        Documents are standalone artifacts (PRDs, code-review reports, test
+        reports, etc.) — they aren't FK-referenced by anything else, so a
+        single DELETE is safe.
+        """
+        db = await self._get_db()
+        cursor = await db.execute(
+            "DELETE FROM documents WHERE document_id = ?", (document_id,)
+        )
+        await db.commit()
+        return (cursor.rowcount or 0) > 0
+
     def _row_to_document(self, row: aiosqlite.Row) -> Document:
         return Document(
             document_id=row["document_id"],

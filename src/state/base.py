@@ -216,6 +216,9 @@ class StateStore(ABC):
     @abstractmethod
     async def update_document(self, doc: Document) -> None: ...
 
+    @abstractmethod
+    async def delete_document(self, document_id: str) -> bool: ...
+
     # ── Projects ─────────────────────────────────
 
     @abstractmethod

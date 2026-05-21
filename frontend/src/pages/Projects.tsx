@@ -200,15 +200,47 @@ export function ProjectsPage() {
               busy={busyId === p.project_id}
               onDelete={async () => {
                 const reqCount = p.stats?.total ?? 0
-                const warning = reqCount > 0
-                  ? `\n\nThis project has ${reqCount} ${reqCount === 1 ? "request" : "requests"}. The server will refuse to delete it until they are reassigned or deleted first.`
+                // Cascade-delete: wipes requests + local FS + GitHub repo.
+                // We always pass cascade=true from the UI now — the server
+                // still supports cascade=false for scripted callers.
+                const reqLine = reqCount > 0
+                  ? `  • ${reqCount} request${reqCount === 1 ? "" : "s"} (and all subtasks, stories, documents, cost rows)\n`
                   : ""
-                if (!window.confirm(`Permanently delete "${p.name}" (${p.project_id})?${warning}\n\nThis cannot be undone.`)) return
+                const repoLine = p.repo_url
+                  ? `  • GitHub repo at ${p.repo_url}\n     (needs delete_repo scope on GITHUB_TOKEN — soft-fails otherwise)\n`
+                  : ""
+                const message =
+                  `Permanently delete "${p.name}" (${p.project_id})?\n\n` +
+                  `This will remove:\n` +
+                  `  • The project row from the database\n` +
+                  reqLine +
+                  `  • The local working tree at C:/ai-projects/${p.name}/\n` +
+                  repoLine +
+                  `\nCannot be undone.`
+                if (!window.confirm(message)) return
                 setBusyId(p.project_id)
                 try {
-                  await api.delete(`/projects/${p.project_id}`)
+                  const res: any = await api.delete(`/projects/${p.project_id}?cascade=true`)
                   invalidateProjectsCache()
                   await load()
+
+                  // Surface a non-blocking summary if anything soft-failed
+                  // so the admin knows to clean up by hand.
+                  const data = res?.data
+                  const warnings: string[] = []
+                  if (data?.filesystem && !data.filesystem.ok) {
+                    warnings.push(`Local FS: ${data.filesystem.error || "failed"}`)
+                  }
+                  if (data?.github && data.github.code !== "skipped" && !data.github.ok) {
+                    warnings.push(`GitHub: ${data.github.error || "failed"} (code: ${data.github.code})`)
+                  }
+                  if (warnings.length > 0) {
+                    alert(
+                      `Project "${p.name}" deleted, but with warnings:\n\n` +
+                      warnings.map((w) => "  • " + w).join("\n") +
+                      "\n\nYou may need to clean these up manually.",
+                    )
+                  }
                 } catch (e: any) {
                   // The api client throws Error("<status>: <raw body>").
                   // Try to parse the body as JSON and extract the FastAPI

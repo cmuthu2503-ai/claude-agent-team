@@ -45,6 +45,7 @@ from src.core.project_validation import (
 )
 from src.core.project_workspace import (
     delete_host_file,
+    delete_project_root,
     project_root_dir,
     render_tasks_markdown,
     write_finalized_api_spec,
@@ -605,12 +606,42 @@ async def update_project(
     return {"data": _serialize(project), "meta": None, "error": None}
 
 
-@router.delete("/{project_id}", status_code=204)
+@router.delete("/{project_id}")
 async def delete_project(
     project_id: str,
     request: Request,
+    cascade: bool = False,
     admin: dict = Depends(require_role("admin")),
 ):
+    """Hard-delete a project. With ``?cascade=true`` (the UI default), this
+    also wipes:
+
+      1. every Request the project owns (and all their subtasks /
+         stories / documents / cost rows via :meth:`StateStore.delete_request`),
+      2. the project's working tree on disk
+         (``C:/ai-projects/<ProjectName>/``), and
+      3. the project's GitHub repo (if ``project.repo_url`` is set and the
+         token has the ``delete_repo`` scope).
+
+    Without ``cascade=true`` the historical guard applies: the call is
+    refused with 409 if the project has any requests, forcing the caller
+    to reassign or delete them first.
+
+    Filesystem and GitHub cleanup are SOFT-FAILURE: if either step can't
+    complete (mount missing, token lacks ``delete_repo``, repo already
+    deleted, etc.), the DB delete still succeeds and the failure is
+    surfaced in the response body so the UI can show a hint. The
+    operator can then clean up by hand.
+
+    Response (200) body shape::
+
+        {
+          "project_id": "...",
+          "deleted_requests": 5,
+          "filesystem": {"ok": true,  "path": "/host/ai-projects/Foo", "bytes": 42},
+          "github":     {"ok": true,  "status": 204, "code": "deleted"},
+        }
+    """
     state = request.app.state.state_store
     try:
         assert_not_unassigned(project_id, "deleted")
@@ -621,22 +652,100 @@ async def delete_project(
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project {project_id!r} not found.")
 
-    # PRJ-006 — refuse if non-empty; force reassign-or-delete-first
     counts = await state.count_requests_for_project(project_id)
-    if counts["total"] > 0:
+
+    # PRJ-006 — refuse non-empty unless cascade was explicitly requested.
+    if counts["total"] > 0 and not cascade:
         raise HTTPException(
             status_code=409,
             detail={
                 "error": "project not empty",
                 "request_count": counts["total"],
-                "hint": "Reassign or delete the requests in this project first.",
+                "hint": (
+                    "Reassign or delete the requests in this project first, "
+                    "OR retry the call with ?cascade=true to wipe everything."
+                ),
             },
         )
 
+    # ── 1. Cascade-delete every Request the project owns ──────────────
+    deleted_requests = 0
+    if cascade and counts["total"] > 0:
+        requests_to_delete = await state.get_requests_for_project(project_id)
+        for r in requests_to_delete:
+            try:
+                await state.delete_request(r.request_id)
+                deleted_requests += 1
+            except Exception:
+                # One bad row shouldn't block project-level cleanup. Log
+                # and continue — the project row itself still gets removed
+                # and the leftover requests will become orphans, which the
+                # user can spot in History and clean up manually.
+                logger.exception(
+                    "delete_project: failed to cascade-delete request",
+                    project_id=project_id, request_id=r.request_id,
+                )
+
+    # ── 2. Delete the project row itself ──────────────────────────────
     await state.delete_project(project_id)
     events = request.app.state.events
     await events.emit("project.deleted", {"project_id": project_id, "name": project.name})
-    return None
+
+    # ── 3. Remove the working tree on disk (soft-fail) ────────────────
+    fs_result = delete_project_root(project.name).as_dict()
+
+    # ── 4. Remove the GitHub repo (soft-fail) ─────────────────────────
+    gh_result: dict[str, Any] = {
+        "ok": True, "status": None, "code": "skipped",
+        "error": None, "owner": None, "repo": None,
+    }
+    if project.repo_url:
+        parsed = extract_owner_repo(project.repo_url)
+        if not parsed:
+            gh_result = {
+                "ok": False, "status": None, "code": "invalid_repo_url",
+                "error": f"could not parse owner/repo from {project.repo_url!r}",
+                "owner": None, "repo": None,
+            }
+        else:
+            owner, repo = parsed
+            try:
+                publisher = GitHubPublisher()
+                raw = await publisher.delete_repo(owner, repo)
+                gh_result = {**raw, "owner": owner, "repo": repo}
+            except Exception as e:
+                # delete_repo() is documented to not raise, but we double-
+                # belt-and-suspender just in case so the route always returns.
+                logger.exception(
+                    "delete_project: github delete raised unexpectedly",
+                    project_id=project_id, repo_url=project.repo_url,
+                )
+                gh_result = {
+                    "ok": False, "status": None, "code": "http_error",
+                    "error": f"{type(e).__name__}: {e}",
+                    "owner": owner, "repo": repo,
+                }
+
+    logger.info(
+        "project_deleted",
+        project_id=project_id,
+        name=project.name,
+        cascade=cascade,
+        deleted_requests=deleted_requests,
+        fs_ok=fs_result.get("ok"),
+        github_code=gh_result.get("code"),
+    )
+    return {
+        "data": {
+            "project_id": project_id,
+            "name": project.name,
+            "deleted_requests": deleted_requests,
+            "filesystem": fs_result,
+            "github": gh_result,
+        },
+        "meta": None,
+        "error": None,
+    }
 
 
 # ─────────────────────── WS-16: backfill repo for existing project ───────────

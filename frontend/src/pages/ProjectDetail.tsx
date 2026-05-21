@@ -16,12 +16,15 @@ import { Link, useParams } from "react-router-dom"
 import {
   Folder, Rocket, Layers, Code, FlaskConical, Palette, Bug, BookOpen,
   ArrowLeft, ExternalLink, FileText, ListChecks, CheckCircle2, Circle, Github,
-  Pencil, Play, Square, Loader2, AlertTriangle, Boxes, Server, Globe,
+  Pencil, Play, Square, Loader2, AlertTriangle, Boxes, Server, Globe, Trash2,
 } from "lucide-react"
 import { api } from "../lib/api"
 import { StatusBadge } from "../components/ui/StatusBadge"
 import { EditProjectModal } from "../components/projects/EditProjectModal"
 import { BuildWorkspace } from "../components/projects/BuildWorkspace"
+import { PopupWindow } from "../components/board/PopupWindow"
+import { TaskDrillIn } from "../components/board/TaskDrillIn"
+import type { CardData, TaskStatus } from "../components/board/types"
 
 const ICON_MAP: Record<string, React.ComponentType<{ size?: number; color?: string }>> = {
   folder: Folder, rocket: Rocket, layers: Layers, code: Code,
@@ -91,6 +94,57 @@ export function ProjectDetailPage() {
   const [data, setData] = useState<ProjectDetail | null>(null)
   const [error, setError] = useState("")
   const [editOpen, setEditOpen] = useState(false)
+  // Click on a request row or document row → open the popup-window
+  // drill-in. Keeps users inside the new UX instead of navigating to
+  // the legacy /request/:id page.
+  const [popupRequestId, setPopupRequestId] = useState<string | null>(null)
+  // Per-row delete spinners. Keyed by the id being deleted so two
+  // simultaneous clicks don't disable unrelated rows.
+  const [deletingRequestId, setDeletingRequestId] = useState<string | null>(null)
+  const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null)
+
+  /** DELETE /requests/:id — only allowed in terminal state. */
+  const handleDeleteRequest = async (
+    requestId: string,
+    description: string,
+  ) => {
+    if (!window.confirm(
+      `Permanently delete request ${requestId}?\n\n${description}\n\n` +
+      "This removes the request and all its subtasks, stories, " +
+      "documents, and cost records. Cannot be undone.",
+    )) return
+    setDeletingRequestId(requestId)
+    try {
+      await api.delete(`/requests/${requestId}`)
+      // If the popup was open on this request, close it.
+      if (popupRequestId === requestId) setPopupRequestId(null)
+      await load()
+    } catch (e: any) {
+      alert(`Delete failed: ${parseDetailMessage(e?.message) || e?.message || "unknown error"}`)
+    } finally {
+      setDeletingRequestId(null)
+    }
+  }
+
+  /** DELETE /documents/:id — single artifact removal. */
+  const handleDeleteDocument = async (
+    documentId: string,
+    title: string,
+  ) => {
+    if (!window.confirm(
+      `Delete document?\n\n${title}\n\n` +
+      "The artifact will be removed from the project. Cannot be undone.",
+    )) return
+    setDeletingDocumentId(documentId)
+    try {
+      await api.delete(`/documents/${documentId}`)
+      await load()
+    } catch (e: any) {
+      alert(`Delete failed: ${parseDetailMessage(e?.message) || e?.message || "unknown error"}`)
+    } finally {
+      setDeletingDocumentId(null)
+    }
+  }
 
   const load = async () => {
     if (!projectId) return
@@ -305,19 +359,35 @@ export function ProjectDetailPage() {
                   {done
                     ? <CheckCircle2 size={14} color="var(--success)" />
                     : <Circle size={14} color="var(--text-muted)" />}
-                  <Link
-                    to={done
-                      ? `/request/${matchedReqId}`
-                      : `/?project_id=${data.project_id}&prefill=${encodeURIComponent(item.description)}&task_type=${item.task_type}&priority=${item.priority}`}
-                    style={{
-                      fontSize: 13,
-                      color: done ? "var(--text-muted)" : "var(--text-primary)",
-                      textDecoration: done ? "line-through" : "none",
-                      flex: 1, minWidth: 0,
-                    }}
-                  >
-                    {item.description}
-                  </Link>
+                  {done && matchedReqId ? (
+                    <button
+                      type="button"
+                      onClick={() => setPopupRequestId(matchedReqId)}
+                      style={{
+                        fontSize: 13,
+                        color: "var(--text-muted)",
+                        textDecoration: "line-through",
+                        flex: 1, minWidth: 0,
+                        background: "transparent", border: "none",
+                        textAlign: "left", padding: 0, cursor: "pointer",
+                        fontFamily: "var(--font)",
+                      }}
+                    >
+                      {item.description}
+                    </button>
+                  ) : (
+                    <Link
+                      to={`/?project_id=${data.project_id}&prefill=${encodeURIComponent(item.description)}&task_type=${item.task_type}&priority=${item.priority}`}
+                      style={{
+                        fontSize: 13,
+                        color: "var(--text-primary)",
+                        textDecoration: "none",
+                        flex: 1, minWidth: 0,
+                      }}
+                    >
+                      {item.description}
+                    </Link>
+                  )}
                   <span style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.5 }}>
                     {item.task_type.replace("_", " ")} · {item.priority}
                   </span>
@@ -340,32 +410,84 @@ export function ProjectDetailPage() {
           <div style={{ color: "var(--text-muted)", fontSize: 13 }}>None yet.</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {data.requests.map((r) => (
-              <Link
-                key={r.request_id}
-                to={`/request/${r.request_id}`}
-                style={{
-                  display: "flex", alignItems: "center", gap: 12,
-                  padding: "8px 12px", borderRadius: "var(--radius)",
-                  background: "var(--bg-hover)", border: "1px solid var(--border)",
-                  textDecoration: "none", color: "inherit", fontSize: 13,
-                }}
-              >
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-muted)", flexShrink: 0 }}>
-                  {r.request_id}
-                </span>
-                <span style={{
-                  flex: 1, color: "var(--text-primary)",
-                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                }}>
-                  {r.description}
-                </span>
-                <span style={{ fontSize: 11, color: "var(--text-muted)", flexShrink: 0 }}>
-                  {new Date(r.created_at).toLocaleDateString()}
-                </span>
-                <StatusBadge status={r.status} />
-              </Link>
-            ))}
+            {data.requests.map((r) => {
+              const terminal = ["completed", "failed", "cancelled"].includes(r.status)
+              const busy = deletingRequestId === r.request_id
+              return (
+                <div
+                  key={r.request_id}
+                  style={{
+                    display: "flex", alignItems: "stretch", gap: 0,
+                    background: "var(--bg-hover)", border: "1px solid var(--border)",
+                    borderRadius: "var(--radius)", overflow: "hidden",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setPopupRequestId(r.request_id)}
+                    style={{
+                      flex: 1, minWidth: 0,
+                      display: "flex", alignItems: "center", gap: 12,
+                      padding: "8px 12px",
+                      background: "transparent", border: "none",
+                      color: "inherit", fontSize: 13, textAlign: "left",
+                      cursor: "pointer", fontFamily: "var(--font)",
+                    }}
+                  >
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-muted)", flexShrink: 0 }}>
+                      {r.request_id}
+                    </span>
+                    <span style={{
+                      flex: 1, color: "var(--text-primary)",
+                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    }}>
+                      {r.description}
+                    </span>
+                    <span style={{ fontSize: 11, color: "var(--text-muted)", flexShrink: 0 }}>
+                      {new Date(r.created_at).toLocaleDateString()}
+                    </span>
+                    <StatusBadge status={r.status} />
+                  </button>
+                  <button
+                    type="button"
+                    title={terminal
+                      ? "Delete this request and all its data"
+                      : `Request is ${r.status} — cancel it before deleting`}
+                    disabled={!terminal || busy}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleDeleteRequest(r.request_id, r.description)
+                    }}
+                    style={{
+                      flexShrink: 0,
+                      display: "inline-flex", alignItems: "center", justifyContent: "center",
+                      width: 36, padding: 0,
+                      background: "transparent",
+                      color: terminal ? "var(--text-muted)" : "var(--text-muted)",
+                      border: "none", borderLeft: "1px solid var(--border)",
+                      cursor: !terminal ? "not-allowed" : busy ? "wait" : "pointer",
+                      opacity: !terminal ? 0.35 : busy ? 0.5 : 1,
+                      transition: "background 0.15s, color 0.15s",
+                      fontFamily: "var(--font)",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (terminal && !busy) {
+                        e.currentTarget.style.background = "color-mix(in srgb, var(--danger) 12%, transparent)"
+                        e.currentTarget.style.color = "var(--danger)"
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "transparent"
+                      e.currentTarget.style.color = "var(--text-muted)"
+                    }}
+                  >
+                    {busy
+                      ? <Loader2 size={13} className="spin" />
+                      : <Trash2 size={13} />}
+                  </button>
+                </div>
+              )
+            })}
           </div>
         )}
       </div>
@@ -398,29 +520,107 @@ export function ProjectDetailPage() {
             Recent documents ({data.recent_documents.length})
           </h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {data.recent_documents.map((d) => (
-              <Link key={d.document_id} to={`/request/${d.request_id}`}
-                style={{
-                  display: "flex", alignItems: "center", gap: 10,
-                  padding: "6px 10px", borderRadius: "var(--radius)",
-                  textDecoration: "none", color: "inherit", fontSize: 12,
-                }}
-              >
-                <FileText size={13} color="var(--accent)" />
-                <span style={{ color: "var(--text-primary)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {d.title}
-                </span>
-                <span style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
-                  v{d.version} · {d.doc_type}
-                </span>
-                <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
-                  {new Date(d.created_at).toLocaleDateString()}
-                </span>
-              </Link>
-            ))}
+            {data.recent_documents.map((d) => {
+              const busy = deletingDocumentId === d.document_id
+              return (
+                <div
+                  key={d.document_id}
+                  style={{
+                    display: "flex", alignItems: "stretch",
+                    borderRadius: "var(--radius)", overflow: "hidden",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setPopupRequestId(d.request_id)}
+                    style={{
+                      flex: 1, minWidth: 0,
+                      display: "flex", alignItems: "center", gap: 10,
+                      padding: "6px 10px",
+                      background: "transparent", border: "none",
+                      textAlign: "left", color: "inherit", fontSize: 12,
+                      cursor: "pointer", fontFamily: "var(--font)",
+                    }}
+                  >
+                    <FileText size={13} color="var(--accent)" />
+                    <span style={{ color: "var(--text-primary)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {d.title}
+                    </span>
+                    <span style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                      v{d.version} · {d.doc_type}
+                    </span>
+                    <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
+                      {new Date(d.created_at).toLocaleDateString()}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    title="Delete this document"
+                    disabled={busy}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleDeleteDocument(d.document_id, d.title)
+                    }}
+                    style={{
+                      flexShrink: 0,
+                      display: "inline-flex", alignItems: "center", justifyContent: "center",
+                      width: 32, padding: 0,
+                      background: "transparent",
+                      color: "var(--text-muted)",
+                      border: "none",
+                      cursor: busy ? "wait" : "pointer",
+                      opacity: busy ? 0.5 : 1,
+                      transition: "background 0.15s, color 0.15s",
+                      fontFamily: "var(--font)",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!busy) {
+                        e.currentTarget.style.background = "color-mix(in srgb, var(--danger) 12%, transparent)"
+                        e.currentTarget.style.color = "var(--danger)"
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "transparent"
+                      e.currentTarget.style.color = "var(--text-muted)"
+                    }}
+                  >
+                    {busy
+                      ? <Loader2 size={12} className="spin" />
+                      : <Trash2 size={12} />}
+                  </button>
+                </div>
+              )
+            })}
           </div>
         </div>
       )}
+
+      {/* ── Popup drill-in (replaces nav to legacy /request/:id) ── */}
+      {popupRequestId && (() => {
+        const r = data.requests.find((x) => x.request_id === popupRequestId)
+        const card: CardData = {
+          id: popupRequestId,
+          task_id: null,
+          request_id: popupRequestId,
+          phase: null,
+          title: r?.description || popupRequestId,
+          description: r?.description || "",
+          type: r?.task_type || null,
+          agent: null,
+          priority: ((r?.priority || "medium") as "high" | "medium" | "low"),
+          status: ((r?.status || "in_progress") as TaskStatus),
+          current_stage: null,
+        }
+        return (
+          <PopupWindow
+            subtitle={popupRequestId}
+            title={card.title}
+            onClose={() => setPopupRequestId(null)}
+          >
+            <TaskDrillIn card={card} />
+          </PopupWindow>
+        )
+      })()}
     </div>
   )
 }
