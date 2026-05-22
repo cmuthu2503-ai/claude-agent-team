@@ -255,6 +255,15 @@ export function ProjectDetailPage() {
                   <ExternalLink size={10} />
                 </a>
               )}
+              {data.project_id !== "proj-unassigned" && (
+                <Link
+                  to={`/stories/project/${data.project_id}`}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--accent)", textDecoration: "none" }}
+                >
+                  <Layers size={12} />
+                  View Board
+                </Link>
+              )}
               {!data.repo_url && data.project_id !== "proj-unassigned" && (
                 <CreateRepoButton projectId={data.project_id} onCreated={load} />
               )}

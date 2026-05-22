@@ -11,8 +11,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Link } from "react-router-dom"
-import { ListChecks, Plus, RefreshCw, CheckCircle2, AlertTriangle, Rocket, ExternalLink, Trash2 } from "lucide-react"
+import { ListChecks, Plus, RefreshCw, CheckCircle2, AlertTriangle, Rocket, Trash2 } from "lucide-react"
 import { api } from "../../lib/api"
 
 interface Task {
@@ -303,6 +302,73 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
     }
   }
 
+  /** Dispatch just the rows the user has check-selected.
+   *
+   * Eligibility (matches the backend's BLD-004 logic):
+   *   - backlog            → dispatch as a new Request
+   *   - failed / cancelled → re-dispatch (gets a fresh request_id;
+   *                          old request stays in History)
+   *   - dispatched / in_progress / review / testing → server returns
+   *                          "already_dispatched" no-op; we list these
+   *                          as "running" in the confirm message
+   *   - deployed           → server returns "already_dispatched" no-op
+   *
+   * Any rows in non-finalized lists are 400'd by the server up front
+   * (shouldn't be reachable from the UI since the table is only
+   * mounted on a finalized list, but we still surface the error). */
+  const dispatchSelected = async () => {
+    if (!tasks) return
+    const selectedTasks = tasks.filter((t) => selectedIds.has(t.task_id))
+    const dispatchable = selectedTasks.filter(
+      (t) =>
+        t.list_status === "finalized" &&
+        (t.task_status === "backlog" ||
+          t.task_status === "failed" ||
+          t.task_status === "cancelled"),
+    )
+    const running = selectedTasks.filter((t) =>
+      ["dispatched", "in_progress", "review", "testing"].includes(t.task_status),
+    )
+    const done = selectedTasks.filter((t) => t.task_status === "deployed")
+    const fresh = dispatchable.filter((t) => t.task_status === "backlog").length
+    const retry = dispatchable.length - fresh
+    if (dispatchable.length === 0) {
+      setError(
+        `None of the ${selectedTasks.length} selected row(s) can be dispatched. ` +
+        (running.length > 0
+          ? `${running.length} already running, `
+          : "") +
+        (done.length > 0 ? `${done.length} already deployed. ` : "") +
+        "Select backlog / failed / cancelled rows to dispatch.",
+      )
+      return
+    }
+    const parts: string[] = []
+    if (fresh > 0) parts.push(`${fresh} fresh dispatch${fresh === 1 ? "" : "es"}`)
+    if (retry > 0) parts.push(`${retry} retry${retry === 1 ? "" : " retries"} (failed/cancelled)`)
+    if (running.length > 0) parts.push(`${running.length} skipped (running)`)
+    if (done.length > 0) parts.push(`${done.length} skipped (deployed)`)
+    if (!window.confirm(
+      `Dispatch ${dispatchable.length} of ${selectedTasks.length} selected task` +
+      `${selectedTasks.length === 1 ? "" : "s"}?\n\n` +
+      "  • " + parts.join("\n  • ") + "\n\n" +
+      "Each new dispatch becomes a Request — workflows run in parallel.",
+    )) return
+    setBusy("dispatching")
+    setError("")
+    try {
+      await api.post(`/projects/${projectId}/build/dispatch`, {
+        task_ids: dispatchable.map((t) => t.task_id),
+      })
+      setSelectedIds(new Set())
+      await load()
+    } catch (e: any) {
+      setError(parseDetail(e?.message) || "Dispatch failed")
+    } finally {
+      setBusy(null)
+    }
+  }
+
   // ── Empty / loading / error states ──────────────────────────────────
   if (busy === "loading") {
     return <Stub><span style={{ color: "var(--text-muted)", fontSize: 13 }}>Loading tasks…</span></Stub>
@@ -343,6 +409,42 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
           Task List {isFinalized ? "(Finalized)" : "(Draft)"} · v{tasks[0]?.list_version} · {tasks.length} task{tasks.length === 1 ? "" : "s"}
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {selectedIds.size > 0 && isFinalized && (() => {
+            // Always shown when something is selected on a finalized list.
+            // Mirrors the "Delete Selected (N)" pattern — N is the total
+            // selection count. The handler itself breaks the selection
+            // into dispatch / retry / skip buckets and surfaces a clear
+            // confirm so the user knows exactly what will fire.
+            // Tooltip gives a per-status preview without opening confirm.
+            const dispatchable = tasks!.filter(
+              (t) =>
+                selectedIds.has(t.task_id) &&
+                (t.task_status === "backlog" ||
+                  t.task_status === "failed" ||
+                  t.task_status === "cancelled"),
+            ).length
+            const titleText = dispatchable === selectedIds.size
+              ? `Dispatch ${selectedIds.size} selected task${selectedIds.size === 1 ? "" : "s"}`
+              : dispatchable === 0
+                ? `None of the ${selectedIds.size} selected row${selectedIds.size === 1 ? "" : "s"} can be dispatched (all are running or deployed). Click for details.`
+                : `${dispatchable} of ${selectedIds.size} selected row${selectedIds.size === 1 ? "" : "s"} will dispatch; the rest are running/deployed and will be skipped.`
+            return (
+              <button
+                type="button"
+                onClick={dispatchSelected}
+                disabled={busy === "dispatching"}
+                style={primaryBtn(busy === "dispatching")}
+                title={titleText}
+              >
+                <Rocket size={12} />
+                <span>
+                  {busy === "dispatching"
+                    ? "Dispatching…"
+                    : `Dispatch Selected (${selectedIds.size})`}
+                </span>
+              </button>
+            )
+          })()}
           {selectedIds.size > 0 && (
             <button
               type="button"
@@ -375,13 +477,9 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
           )}
           {isFinalized && (
             <>
-              <Link
-                to={`/stories/project/${projectId}`}
-                style={{ ...secondaryBtn(false), textDecoration: "none" }}
-              >
-                <ExternalLink size={12} />
-                <span>View Board →</span>
-              </Link>
+              {/* View Board link moved to the project header (next to
+                  "View on GitHub") — it's a project-level navigation
+                  concern, not a task-list-editor toolbar action. */}
               {backlogCount > 0 && (
                 <button
                   type="button"
