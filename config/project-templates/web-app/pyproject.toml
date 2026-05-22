@@ -30,6 +30,21 @@ select = [
     "SIM",  # flake8-simplify
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# Test files routinely use long Sphinx-style coverage docstrings
+# (* US-006 .... :func:`test_long_function_name`) and long parametrize
+# IDs that exceed line-length=100. `ruff format` won't reflow content
+# inside docstrings, so an E501 here means the agent has to manually
+# re-wrap an alignment table — which doesn't even improve readability.
+# Disabling E501 on tests removes a rework-cycle landmine without
+# weakening the source-code line-length gate.
+#
+# Observed in REQ-B55FB8 (T-029e7cfb): agent died after 3 rework
+# cycles all chasing different long lines in the same coverage map.
+"tests/**" = ["E501"]
+"**/tests/**" = ["E501"]
+"conftest.py" = ["E501"]
+
 [tool.ruff.format]
 # Black-compatible defaults. Agents don't need to think about formatting —
 # the file_write / search_replace tools pipe Python content through

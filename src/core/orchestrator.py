@@ -154,8 +154,32 @@ def _enrich_error_with_line_snippets(
 
     if not snippets:
         return error
+    # Detect the "agent only fixes the cited line, next sibling line fires
+    # next cycle" failure class. When ruff cites E501 (or any line-too-long
+    # variant), an alignment table or docstring usually has MORE long lines
+    # nearby — fixing only the cited one wastes a full rework cycle.
+    # REQ-B55FB8 died this way: 3 cycles, lines 13/15/17 all in the same
+    # docstring coverage map.
+    e501_warning = ""
+    if "E501" in error or "Line too long" in error.lower() or "line too long" in error:
+        e501_warning = (
+            "\n\n=== IMPORTANT: SCAN THE WHOLE FILE FOR SIMILAR ISSUES ===\n"
+            "The error cites one line, but lint failures of this class usually\n"
+            "come in clusters (e.g. a docstring alignment table has multiple\n"
+            "long lines; a list of parametrize cases has many over-width\n"
+            "entries). When you re-emit the file:\n"
+            "  • Scan every line for the same violation, not just the cited one.\n"
+            "  • Fix ALL of them in this rework cycle.\n"
+            "  • If the long lines are docstring content that can't be wrapped\n"
+            "    without losing readability (e.g. Sphinx :func: coverage maps),\n"
+            "    append `  # noqa: E501` to each one OR move them out of the\n"
+            "    docstring into a comment block.\n"
+            "MAX_REWORK_CYCLES is 2 — you do not get a 3rd attempt on the\n"
+            "same file.\n"
+        )
     return (
         error
+        + e501_warning
         + "\n\n=== CURRENT FILE CONTENT AT EACH CITED LOCATION ===\n"
         + "(Use this to decide between merging into the existing file, using\n"
         + "`search_replace` for a surgical edit, or re-emitting a full file\n"

@@ -312,6 +312,129 @@ embedded in your prompt. Re-reading wastes a tool turn.
 
 ---
 
+## L11 — E501 on docstring / comment alignment tables
+
+**Signature:**
+```
+E501 Line too long (103 > 100)
+  --> backend/tests/test_dashboard.py:17:101
+   |
+17 | * US-006 null ended_at / unmodified . :func:`test_activity_feed_skips_unended_runs_and_unchanged_tasks`
+   |                                                                                                     ^^^
+```
+
+**Cause:** You wrote a Sphinx-style coverage docstring or a fixed-width
+comment table where one or more rows exceed the project's
+`line-length`. `ruff format` does NOT reflow content inside docstrings
+or comments — it preserves them verbatim. So the auto-format step on
+write let the line through, and the commit-gate `ruff check` flagged it.
+
+**Fix — pick ONE:**
+
+1. **Disable E501 on the file** (preferred for test files):
+   the per-project `pyproject.toml` has `per-file-ignores =
+   {"tests/**" = ["E501"]}` already; if your file isn't matched (e.g.
+   it's under `src/`), add `# noqa: E501` to the end of each long
+   docstring line.
+
+2. **Rewrite the table** with two columns or a list comprehension that
+   ruff CAN wrap:
+   ```python
+   COVERAGE = [
+       ("US-006", "null ended_at / unmodified", "test_activity_feed_skips_..."),
+       ...
+   ]
+   ```
+   Move the prose out of the docstring into a regular Python data
+   structure that ruff can format.
+
+3. **Drop the alignment dots** so the line gets shorter:
+   ```
+   * US-006 null ended_at — :func:`test_activity_feed_skips_unended_runs_and_unchanged_tasks`
+   ```
+
+**Do NOT:**
+- Just fix the one line ruff cited and re-emit. **All sibling long
+  lines in the same docstring will fail next cycle.** See L12.
+- Wrap a `:func:` reference across lines — Sphinx requires it on one
+  line.
+
+**Observed in:** REQ-B55FB8 (T-029e7cfb) — failed after 3 cycles, each
+hitting a different long line in the same `backend/tests/test_dashboard.py`
+coverage docstring.
+
+---
+
+## L12 — Fix ALL similar lint issues in one cycle, not just the cited one
+
+**Signature:** Successive rework cycles each cite a different line in
+the SAME file with the SAME violation (E501 line 13 → 15 → 17 …).
+`MAX_REWORK_CYCLES = 2`, so by cycle 3 you're out of budget and the
+Request goes to `failed`.
+
+**Cause:** Ruff (and pytest, tsc) only cite the FIRST violation it hits
+on each run. When you fix that one line and re-emit, the next run
+finds the next sibling violation. The agent treats each as a separate
+unrelated bug.
+
+**Fix:** When the rework prompt cites a lint failure, treat the cite as
+a CLASS — scan the whole file for the same violation before re-emitting.
+The orchestrator now appends an explicit warning to E501 errors:
+
+```
+=== IMPORTANT: SCAN THE WHOLE FILE FOR SIMILAR ISSUES ===
+...
+MAX_REWORK_CYCLES is 2 — you do not get a 3rd attempt on the same file.
+```
+
+When this warning is present, do not return until you've grepped /
+visually scanned every line in the affected file for the same
+violation pattern. Fix them all in one emission.
+
+**Observed in:** REQ-B55FB8 (T-029e7cfb) — three cycles each cited a
+different line in the same coverage docstring.
+
+---
+
+## L13 — Don't burn iterations on read-only exploration; emit code
+
+**Signature:** `agent_max_iterations_reached iterations=25` followed by
+`materialize_failed error='No code files were produced by any agent'`.
+The trace shows 25 `file_read` / `grep` calls, zero `file_write` or
+`search_replace` calls. Cost: typically $20-$40 of LLM time with no
+output. Then the rework cycle starts and does the same thing.
+
+**Cause:** You spent the whole iteration budget reading existing files
+trying to "understand the codebase" before writing anything. The
+per-agent loop is capped at 25 iterations; if you hit that without
+emitting, the system has nothing to materialize and the rework cycle
+starts from scratch — burning another 25 iterations.
+
+**Fix — budget your reads up front:**
+
+1. **Plan first, read minimally.** Read at most 4-6 files in the first
+   few iterations — the ones the task description directly names. Don't
+   walk the whole tree.
+
+2. **Emit incrementally.** Write your first file by iteration 5-8. If
+   you need to read more context for later files, you can — but the
+   first file should be on disk before iteration 10.
+
+3. **Use `### File: path` blocks in a SINGLE response** for related
+   files (per L08 — orchestrator merges them per-cycle). Don't spread
+   one task across many response turns.
+
+4. **If you genuinely don't have enough context, ASK for it explicitly
+   in your output** rather than reading 20 more files. The supervisor
+   workflow can route a follow-up read to the orchestrator. (TBD —
+   for now, document your read budget in a comment at the top of your
+   first emitted file: `# This file was generated after reading: X, Y, Z`.)
+
+**Observed in:** REQ-270B83 (T-afdfc0c5) cycle 1 — 25 iterations, $27
+in LLM cost, 1.17M input + 100K output tokens, zero files written.
+
+---
+
 ## How to add a new lesson
 
 When a new failure pattern is observed in production:
@@ -342,3 +465,8 @@ When a new failure pattern is observed in production:
   debugging of REQ-D53897 → REQ-A9283B → REQ-F86080 → REQ-BB30E2 →
   REQ-5F25E9 (the first end-to-end success after the materialize
   hook landed in commit `d78de9d`).
+- **2026-05-22** — Added L11 (docstring E501), L12 (multi-line lint
+  failures need whole-file scan), L13 (don't burn 25 iterations on
+  exploration). Observed in REQ-B55FB8 (T-029e7cfb death) and
+  REQ-270B83 (T-afdfc0c5 stuck after iteration-25 burn).
+  Scaffold `pyproject.toml` updated with `per-file-ignores` for tests.
