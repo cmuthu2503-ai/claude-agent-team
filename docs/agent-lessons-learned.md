@@ -504,6 +504,68 @@ including verification that:
 
 ---
 
+## L15 — Token-truncated emissions are the root cause of most "stuck task" deaths
+
+**Signature:** Any of these symptoms repeatedly on the same task:
+- `materialize_failed error='No code files were produced by any agent'`
+  for multiple cycles in a row.
+- Ruff invalid-syntax errors at suspiciously-late line numbers
+  (e.g. line 306 of a test file with no clear bug at that line).
+- A file that ends mid-string-literal, mid-function, or after an
+  unclosed brace.
+- `code_commit_max_rework_cycles_reached` after the agent appeared
+  to "try" each cycle.
+
+**Root cause:** Until 2026-05-22, code-writing agents had a default
+`max_tokens=8192`. That's roughly 800-1000 lines of Python output
+per response. Realistic feature tasks emit 1500-5000 lines across
+multiple files in a single `### File: …` response. The model would
+get cut off mid-emission; the response would parse with the early
+files intact and the last file truncated (or missing entirely).
+Subsequent rework cycles re-hit the same cap → same truncation point
+→ same "fix" → same failure. T-6144cc94 (CrewAI orchestrator)
+died this way **four times in a row** before the cap was raised.
+
+**The fix (already deployed):**
+- Code-writing agents now default to `max_tokens=32_000` (Opus 4.7's
+  actual ceiling). Engages the streaming path. Gives ~3-5K LOC of
+  headroom per response.
+- `stop_reason="max_tokens"` is now logged at WARN with the agent_id,
+  iteration, and token counts so future truncation is debuggable
+  from the trace, not just inferable.
+
+**Implication for the agent:**
+
+1. **You have room.** Don't pre-emptively truncate or split your
+   emission across multiple turns just because it feels long. 32K
+   tokens covers the realistic worst case for one task.
+
+2. **But if your task scope is genuinely huge** (>3K LOC across
+   files), split your emission across multiple **tool calls** within
+   the same dispatch — call `file_write` once per file rather than
+   stuffing everything into one final `### File:` block response.
+   Each tool call is a separate response with its own token budget.
+
+3. **If you see "Your previous response was truncated at max_tokens"
+   in your rework prompt, you must change strategy** — emit fewer
+   files this cycle, or move to incremental `file_write` /
+   `search_replace` tool calls. Re-emitting the same content guarantees
+   the same truncation.
+
+4. **A "No code files produced" warning means your response had no
+   `### File:` blocks at all.** Either you spent the whole response
+   on prose explanation (don't — emit code) OR your response was
+   truncated BEFORE you got to any file blocks. Restructure so
+   `### File:` blocks come EARLY in your response, not at the end.
+
+**Observed in:** T-6144cc94 (Phase 4: CrewAI orchestrator service)
+killed across 4 dispatches (REQ-A6A4DB, REQ-DD8610, REQ-34CAD2, plus
+an earlier attempt). Each cycle truncated at a different line of an
+8,260-line emission target. Closed by `tests/test_agent_max_tokens.py`
+(10 pinned behaviors verifying 32K for code agents, 8K otherwise).
+
+---
+
 ## How to add a new lesson
 
 When a new failure pattern is observed in production:
@@ -551,3 +613,11 @@ When a new failure pattern is observed in production:
   out-of-order imports, etc.) are now stripped at write-time
   unconditionally. Agents only see the rework loop for REAL semantic
   errors. Test count: 6 → 9.
+- **2026-05-22 (deep RCA)** — Added L15 (token truncation is the root
+  cause of most "stuck task" deaths). T-6144cc94 was failing across
+  4 dispatches with shifting surface errors (F401 cycles 1-3 of
+  REQ-A6A4DB, "no code produced" on REQ-DD8610 cycles 0-1, broken
+  syntax on REQ-34CAD2 cycle 2). Common cause: 8K default max_tokens
+  truncated the multi-file emission. Code-writing agents now default
+  to 32K (engages streaming). `stop_reason='max_tokens'` is logged
+  explicitly so future truncations are debuggable from the trace.

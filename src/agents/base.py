@@ -100,10 +100,35 @@ class BaseAgent(ABC):
         all_text_outputs: list[str] = []
 
         for _iteration in range(max_iterations):
-            response = await self._call_anthropic(messages, tool_schemas)
+            # Pass the per-agent max_tokens default. Code-writing agents
+            # get 32K (engages streaming) so multi-file emissions don't
+            # truncate; other agents stay at the 8K default to keep the
+            # non-streaming path fast.
+            response = await self._call_anthropic(
+                messages, tool_schemas,
+                max_tokens=self._default_max_tokens(),
+            )
             llm_calls += 1
             total_input_tokens += response.get("input_tokens", 0)
             total_output_tokens += response.get("output_tokens", 0)
+            # Surface truncation explicitly. When the model hits the
+            # max_tokens cap the response is incomplete — log it so
+            # the agent's failure is debuggable from the trace.
+            stop_reason = response.get("stop_reason")
+            if stop_reason == "max_tokens":
+                logger.warning(
+                    "agent_response_truncated_at_max_tokens",
+                    agent=self.agent_id, request_id=request_id,
+                    iteration=_iteration,
+                    output_tokens=response.get("output_tokens", 0),
+                    max_tokens=self._default_max_tokens(),
+                    hint=(
+                        "The response was cut off at the token cap. The "
+                        "next rework cycle will see the truncated emission. "
+                        "If this is a code agent, the file likely ends "
+                        "mid-statement and ruff will flag invalid syntax."
+                    ),
+                )
 
             text = response.get("text", "")
             if text.strip():
@@ -257,6 +282,36 @@ class BaseAgent(ABC):
         "devops_specialist",
     })
 
+    # Default max_tokens budget for the tool-use loop's LLM calls.
+    # Code-writing agents emit multi-file ``### File:`` blocks in a
+    # single response — at 8192 tokens (~800-1000 LOC) the response
+    # gets truncated mid-emission for any non-trivial task. The
+    # T-6144cc94 RCA showed this killed 4 dispatches in a row:
+    # mid-string-literal cuts at line 306, missing closing braces,
+    # and "no code files produced" outcomes. 32K is Opus 4.7's
+    # actual max output; it engages the streaming path (above the
+    # 16K _STREAMING_MAX_TOKENS_THRESHOLD) which the Anthropic SDK
+    # requires for long generations.
+    _CODE_AGENT_MAX_TOKENS = 32_000
+    _DEFAULT_MAX_TOKENS = 8192
+
+    def _default_max_tokens(self) -> int:
+        """Per-agent default max_tokens for the tool-use loop.
+
+        Code-writing agents (the same set that consumes the lessons
+        doc) emit large multi-file blocks per response. They need
+        room — 32K engages streaming and gives ~3-5K LOC of output
+        per response, enough for the realistic feature-size tasks
+        the orchestrator dispatches.
+
+        Other agents (PRD, user stories, etc.) stay at 8K — their
+        outputs are short structured documents and the lower cap
+        keeps non-streaming latency low for the orchestrator loop.
+        """
+        if self.agent_id in self._LESSONS_CONSUMER_AGENTS:
+            return self._CODE_AGENT_MAX_TOKENS
+        return self._DEFAULT_MAX_TOKENS
+
     def _load_cross_agent_lessons(self) -> str:
         """Load docs/agent-lessons-learned.md and wrap it for inclusion
         in the system prompt. Soft-fails (returns "") if the file is
@@ -408,6 +463,11 @@ class BaseAgent(ABC):
                     "content": response.content,
                     "input_tokens": response.usage.input_tokens,
                     "output_tokens": response.usage.output_tokens,
+                    # Surfaced so the tool-use loop can detect cap-hit
+                    # truncation. "max_tokens" means the response was
+                    # incomplete; "end_turn" / "tool_use" / "stop_sequence"
+                    # mean the model finished cleanly.
+                    "stop_reason": getattr(response, "stop_reason", None),
                 }
 
             except _asyncio.TimeoutError:
