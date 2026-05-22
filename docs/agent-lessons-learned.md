@@ -435,6 +435,46 @@ in LLM cost, 1.17M input + 100K output tokens, zero files written.
 
 ---
 
+## L14 — Unused imports are auto-stripped on write (you don't have to fix them)
+
+**Signature:** This used to be a recurring death:
+```
+F401 [*] `re` imported but unused
+  --> backend/app/services/crew_orchestrator.py:37:8
+F401 [*] `pydantic.ValidationError` imported but unused
+  --> backend/app/services/crew_orchestrator.py:42:22
+```
+
+**Why it died agents repeatedly:** REQ-A6A4DB hit this on 3 successive
+rework cycles — the agent re-emitted the same file with the same
+unused imports each time, even though the rework prompt cited both
+lines explicitly. The agent's "I'll fix it" intention didn't actually
+translate to removing the lines.
+
+**What changed (2026-05-22):** the write-time auto-format pipeline
+now runs `ruff check --fix --select F401,F811,I001 -` BEFORE
+`ruff format -`. This strips:
+  - F401: unused imports
+  - F811: redefined unused names
+  - I001: unsorted import block
+
+These are all `[*]` auto-fixable categories — ruff considers them
+semantically safe. The agent never sees these errors anymore;
+emissions land on disk with the unused imports already removed.
+
+**Implication for the agent:**
+- Don't manually try to remove unused imports — even if you accidentally
+  added `import re` thinking you'd use it later, it's gone by the time
+  the file lands.
+- Import ORDER doesn't matter — I001 sorts them deterministically.
+- Re-exports via `__all__` are preserved (F401 respects __all__).
+
+**Observed in:** REQ-A6A4DB (T-6144cc94, "Build CrewAI orchestrator
+service") died after 3 cycles all citing the same two unused imports.
+Closed by `tests/test_ruff_autofix.py::test_strips_unused_imports`.
+
+---
+
 ## How to add a new lesson
 
 When a new failure pattern is observed in production:
@@ -470,3 +510,8 @@ When a new failure pattern is observed in production:
   exploration). Observed in REQ-B55FB8 (T-029e7cfb death) and
   REQ-270B83 (T-afdfc0c5 stuck after iteration-25 burn).
   Scaffold `pyproject.toml` updated with `per-file-ignores` for tests.
+- **2026-05-22 (later)** — Added L14 (unused imports auto-stripped on
+  write). Auto-format pipeline now runs `ruff check --fix --select
+  F401,F811,I001` BEFORE `ruff format`. Closes REQ-A6A4DB's failure
+  class (3 cycles all citing the same F401 imports). Regression test
+  in `tests/test_ruff_autofix.py`.

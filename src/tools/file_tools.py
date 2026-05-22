@@ -39,30 +39,84 @@ _RUFF_FORMAT_TIMEOUT_S = 15
 
 async def _maybe_ruff_format(path: Path, content: str) -> tuple[str, bool]:
     """If `path` is a .py file and `ruff` is on PATH, pipe `content` through
-    `ruff format -` and return the reformatted text. SOFT-FAIL: any error
+    two ruff passes and return the cleaned text. SOFT-FAIL: any error
     (ruff missing, parse error, timeout) returns the original content with
     `was_formatted=False` so the write never fails because of formatting.
 
-    Why this exists: agents repeatedly emit long lines that pass their own
-    "<100 char" mental rule but fail the project's actual ruff config
-    (E501). Formatting on write means the agent doesn't have to count
-    columns — ruff wraps lines to the project's `line-length` setting
-    automatically. Knocks out a large class of rework cycles before the
-    commit gate even runs.
+    Two passes (both stdin → stdout, no on-disk writes):
+
+      1. ``ruff check --fix --select F401,F811,I001 -`` — strips the
+         AUTO-FIXABLE [*] violations that ``ruff format`` does NOT
+         touch. Specifically:
+           • F401 — unused imports (the one that killed REQ-A6A4DB
+             after 3 cycles — agent emitted ``import re`` + ``from
+             pydantic import ValidationError`` without using them, and
+             the rework prompt couldn't talk it into removing them).
+           • F811 — redefined unused names.
+           • I001 — unsorted/unformatted import block.
+         These are all SEMANTICALLY SAFE: removing an unused import or
+         sorting one doesn't change runtime behaviour. We do NOT pass
+         a generic ``--fix`` — that would also apply non-safe fixes.
+
+      2. ``ruff format -`` — reflows whitespace and quoting to the
+         project's `line-length` setting. Knocks out E501 (line too
+         long) which was the original motivation for this function.
+
+    Why both: ``ruff format`` is purely a formatter — it does not touch
+    semantics, even for trivially-safe ones like unused imports.
+    Adding the ``check --fix`` pass closes the gap so the commit-gate
+    never sees these classes of error.
 
     Returns:
         (content, was_formatted). When was_formatted is False, content is
-        the original unchanged input.
+        the original unchanged input. True when EITHER pass changed
+        something — the caller doesn't care which.
     """
     if path.suffix != ".py":
         return content, False
     try:
+        any_change = False
+        cwd = str(path.parent)  # so ruff finds the nearest pyproject.toml
+
+        # ── Pass 1: ruff check --fix for safe categories ──
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ruff", "check",
+                "--fix",
+                "--select", "F401,F811,I001",
+                "--exit-zero",  # don't error on remaining (non-fixable) lints
+                "-",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+            )
+            stdout, _stderr = await asyncio.wait_for(
+                proc.communicate(input=content.encode("utf-8")),
+                timeout=_RUFF_FORMAT_TIMEOUT_S,
+            )
+            if proc.returncode == 0 and stdout:
+                fixed = stdout.decode("utf-8")
+                if fixed and fixed != content:
+                    content = fixed
+                    any_change = True
+        except asyncio.TimeoutError:
+            # Lint-fix pass hung — kill it and fall through to format.
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:  # noqa: BLE001
+                pass
+            logger.warning("ruff_check_fix_timeout", path=str(path))
+            # Don't bail — still try the format pass below.
+
+        # ── Pass 2: ruff format ──
         proc = await asyncio.create_subprocess_exec(
             "ruff", "format", "-",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=str(path.parent),  # so ruff finds the nearest pyproject.toml
+            cwd=cwd,
         )
         try:
             stdout, _stderr = await asyncio.wait_for(
@@ -73,7 +127,7 @@ async def _maybe_ruff_format(path: Path, content: str) -> tuple[str, bool]:
             proc.kill()
             await proc.wait()
             logger.warning("ruff_format_timeout", path=str(path))
-            return content, False
+            return (content, any_change)
         if proc.returncode == 0 and stdout:
             formatted = stdout.decode("utf-8")
             if formatted and formatted != content:
@@ -81,7 +135,7 @@ async def _maybe_ruff_format(path: Path, content: str) -> tuple[str, bool]:
         # Non-zero exit usually means the file isn't parseable as Python
         # (e.g. agent is mid-emission and emitted broken syntax). Don't
         # block the write — let the commit-gate's ruff CHECK surface it.
-        return content, False
+        return content, any_change
     except FileNotFoundError:
         # ruff not installed in this environment — leave content alone.
         return content, False
