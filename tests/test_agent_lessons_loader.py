@@ -156,7 +156,9 @@ def test_missing_lessons_doc_soft_fails(tmp_path, monkeypatch):
 
 def test_lessons_doc_truncated_above_30kb(tmp_path, monkeypatch):
     """Hard cap so a runaway doc edit can't blow the agent's prompt
-    budget. Above 30KB the loader truncates with a clear marker."""
+    budget. Above the cap (raised 30KB → 50KB on 2026-05-22 once L17
+    pushed the real doc to 33KB) the loader truncates with a clear
+    marker."""
     # Write a giant fake doc into a tmp tree with the right shape
     fake_repo = tmp_path / "fake_repo"
     fake_repo.mkdir()
@@ -165,7 +167,7 @@ def test_lessons_doc_truncated_above_30kb(tmp_path, monkeypatch):
     fake_agent_module.write_text("# fake module\n")
     docs_dir = fake_repo / "docs"
     docs_dir.mkdir()
-    giant = "L99 — runaway doc.\n" + "X" * 50_000
+    giant = "L99 — runaway doc.\n" + "X" * 80_000
     (docs_dir / "agent-lessons-learned.md").write_text(giant)
 
     # Monkey-patch __file__ so the loader's parents[2] points at our fake repo
@@ -174,8 +176,8 @@ def test_lessons_doc_truncated_above_30kb(tmp_path, monkeypatch):
         agent = _make_agent("backend_specialist")
         out = agent._load_cross_agent_lessons()
     assert "truncated" in out.lower()
-    # Sanity: actual content is bounded
-    assert len(out) < 35_000
+    # Sanity: actual content is bounded near the cap.
+    assert len(out) < 55_000
 
 
 # ── Loader reads fresh on each call (no caching) ─────────────────────────────

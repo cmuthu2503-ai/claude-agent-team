@@ -376,9 +376,13 @@ class BaseAgent(ABC):
                 return ""
             text = lessons_path.read_text(encoding="utf-8")
             # Hard cap so a runaway doc edit doesn't blow the prompt
-            # budget. 30KB ≈ 8K tokens, plenty for the global lessons.
-            if len(text) > 30_000:
-                text = text[:30_000] + "\n\n[... truncated; trim docs/agent-lessons-learned.md]"
+            # budget. Was 30KB; raised to 50KB on 2026-05-22 after L17
+            # tipped the doc to 33KB and started truncating the
+            # maintenance log. 50KB ≈ 13K tokens — still <7% of Opus
+            # 4.7's 200K context. Catches runaway edits without
+            # silently dropping recent lessons.
+            if len(text) > 50_000:
+                text = text[:50_000] + "\n\n[... truncated; trim docs/agent-lessons-learned.md]"
             return (
                 "=== CROSS-AGENT LESSONS LEARNED (read this BEFORE acting on the task) ===\n"
                 "This is the canonical record of failure patterns we've observed in\n"
