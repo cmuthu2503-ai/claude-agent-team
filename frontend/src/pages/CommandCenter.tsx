@@ -8,6 +8,7 @@ import { RefreshButton } from "../components/ui/RefreshButton"
 import { useAuthStore } from "../stores/auth"
 import { CreateProjectModal, type CreatedProject } from "../components/projects/CreateProjectModal"
 import { ProjectChip } from "../components/projects/ProjectChip"
+import { BuildChatPanel } from "../components/projects/BuildChatPanel"
 import { PopupWindow } from "../components/board/PopupWindow"
 import { TaskDrillIn } from "../components/board/TaskDrillIn"
 import type { CardData, TaskStatus } from "../components/board/types"
@@ -535,6 +536,29 @@ export function CommandCenterPage() {
           </button>
         </div>
       </div>
+
+      {/* Build Chat — project-driven orchestrator conversation. Lives
+          right under the one-off request form so both interaction
+          surfaces sit at the top of the page. Keyed on the same
+          projectId the form uses — switching the project in the
+          dropdown swaps both the form's target AND this chat's
+          transcript. Hidden when no project is picked or when the
+          immutable Unassigned project is selected (build chat has
+          no meaning there — no PRD, no task list, no orchestrator
+          context to talk to). */}
+      {projectId && projectId !== "proj-unassigned" && (
+        <section>
+          <h2 style={{ color: "var(--text-primary)", fontSize: 18, fontWeight: 600, marginBottom: 12 }}>
+            <span className="ch-section-idx" aria-hidden="true">00</span>
+            Build Chat
+            <span className="ch-section-meta" aria-hidden="true">
+              · project-driven orchestrator
+            </span>
+          </h2>
+          <div className="ch-section-underline" aria-hidden="true" />
+          <BuildChatPanel projectId={projectId} />
+        </section>
+      )}
 
       {/* Active Requests */}
       {active.length > 0 && (
