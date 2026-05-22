@@ -532,8 +532,12 @@ export function CommandCenterPage() {
           {/* PM-PHASE4: bumped min card width 300 → 380 so the new ProjectChip
               in the header strip doesn't get crowded against the StatusBadge +
               Cancel button at typical 2-cards-per-row layouts. Cards drop to
-              1 per row only on very narrow viewports. */}
-          <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fill, minmax(380px, 1fr))" }}>
+              1 per row only on very narrow viewports.
+              2026-05-22: auto-fill → auto-fit so a single in-flight request
+              stretches across the full available width instead of leaving
+              2-3 empty grid tracks to its right. With multiple cards the
+              behaviour is identical (still wraps at minmax-380px). */}
+          <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))" }}>
             {active.map((r) => (
               <div
                 key={r.request_id}
