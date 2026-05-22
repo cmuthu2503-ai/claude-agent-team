@@ -6,6 +6,7 @@ this module works without git installed in the container.
 """
 
 import asyncio
+import hashlib
 import re
 import uuid
 from datetime import datetime
@@ -135,6 +136,15 @@ class CodeWriter:
         self.state = state
         self.root = Path(project_root)
         self.github = GitHubPublisher()
+        # Drop-guard loop detection. Maps (request_id, file_path) →
+        # sha256(content) of the LAST emission that the drop guard
+        # rejected. Populated whenever the guard fires; consulted on
+        # the next call so we can detect byte-identical re-emission
+        # (the failure pattern from T-103e9025 / REQ-FEC71B where the
+        # agent emitted the same 275-line shrink three cycles in a
+        # row). Cleared per-request when materialize_files succeeds
+        # so a fresh dispatch of the same task starts clean.
+        self._recent_drop_rejections: dict[tuple[str, str], str] = {}
 
     async def commit_code(
         self,
@@ -292,6 +302,7 @@ class CodeWriter:
                     continue
                 files = self._parse_and_write_files(
                     output_text, agent_id, root=effective_root,
+                    request_id=request_id,
                 )
                 all_file_content.update(files)
                 logger.info(
@@ -439,6 +450,19 @@ class CodeWriter:
                     request_id=request_id, test_files=test_files_written,
                 )
 
+            # Materialize succeeded — clear any drop-guard rejection
+            # hashes we accumulated for this request so a future task
+            # re-using the same request_id (re-dispatch path) starts
+            # fresh. Without this, a legitimate edit that happens to
+            # hash to a previously-rejected emission would be wrongly
+            # flagged as a loop.
+            keys_to_clear = [
+                k for k in self._recent_drop_rejections
+                if k[0] == request_id
+            ]
+            for k in keys_to_clear:
+                del self._recent_drop_rejections[k]
+
             return all_file_content
 
         except CodeWriteError:
@@ -580,6 +604,7 @@ class CodeWriter:
         output_text: str,
         agent_id: str,
         root: Path | None = None,
+        request_id: str = "",
     ) -> dict[str, str]:
         """Parse code blocks with file paths from agent output, validate every
         one against the snapshot guard, THEN write to disk atomically (all-or-nothing).
@@ -626,6 +651,7 @@ class CodeWriter:
                     agent_id=agent_id,
                     old_text=old_text,
                     new_text=content_with_newline,
+                    request_id=request_id,
                 )
 
             validated.append((full_path, file_path, content_with_newline))
@@ -641,12 +667,13 @@ class CodeWriter:
 
         return files_written
 
-    @staticmethod
     def _validate_safe_overwrite(
+        self,
         file_path: str,
         agent_id: str,
         old_text: str,
         new_text: str,
+        request_id: str = "",
     ) -> None:
         """Refuse to overwrite an existing file if the new content looks like a
         patch fragment or a suspicious truncation.
@@ -710,6 +737,47 @@ class CodeWriter:
                         old_lines=old_lines, new_lines=new_lines,
                         drop_pct=round(drop_pct, 1),
                     )
+                    # ── Same-content loop detection ──
+                    # If the agent submitted byte-identical content for the
+                    # same (request_id, file_path) on the previous cycle, the
+                    # rework prompt has clearly failed to change behaviour.
+                    # Escalate with a much louder message so the agent has
+                    # a different (more actionable) prompt next cycle. This
+                    # closes T-103e9025's failure class — 3 cycles all
+                    # emitting the same 275-line shrink of a 764-line file.
+                    new_hash = hashlib.sha256(new_text.encode("utf-8")).hexdigest()
+                    key = (request_id, file_path) if request_id else None
+                    if key and self._recent_drop_rejections.get(key) == new_hash:
+                        logger.error(
+                            "code_writer_drop_guard_loop_detected",
+                            file=file_path, agent=agent_id,
+                            request_id=request_id,
+                            old_lines=old_lines, new_lines=new_lines,
+                        )
+                        raise CodeWriteError(
+                            f"🚨 DROP-GUARD LOOP for '{file_path}': you submitted "
+                            f"BYTE-IDENTICAL content twice in a row that shrinks "
+                            f"the file from {old_lines} → {new_lines} lines "
+                            f"({drop_pct:.0f}% reduction). The previous cycle's "
+                            f"rejection message already explained the fix — "
+                            f"re-emitting the same bytes will fail again every "
+                            f"cycle until you run out of budget.\n\n"
+                            f"YOU MUST CHANGE STRATEGY THIS TURN. Pick exactly ONE:\n"
+                            f"  (A) Use `search_replace` (not `### File:` blocks) "
+                            f"for the specific edit you want. search_replace is "
+                            f"diff-based and bypasses this guard entirely.\n"
+                            f"  (B) Re-read the existing file via `file_read` FIRST, "
+                            f"then emit a FULL rewrite that includes every line you "
+                            f"don't intend to delete. The current file has "
+                            f"{old_lines} lines; your last two emissions had "
+                            f"{new_lines}. That gap is what needs to disappear.\n\n"
+                            f"Identical content on the next cycle will be treated "
+                            f"as a permanent failure (no further rework granted)."
+                        )
+                    # First-time rejection: remember the hash so we can
+                    # detect a repeat next cycle.
+                    if key:
+                        self._recent_drop_rejections[key] = new_hash
                     # Message designed to be consumed by the rework agent.
                     # Lists three concrete options + tells the agent that
                     # the current on-disk content will be appended by the

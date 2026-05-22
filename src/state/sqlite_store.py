@@ -1,6 +1,7 @@
 """SQLite implementation of StateStore — WAL mode for crash safety."""
 
 import json
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -436,7 +437,26 @@ CREATE INDEX IF NOT EXISTS idx_deploy_decisions_project_status
 class SQLiteStateStore(StateStore):
     """SQLite-backed state store with WAL mode for crash safety."""
 
-    def __init__(self, db_path: str = "data/agent_team.db") -> None:
+    def __init__(self, db_path: str | None = None) -> None:
+        # Resolution order mirrors src/main.py — `CREWAI_DB_PATH` wins so
+        # the docker-compose path `/app/data/crewai.db` (on the
+        # `crewai_data` named volume) is picked up automatically when
+        # callers instantiate the store with no explicit argument
+        # (tests, scripts, etc.). Falls back to `./data/agent_team.db`
+        # so non-Docker local invocations keep working unchanged.
+        if db_path is None:
+            db_path = (
+                os.environ.get("CREWAI_DB_PATH")
+                or os.environ.get("AIAGENT_DB_PATH")
+                or os.environ.get("DATABASE_PATH")
+                or "data/agent_team.db"
+            )
+        # Ensure the parent dir exists eagerly so a caller writing
+        # outside the normal `initialize()` path (e.g. ad-hoc tooling
+        # that opens the connection directly) doesn't hit ENOENT.
+        parent = os.path.dirname(db_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         self.db_path = db_path
         self._db: aiosqlite.Connection | None = None
 
@@ -463,7 +483,6 @@ class SQLiteStateStore(StateStore):
             await self._db.execute("PRAGMA journal_mode=DELETE")
             await self._db.execute("PRAGMA foreign_keys=ON")
         return self._db
-
 
     async def initialize(self) -> None:
         db = await self._get_db()
@@ -544,8 +563,7 @@ class SQLiteStateStore(StateStore):
             # quirks ("tests are slow, prefer restart over rebuild" etc.)
             # which we feed into the prompt as additional context.
             "ALTER TABLE projects ADD COLUMN last_deploy_commit_sha TEXT",
-            "ALTER TABLE projects ADD COLUMN deploy_judge_preferences TEXT "
-            "  NOT NULL DEFAULT ''",
+            "ALTER TABLE projects ADD COLUMN deploy_judge_preferences TEXT   NOT NULL DEFAULT ''",
             # AI Deploy Judge (per-project) — Phase 4. When the user clicks
             # Apply / Override, the backend writes the chosen action here
             # AND flips deploy_status to pending_deploy. The supervisor's
@@ -593,7 +611,10 @@ class SQLiteStateStore(StateStore):
         # any pre-existing requests that don't have a project yet. Idempotent —
         # the INSERT is gated on a SELECT, the UPDATE is a no-op once every
         # request has a project_id.
-        from src.models.base import UNASSIGNED_PROJECT_ID  # local import — model file imports nothing from us, no cycle
+        from src.models.base import (
+            UNASSIGNED_PROJECT_ID,
+        )  # local import — model file imports nothing from us, no cycle
+
         async with db.execute(
             "SELECT 1 FROM projects WHERE project_id = ?", (UNASSIGNED_PROJECT_ID,)
         ) as cur:
@@ -709,6 +730,15 @@ class SQLiteStateStore(StateStore):
         so we delete children explicitly in dependency order inside a single
         transaction. Nothing is raised if rows don't exist — the operation is
         idempotent by design so the caller can re-try a failed delete safely.
+
+        The project_tasks back-link (``project_tasks.request_id``) is NULLed
+        rather than deleted — the task row itself remains as a record. The
+        task keeps its ``task_status`` (e.g. 'failed') so the user still
+        sees that it was dispatched once; the dangling pointer is just
+        cleared so the task popup can't try to fetch a deleted request.
+        Without this, REQ-FEC71B's DELETE on 2026-05-22 left T-103e9025
+        pointing at a row that no longer existed — the popup loaded but
+        couldn't render the agent timeline or commit info.
         """
         db = await self._get_db()
         # Children of stories must go before stories themselves
@@ -735,6 +765,12 @@ class SQLiteStateStore(StateStore):
             "notifications",
         ):
             await db.execute(f"DELETE FROM {table} WHERE request_id=?", (request_id,))
+        # Project-task back-link: null it out so the task survives but the
+        # pointer to the deleted request goes away. Idempotent.
+        await db.execute(
+            "UPDATE project_tasks SET request_id=NULL WHERE request_id=?",
+            (request_id,),
+        )
         # Finally the request itself
         await db.execute("DELETE FROM requests WHERE request_id=?", (request_id,))
         await db.commit()
@@ -763,9 +799,7 @@ class SQLiteStateStore(StateStore):
             created_by=row["created_by"],
             created_at=datetime.fromisoformat(row["created_at"]),
             completed_at=(
-                datetime.fromisoformat(row["completed_at"])
-                if row["completed_at"]
-                else None
+                datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None
             ),
             estimated_cost_usd=row["estimated_cost_usd"],
             actual_cost_usd=row["actual_cost_usd"],
@@ -836,8 +870,7 @@ class SQLiteStateStore(StateStore):
     async def get_active_subtasks(self) -> list[Subtask]:
         db = await self._get_db()
         async with db.execute(
-            "SELECT * FROM subtasks WHERE status = ? "
-            "ORDER BY started_at IS NULL, started_at DESC",
+            "SELECT * FROM subtasks WHERE status = ? ORDER BY started_at IS NULL, started_at DESC",
             (SubtaskStatus.IN_PROGRESS,),
         ) as cursor:
             rows = await cursor.fetchall()
@@ -852,9 +885,7 @@ class SQLiteStateStore(StateStore):
             input_artifacts=json.loads(row["input_artifacts"]) if row["input_artifacts"] else [],
             output_artifacts=json.loads(row["output_artifacts"]) if row["output_artifacts"] else [],
             output_text=row["output_text"] if "output_text" in row.keys() else "",
-            started_at=(
-                datetime.fromisoformat(row["started_at"]) if row["started_at"] else None
-            ),
+            started_at=(datetime.fromisoformat(row["started_at"]) if row["started_at"] else None),
             completed_at=(
                 datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None
             ),
@@ -911,9 +942,15 @@ class SQLiteStateStore(StateStore):
                 assigned_agent, coverage_pct, github_issue_number)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                story.story_id, story.request_id, story.title, story.description,
-                story.status, story.priority, story.assigned_agent,
-                story.coverage_pct, story.github_issue_number,
+                story.story_id,
+                story.request_id,
+                story.title,
+                story.description,
+                story.status,
+                story.priority,
+                story.assigned_agent,
+                story.coverage_pct,
+                story.github_issue_number,
             ),
         )
         await db.commit()
@@ -927,10 +964,14 @@ class SQLiteStateStore(StateStore):
             rows = await cursor.fetchall()
         return [
             Story(
-                story_id=r["story_id"], request_id=r["request_id"],
-                title=r["title"], description=r["description"] or "",
-                status=r["status"], priority=r["priority"],
-                assigned_agent=r["assigned_agent"], coverage_pct=r["coverage_pct"],
+                story_id=r["story_id"],
+                request_id=r["request_id"],
+                title=r["title"],
+                description=r["description"] or "",
+                status=r["status"],
+                priority=r["priority"],
+                assigned_agent=r["assigned_agent"],
+                coverage_pct=r["coverage_pct"],
                 github_issue_number=r["github_issue_number"],
             )
             for r in rows
@@ -941,8 +982,13 @@ class SQLiteStateStore(StateStore):
         await db.execute(
             """UPDATE stories SET status=?, assigned_agent=?, coverage_pct=?,
                github_issue_number=? WHERE story_id=?""",
-            (story.status, story.assigned_agent, story.coverage_pct,
-             story.github_issue_number, story.story_id),
+            (
+                story.status,
+                story.assigned_agent,
+                story.coverage_pct,
+                story.github_issue_number,
+                story.story_id,
+            ),
         )
         await db.commit()
 
@@ -955,8 +1001,13 @@ class SQLiteStateStore(StateStore):
                (ac_id, story_id, criterion_text, given_clause, when_clause, then_clause, is_met)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
-                ac.ac_id, ac.story_id, ac.criterion_text,
-                ac.given_clause, ac.when_clause, ac.then_clause, ac.is_met,
+                ac.ac_id,
+                ac.story_id,
+                ac.criterion_text,
+                ac.given_clause,
+                ac.when_clause,
+                ac.then_clause,
+                ac.is_met,
             ),
         )
         await db.commit()
@@ -970,7 +1021,8 @@ class SQLiteStateStore(StateStore):
             rows = await cursor.fetchall()
         return [
             AcceptanceCriterion(
-                ac_id=r["ac_id"], story_id=r["story_id"],
+                ac_id=r["ac_id"],
+                story_id=r["story_id"],
                 criterion_text=r["criterion_text"],
                 given_clause=r["given_clause"] or "",
                 when_clause=r["when_clause"] or "",
@@ -1003,14 +1055,14 @@ class SQLiteStateStore(StateStore):
 
     async def get_test_cases_for_story(self, story_id: str) -> list[TestCase]:
         db = await self._get_db()
-        async with db.execute(
-            "SELECT * FROM test_cases WHERE story_id = ?", (story_id,)
-        ) as cursor:
+        async with db.execute("SELECT * FROM test_cases WHERE story_id = ?", (story_id,)) as cursor:
             rows = await cursor.fetchall()
         return [
             TestCase(
-                test_id=r["test_id"], story_id=r["story_id"],
-                name=r["name"], status=r["status"],
+                test_id=r["test_id"],
+                story_id=r["story_id"],
+                name=r["name"],
+                status=r["status"],
                 last_run_at=r["last_run_at"],
             )
             for r in rows
@@ -1035,12 +1087,18 @@ class SQLiteStateStore(StateStore):
                 template_id, selected_variant_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                session.session_id, session.user_id,
+                session.session_id,
+                session.user_id,
                 session.created_at.isoformat(),
-                session.use_case, session.target_audience,
-                session.desired_output, session.tone, session.constraints,
+                session.use_case,
+                session.target_audience,
+                session.desired_output,
+                session.tone,
+                session.constraints,
                 json.dumps(session.options),
-                session.provider, session.template_id, session.selected_variant_id,
+                session.provider,
+                session.template_id,
+                session.selected_variant_id,
             ),
         )
         await db.commit()
@@ -1087,18 +1145,21 @@ class SQLiteStateStore(StateStore):
                 prompt_text, techniques, feedback_applied, generated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                variant.variant_id, variant.session_id, variant.iteration,
-                variant.variant_index, variant.approach, variant.prompt_text,
-                json.dumps(variant.techniques), variant.feedback_applied,
+                variant.variant_id,
+                variant.session_id,
+                variant.iteration,
+                variant.variant_index,
+                variant.approach,
+                variant.prompt_text,
+                json.dumps(variant.techniques),
+                variant.feedback_applied,
                 variant.generated_at.isoformat(),
             ),
         )
         await db.commit()
         return variant.variant_id
 
-    async def get_prompt_variants_for_session(
-        self, session_id: str
-    ) -> list[PromptVariant]:
+    async def get_prompt_variants_for_session(self, session_id: str) -> list[PromptVariant]:
         db = await self._get_db()
         async with db.execute(
             """SELECT * FROM prompt_variants
@@ -1158,8 +1219,13 @@ class SQLiteStateStore(StateStore):
                 must_change_password, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                user.user_id, user.username, user.email, password_hash,
-                user.role, user.is_active, user.must_change_password,
+                user.user_id,
+                user.username,
+                user.email,
+                password_hash,
+                user.role,
+                user.is_active,
+                user.must_change_password,
                 user.created_at.isoformat(),
             ),
         )
@@ -1175,8 +1241,11 @@ class SQLiteStateStore(StateStore):
         if not row:
             return None
         user = User(
-            user_id=row["user_id"], username=row["username"], email=row["email"],
-            role=UserRole(row["role"]), is_active=bool(row["is_active"]),
+            user_id=row["user_id"],
+            username=row["username"],
+            email=row["email"],
+            role=UserRole(row["role"]),
+            is_active=bool(row["is_active"]),
             must_change_password=bool(row["must_change_password"]),
             created_at=datetime.fromisoformat(row["created_at"]),
             last_login_at=(
@@ -1187,15 +1256,16 @@ class SQLiteStateStore(StateStore):
 
     async def get_user(self, user_id: str) -> User | None:
         db = await self._get_db()
-        async with db.execute(
-            "SELECT * FROM users WHERE user_id = ?", (user_id,)
-        ) as cursor:
+        async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
             row = await cursor.fetchone()
         if not row:
             return None
         return User(
-            user_id=row["user_id"], username=row["username"], email=row["email"],
-            role=UserRole(row["role"]), is_active=bool(row["is_active"]),
+            user_id=row["user_id"],
+            username=row["username"],
+            email=row["email"],
+            role=UserRole(row["role"]),
+            is_active=bool(row["is_active"]),
             must_change_password=bool(row["must_change_password"]),
             created_at=datetime.fromisoformat(row["created_at"]),
             last_login_at=(
@@ -1209,8 +1279,11 @@ class SQLiteStateStore(StateStore):
             rows = await cursor.fetchall()
         return [
             User(
-                user_id=r["user_id"], username=r["username"], email=r["email"],
-                role=UserRole(r["role"]), is_active=bool(r["is_active"]),
+                user_id=r["user_id"],
+                username=r["username"],
+                email=r["email"],
+                role=UserRole(r["role"]),
+                is_active=bool(r["is_active"]),
                 must_change_password=bool(r["must_change_password"]),
                 created_at=datetime.fromisoformat(r["created_at"]),
                 last_login_at=(
@@ -1226,7 +1299,10 @@ class SQLiteStateStore(StateStore):
             """UPDATE users SET email=?, role=?, is_active=?,
                must_change_password=?, last_login_at=? WHERE user_id=?""",
             (
-                user.email, user.role, user.is_active, user.must_change_password,
+                user.email,
+                user.role,
+                user.is_active,
+                user.must_change_password,
                 user.last_login_at.isoformat() if user.last_login_at else None,
                 user.user_id,
             ),
@@ -1251,8 +1327,11 @@ class SQLiteStateStore(StateStore):
                 previous_deploy_id, deployed_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
-                deployment.deploy_id, deployment.request_id, deployment.git_sha,
-                deployment.environment, deployment.status,
+                deployment.deploy_id,
+                deployment.request_id,
+                deployment.git_sha,
+                deployment.environment,
+                deployment.status,
                 deployment.previous_deploy_id,
                 deployment.deployed_at.isoformat() if deployment.deployed_at else None,
             ),
@@ -1300,9 +1379,12 @@ class SQLiteStateStore(StateStore):
 
     def _row_to_deployment(self, row: aiosqlite.Row) -> Deployment:
         return Deployment(
-            deploy_id=row["deploy_id"], request_id=row["request_id"],
-            git_sha=row["git_sha"], environment=row["environment"],
-            status=row["status"], previous_deploy_id=row["previous_deploy_id"],
+            deploy_id=row["deploy_id"],
+            request_id=row["request_id"],
+            git_sha=row["git_sha"],
+            environment=row["environment"],
+            status=row["status"],
+            previous_deploy_id=row["previous_deploy_id"],
             deployed_at=(
                 datetime.fromisoformat(row["deployed_at"]) if row["deployed_at"] else None
             ),
@@ -1324,10 +1406,15 @@ class SQLiteStateStore(StateStore):
                 request_id, link_url, user_id, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                notification.notification_id, notification.event_id,
-                notification.severity, notification.title, notification.message,
-                notification.request_id, notification.link_url,
-                notification.user_id, notification.created_at.isoformat(),
+                notification.notification_id,
+                notification.event_id,
+                notification.severity,
+                notification.title,
+                notification.message,
+                notification.request_id,
+                notification.link_url,
+                notification.user_id,
+                notification.created_at.isoformat(),
             ),
         )
         await db.commit()
@@ -1351,13 +1438,19 @@ class SQLiteStateStore(StateStore):
             rows = await cursor.fetchall()
         return [
             Notification(
-                notification_id=r["notification_id"], event_id=r["event_id"],
-                severity=r["severity"], title=r["title"], message=r["message"],
-                request_id=r["request_id"], link_url=r["link_url"],
+                notification_id=r["notification_id"],
+                event_id=r["event_id"],
+                severity=r["severity"],
+                title=r["title"],
+                message=r["message"],
+                request_id=r["request_id"],
+                link_url=r["link_url"],
                 user_id=r["user_id"],
                 created_at=datetime.fromisoformat(r["created_at"]),
                 read_at=(datetime.fromisoformat(r["read_at"]) if r["read_at"] else None),
-                dismissed_at=(datetime.fromisoformat(r["dismissed_at"]) if r["dismissed_at"] else None),
+                dismissed_at=(
+                    datetime.fromisoformat(r["dismissed_at"]) if r["dismissed_at"] else None
+                ),
             )
             for r in rows
         ]
@@ -1390,9 +1483,15 @@ class SQLiteStateStore(StateStore):
                 project_artifact_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                usage.usage_id, usage.request_id, usage.subtask_id,
-                usage.agent_id, usage.model, usage.input_tokens,
-                usage.output_tokens, usage.cost_usd, usage.recorded_at.isoformat(),
+                usage.usage_id,
+                usage.request_id,
+                usage.subtask_id,
+                usage.agent_id,
+                usage.model,
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cost_usd,
+                usage.recorded_at.isoformat(),
                 usage.project_artifact_id,
             ),
         )
@@ -1406,10 +1505,14 @@ class SQLiteStateStore(StateStore):
             rows = await cursor.fetchall()
         return [
             TokenUsage(
-                usage_id=r["usage_id"], request_id=r["request_id"],
-                subtask_id=r["subtask_id"], agent_id=r["agent_id"],
-                model=r["model"], input_tokens=r["input_tokens"],
-                output_tokens=r["output_tokens"], cost_usd=r["cost_usd"],
+                usage_id=r["usage_id"],
+                request_id=r["request_id"],
+                subtask_id=r["subtask_id"],
+                agent_id=r["agent_id"],
+                model=r["model"],
+                input_tokens=r["input_tokens"],
+                output_tokens=r["output_tokens"],
+                cost_usd=r["cost_usd"],
                 recorded_at=datetime.fromisoformat(r["recorded_at"]),
             )
             for r in rows
@@ -1443,8 +1546,11 @@ class SQLiteStateStore(StateStore):
             """INSERT INTO metrics (metric_id, metric_name, metric_value, labels, recorded_at)
                VALUES (?, ?, ?, ?, ?)""",
             (
-                metric.metric_id, metric.metric_name, metric.metric_value,
-                json.dumps(metric.labels), metric.recorded_at.isoformat(),
+                metric.metric_id,
+                metric.metric_name,
+                metric.metric_value,
+                json.dumps(metric.labels),
+                metric.recorded_at.isoformat(),
             ),
         )
         await db.commit()
@@ -1457,9 +1563,16 @@ class SQLiteStateStore(StateStore):
                 input_tokens, output_tokens, status, started_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                trace.trace_id, trace.request_id, trace.agent_id, trace.subtask_id,
-                trace.llm_calls, trace.tool_calls, trace.input_tokens,
-                trace.output_tokens, trace.status, trace.started_at.isoformat(),
+                trace.trace_id,
+                trace.request_id,
+                trace.agent_id,
+                trace.subtask_id,
+                trace.llm_calls,
+                trace.tool_calls,
+                trace.input_tokens,
+                trace.output_tokens,
+                trace.status,
+                trace.started_at.isoformat(),
             ),
         )
         await db.commit()
@@ -1471,11 +1584,16 @@ class SQLiteStateStore(StateStore):
                output_tokens=?, status=?, completed_at=?, duration_ms=?, error_message=?
                WHERE trace_id=? AND subtask_id=?""",
             (
-                trace.llm_calls, trace.tool_calls, trace.input_tokens,
-                trace.output_tokens, trace.status,
+                trace.llm_calls,
+                trace.tool_calls,
+                trace.input_tokens,
+                trace.output_tokens,
+                trace.status,
                 trace.completed_at.isoformat() if trace.completed_at else None,
-                trace.duration_ms, trace.error_message,
-                trace.trace_id, trace.subtask_id,
+                trace.duration_ms,
+                trace.error_message,
+                trace.trace_id,
+                trace.subtask_id,
             ),
         )
         await db.commit()
@@ -1489,9 +1607,15 @@ class SQLiteStateStore(StateStore):
                (document_id, request_id, doc_type, title, content, agent_id, version, tags, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                doc.document_id, doc.request_id, doc.doc_type, doc.title,
-                doc.content, doc.agent_id, doc.version,
-                json.dumps(doc.tags), doc.created_at.isoformat(),
+                doc.document_id,
+                doc.request_id,
+                doc.doc_type,
+                doc.title,
+                doc.content,
+                doc.agent_id,
+                doc.version,
+                json.dumps(doc.tags),
+                doc.created_at.isoformat(),
             ),
         )
         await db.commit()
@@ -1527,7 +1651,9 @@ class SQLiteStateStore(StateStore):
         conditions = []
         params: list = []
         for kw in keywords[:5]:  # Max 5 keywords
-            conditions.append("(LOWER(title) LIKE ? OR LOWER(content) LIKE ? OR LOWER(tags) LIKE ?)")
+            conditions.append(
+                "(LOWER(title) LIKE ? OR LOWER(content) LIKE ? OR LOWER(tags) LIKE ?)"
+            )
             params.extend([f"%{kw}%", f"%{kw}%", f"%{kw}%"])
 
         where = " AND ".join(conditions)
@@ -1548,8 +1674,11 @@ class SQLiteStateStore(StateStore):
             """UPDATE documents SET title=?, content=?, version=?, tags=?, updated_at=?
                WHERE document_id=?""",
             (
-                doc.title, doc.content, doc.version,
-                json.dumps(doc.tags), datetime.utcnow().isoformat(),
+                doc.title,
+                doc.content,
+                doc.version,
+                json.dumps(doc.tags),
+                datetime.utcnow().isoformat(),
                 doc.document_id,
             ),
         )
@@ -1563,9 +1692,7 @@ class SQLiteStateStore(StateStore):
         single DELETE is safe.
         """
         db = await self._get_db()
-        cursor = await db.execute(
-            "DELETE FROM documents WHERE document_id = ?", (document_id,)
-        )
+        cursor = await db.execute("DELETE FROM documents WHERE document_id = ?", (document_id,))
         await db.commit()
         return (cursor.rowcount or 0) > 0
 
@@ -1580,9 +1707,7 @@ class SQLiteStateStore(StateStore):
             version=row["version"],
             tags=json.loads(row["tags"]) if row["tags"] else [],
             created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=(
-                datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
-            ),
+            updated_at=(datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None),
         )
 
     # ── Projects ─────────────────────────────────
@@ -1600,20 +1725,30 @@ class SQLiteStateStore(StateStore):
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                        ?, ?, ?, ?, ?, ?, ?)""",
             (
-                project.project_id, project.name, project.description,
-                project.status, project.color, project.icon,
+                project.project_id,
+                project.name,
+                project.description,
+                project.status,
+                project.color,
+                project.icon,
                 json.dumps(project.tags),
-                project.lead_user_id, project.repo_url, project.default_team,
+                project.lead_user_id,
+                project.repo_url,
+                project.default_team,
                 project.target_date.isoformat() if project.target_date else None,
-                project.template_id, project.created_by,
+                project.template_id,
+                project.created_by,
                 project.created_at.isoformat(),
                 str(project.kind),
                 project.deploy_backend_port,
                 project.deploy_frontend_port,
                 str(project.deploy_status),
                 project.deploy_url,
-                (project.deploy_last_started_at.isoformat()
-                 if project.deploy_last_started_at else None),
+                (
+                    project.deploy_last_started_at.isoformat()
+                    if project.deploy_last_started_at
+                    else None
+                ),
                 project.deploy_error,
             ),
         )
@@ -1640,6 +1775,7 @@ class SQLiteStateStore(StateStore):
             PROJECT_BACKEND_PORT_BASE,
             PROJECT_FRONTEND_PORT_BASE,
         )
+
         db = await self._get_db()
         await db.execute("BEGIN IMMEDIATE")
         try:
@@ -1681,10 +1817,7 @@ class SQLiteStateStore(StateStore):
         # Sort by updated_at then created_at, both desc — matches the
         # "Last activity" default sort on the Projects list page (PUI-001).
         if include_archived:
-            sql = (
-                "SELECT * FROM projects "
-                "ORDER BY COALESCE(updated_at, created_at) DESC"
-            )
+            sql = "SELECT * FROM projects ORDER BY COALESCE(updated_at, created_at) DESC"
             params: tuple = ()
         else:
             sql = (
@@ -1705,9 +1838,15 @@ class SQLiteStateStore(StateStore):
                  target_date = ?, template_id = ?, updated_at = ?
                WHERE project_id = ?""",
             (
-                project.name, project.description, project.status,
-                project.color, project.icon, json.dumps(project.tags),
-                project.lead_user_id, project.repo_url, project.default_team,
+                project.name,
+                project.description,
+                project.status,
+                project.color,
+                project.icon,
+                json.dumps(project.tags),
+                project.lead_user_id,
+                project.repo_url,
+                project.default_team,
                 project.target_date.isoformat() if project.target_date else None,
                 project.template_id,
                 datetime.utcnow().isoformat(),
@@ -1721,16 +1860,10 @@ class SQLiteStateStore(StateStore):
         await db.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
         await db.commit()
 
-    async def find_project_by_name(
-        self, name: str, active_only: bool = True
-    ) -> Project | None:
+    async def find_project_by_name(self, name: str, active_only: bool = True) -> Project | None:
         db = await self._get_db()
         if active_only:
-            sql = (
-                "SELECT * FROM projects "
-                "WHERE LOWER(name) = LOWER(?) AND status = ? "
-                "LIMIT 1"
-            )
+            sql = "SELECT * FROM projects WHERE LOWER(name) = LOWER(?) AND status = ? LIMIT 1"
             params: tuple = (name, ProjectStatus.ACTIVE)
         else:
             sql = "SELECT * FROM projects WHERE LOWER(name) = LOWER(?) LIMIT 1"
@@ -1742,8 +1875,7 @@ class SQLiteStateStore(StateStore):
     async def get_requests_for_project(self, project_id: str) -> list[Request]:
         db = await self._get_db()
         async with db.execute(
-            "SELECT * FROM requests WHERE project_id = ? "
-            "ORDER BY created_at DESC",
+            "SELECT * FROM requests WHERE project_id = ? ORDER BY created_at DESC",
             (project_id,),
         ) as cursor:
             rows = await cursor.fetchall()
@@ -1796,14 +1928,16 @@ class SQLiteStateStore(StateStore):
                     files = []
             except (ValueError, TypeError):
                 files = []
-            out.append({
-                "request_id": r["request_id"],
-                "commit_sha": r["commit_sha"],
-                "description": (r["description"] or "")[:200],
-                "files": files,
-                "file_count": len(files),
-                "completed_at": r["completed_at"],
-            })
+            out.append(
+                {
+                    "request_id": r["request_id"],
+                    "commit_sha": r["commit_sha"],
+                    "description": (r["description"] or "")[:200],
+                    "files": files,
+                    "file_count": len(files),
+                    "completed_at": r["completed_at"],
+                }
+            )
         return out
 
     async def count_requests_for_project(self, project_id: str) -> dict[str, int]:
@@ -1812,8 +1946,7 @@ class SQLiteStateStore(StateStore):
         non-terminal status."""
         db = await self._get_db()
         async with db.execute(
-            "SELECT status, COUNT(*) AS n FROM requests "
-            "WHERE project_id = ? GROUP BY status",
+            "SELECT status, COUNT(*) AS n FROM requests WHERE project_id = ? GROUP BY status",
             (project_id,),
         ) as cursor:
             rows = await cursor.fetchall()
@@ -1859,9 +1992,7 @@ class SQLiteStateStore(StateStore):
             template_id=row["template_id"],
             created_by=row["created_by"],
             created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=(
-                datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
-            ),
+            updated_at=(datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None),
             kind=_opt("kind", "web-app"),
             deploy_backend_port=_opt("deploy_backend_port"),
             deploy_frontend_port=_opt("deploy_frontend_port"),
@@ -1952,8 +2083,7 @@ class SQLiteStateStore(StateStore):
         always')."""
         db = await self._get_db()
         await db.execute(
-            "UPDATE projects SET deploy_judge_preferences = ?, updated_at = ? "
-            "WHERE project_id = ?",
+            "UPDATE projects SET deploy_judge_preferences = ?, updated_at = ? WHERE project_id = ?",
             (preferences or "", datetime.utcnow().isoformat(), project_id),
         )
         await db.commit()
@@ -1992,18 +2122,15 @@ class SQLiteStateStore(StateStore):
                     else None
                 ),
                 decision.created_at.isoformat(),
-                (
-                    decision.applied_at.isoformat()
-                    if decision.applied_at is not None
-                    else None
-                ),
+                (decision.applied_at.isoformat() if decision.applied_at is not None else None),
             ),
         )
         await db.commit()
         return decision.decision_id
 
     async def get_latest_pending_decision(
-        self, project_id: str,
+        self,
+        project_id: str,
     ) -> DeployDecision | None:
         db = await self._get_db()
         async with db.execute(
@@ -2051,7 +2178,9 @@ class SQLiteStateStore(StateStore):
         await db.commit()
 
     async def list_recent_overrides(
-        self, project_id: str, limit: int = 5,
+        self,
+        project_id: str,
+        limit: int = 5,
     ) -> list[DeployDecision]:
         db = await self._get_db()
         async with db.execute(
@@ -2078,10 +2207,7 @@ class SQLiteStateStore(StateStore):
             status=row["status"],
             overridden_action=row["overridden_action"],
             created_at=datetime.fromisoformat(row["created_at"]),
-            applied_at=(
-                datetime.fromisoformat(row["applied_at"])
-                if row["applied_at"] else None
-            ),
+            applied_at=(datetime.fromisoformat(row["applied_at"]) if row["applied_at"] else None),
         )
 
     # ── Project Artifacts (PDB-04) ───────────────
@@ -2128,17 +2254,14 @@ class SQLiteStateStore(StateStore):
             params: tuple = (project_id, str(kind))
         else:
             sql = (
-                "SELECT * FROM project_artifacts "
-                "WHERE project_id = ? AND kind = ? AND version = ?"
+                "SELECT * FROM project_artifacts WHERE project_id = ? AND kind = ? AND version = ?"
             )
             params = (project_id, str(kind), version)
         async with db.execute(sql, params) as cursor:
             row = await cursor.fetchone()
         return self._row_to_artifact(row) if row else None
 
-    async def list_artifacts(
-        self, project_id: str, kind: ArtifactKind
-    ) -> list[ProjectArtifact]:
+    async def list_artifacts(self, project_id: str, kind: ArtifactKind) -> list[ProjectArtifact]:
         db = await self._get_db()
         async with db.execute(
             "SELECT * FROM project_artifacts "
@@ -2213,9 +2336,7 @@ class SQLiteStateStore(StateStore):
             row = await cursor.fetchone()
         return self._row_to_artifact(row) if row else None
 
-    async def delete_artifacts(
-        self, project_id: str, kind: ArtifactKind
-    ) -> int:
+    async def delete_artifacts(self, project_id: str, kind: ArtifactKind) -> int:
         """Hard-delete every artifact row matching (project_id, kind).
         Returns the row count for the API response so the UI can show
         'Deleted N versions.' Used by ``DELETE /projects/:id/prd``."""
@@ -2263,9 +2384,7 @@ class SQLiteStateStore(StateStore):
             content=row["content"] or "",
             created_by=row["created_by"],
             created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=(
-                datetime.fromisoformat(updated_at_raw) if updated_at_raw else None
-            ),
+            updated_at=(datetime.fromisoformat(updated_at_raw) if updated_at_raw else None),
             finalized_at=(
                 datetime.fromisoformat(row["finalized_at"]) if row["finalized_at"] else None
             ),
@@ -2285,11 +2404,19 @@ class SQLiteStateStore(StateStore):
                 review_input)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                task.task_id, task.project_id, task.list_version,
-                str(task.list_status), task.ordinal, task.title,
-                task.description, task.task_type, task.priority,
-                task.estimated_agent, str(task.task_status),
-                task.request_id, 1 if task.amended else 0,
+                task.task_id,
+                task.project_id,
+                task.list_version,
+                str(task.list_status),
+                task.ordinal,
+                task.title,
+                task.description,
+                task.task_type,
+                task.priority,
+                task.estimated_agent,
+                str(task.task_status),
+                task.request_id,
+                1 if task.amended else 0,
                 task.created_at.isoformat(),
                 task.updated_at.isoformat() if task.updated_at else None,
                 task.review_input,
@@ -2334,11 +2461,7 @@ class SQLiteStateStore(StateStore):
             where.append("list_status = ?")
             params.append(str(list_status))
 
-        sql = (
-            "SELECT * FROM project_tasks WHERE "
-            + " AND ".join(where)
-            + " ORDER BY ordinal ASC"
-        )
+        sql = "SELECT * FROM project_tasks WHERE " + " AND ".join(where) + " ORDER BY ordinal ASC"
         async with db.execute(sql, tuple(params)) as cursor:
             rows = await cursor.fetchall()
         return [self._row_to_task(r) for r in rows]
@@ -2355,8 +2478,13 @@ class SQLiteStateStore(StateStore):
         """Whitelisted PATCH — silently ignores unknown keys to keep the
         route layer free of awkward field-by-field plumbing."""
         allowed = {
-            "title", "description", "task_type", "priority",
-            "estimated_agent", "ordinal", "amended",
+            "title",
+            "description",
+            "task_type",
+            "priority",
+            "estimated_agent",
+            "ordinal",
+            "amended",
         }
         sets = []
         params: list = []
@@ -2405,16 +2533,12 @@ class SQLiteStateStore(StateStore):
             )
         else:
             await db.execute(
-                "UPDATE project_tasks "
-                "SET task_status = ?, updated_at = ? "
-                "WHERE task_id = ?",
+                "UPDATE project_tasks SET task_status = ?, updated_at = ? WHERE task_id = ?",
                 (str(task_status), now_iso, task_id),
             )
         await db.commit()
 
-    async def finalize_task_list(
-        self, project_id: str, list_version: int
-    ) -> None:
+    async def finalize_task_list(self, project_id: str, list_version: int) -> None:
         """Atomic flip per PDB-15: archive any other finalized list_version
         for this project, then mark every row of `list_version` as finalized."""
         db = await self._get_db()
@@ -2423,8 +2547,12 @@ class SQLiteStateStore(StateStore):
             await db.execute(
                 "UPDATE project_tasks SET list_status = ? "
                 "WHERE project_id = ? AND list_status = ? AND list_version != ?",
-                (str(ArtifactStatus.ARCHIVED), project_id,
-                 str(ArtifactStatus.FINALIZED), list_version),
+                (
+                    str(ArtifactStatus.ARCHIVED),
+                    project_id,
+                    str(ArtifactStatus.FINALIZED),
+                    list_version,
+                ),
             )
             await db.execute(
                 "UPDATE project_tasks SET list_status = ? "
@@ -2436,20 +2564,15 @@ class SQLiteStateStore(StateStore):
             await db.rollback()
             raise
 
-    async def archive_task_list(
-        self, project_id: str, list_version: int
-    ) -> None:
+    async def archive_task_list(self, project_id: str, list_version: int) -> None:
         db = await self._get_db()
         await db.execute(
-            "UPDATE project_tasks SET list_status = ? "
-            "WHERE project_id = ? AND list_version = ?",
+            "UPDATE project_tasks SET list_status = ? WHERE project_id = ? AND list_version = ?",
             (str(ArtifactStatus.ARCHIVED), project_id, list_version),
         )
         await db.commit()
 
-    async def delete_task_list_draft(
-        self, project_id: str, list_version: int
-    ) -> None:
+    async def delete_task_list_draft(self, project_id: str, list_version: int) -> None:
         db = await self._get_db()
         await db.execute(
             "DELETE FROM project_tasks "
@@ -2493,9 +2616,7 @@ class SQLiteStateStore(StateStore):
             amended=bool(row["amended"]),
             review_input=review_input,
             created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=(
-                datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
-            ),
+            updated_at=(datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None),
         )
 
     # ── Build Session Messages (PDB-33) ──────────
@@ -2598,9 +2719,13 @@ class SQLiteStateStore(StateStore):
                 files_committed, started_at, rollback_sha)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                state.deployment_id, state.request_id, state.commit_sha,
-                state.current_step, json.dumps(state.step_history),
-                json.dumps(state.files_committed), state.started_at.isoformat(),
+                state.deployment_id,
+                state.request_id,
+                state.commit_sha,
+                state.current_step,
+                json.dumps(state.step_history),
+                json.dumps(state.files_committed),
+                state.started_at.isoformat(),
                 state.rollback_sha,
             ),
         )
@@ -2644,12 +2769,14 @@ class SQLiteStateStore(StateStore):
                files_committed=?, updated_at=?, completed_at=?, error_message=?, rollback_sha=?
                WHERE deployment_id=?""",
             (
-                state.commit_sha, state.current_step,
+                state.commit_sha,
+                state.current_step,
                 json.dumps(state.step_history),
                 json.dumps(state.files_committed),
                 datetime.utcnow().isoformat(),
                 state.completed_at.isoformat() if state.completed_at else None,
-                state.error_message, state.rollback_sha,
+                state.error_message,
+                state.rollback_sha,
                 state.deployment_id,
             ),
         )
@@ -2672,9 +2799,7 @@ class SQLiteStateStore(StateStore):
             step_history=json.loads(row["step_history"]) if row["step_history"] else [],
             files_committed=json.loads(row["files_committed"]) if row["files_committed"] else [],
             started_at=datetime.fromisoformat(row["started_at"]),
-            updated_at=(
-                datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
-            ),
+            updated_at=(datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None),
             completed_at=(
                 datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None
             ),
@@ -2684,4 +2809,3 @@ class SQLiteStateStore(StateStore):
             strategy_reasoning=_safe_get("strategy_reasoning") or "",
             risk=_safe_get("risk") or "",
         )
-

@@ -625,6 +625,92 @@ compile errors are NOT misclassified).
 
 ---
 
+## L17 — Re-emitting the same shrunken file is a guaranteed loop death
+
+**Signature:** Drop-guard rejections that all look identical across cycles:
+```
+materialize_failed error="Refusing to overwrite
+'frontend/src/components/projects/ProjectFormModal.tsx': line count
+dropped from 764 to 275 (64% reduction). ..."
+```
+…repeated 2-3 times for the SAME file with the SAME numbers. The
+rework prompt cited the issue, listed the three fixes (MERGE / SURGICAL
+/ SPLIT), the agent re-emitted byte-identical content, drop guard
+rejected again. T-103e9025 died this way after 3 cycles all emitting
+the exact same 275-line shrink.
+
+**What changed (2026-05-22, after REQ-FEC71B):**
+
+`CodeWriter` now **fingerprints every drop-guard rejection** with a
+sha256 of the rejected emission per `(request_id, file_path)`. When
+the SAME content comes back on the next cycle, the validator raises
+a **much louder, much more actionable** error message:
+
+```
+🚨 DROP-GUARD LOOP for 'X': you submitted BYTE-IDENTICAL content
+twice in a row that shrinks the file from N → M lines.
+The previous cycle's rejection message already explained the fix —
+re-emitting the same bytes will fail again every cycle until you run
+out of budget.
+
+YOU MUST CHANGE STRATEGY THIS TURN. Pick exactly ONE:
+  (A) Use search_replace (not ### File: blocks) for the specific
+      edit you want. search_replace is diff-based and bypasses
+      this guard entirely.
+  (B) Re-read the existing file via file_read FIRST, then emit a
+      FULL rewrite that includes every line you don't intend to
+      delete. The current file has {N} lines; your last two
+      emissions had {M}. That gap is what needs to disappear.
+
+Identical content on the next cycle will be treated as a permanent
+failure (no further rework granted).
+```
+
+The cache is per-request and self-clears on successful materialize,
+so re-dispatching the same task is unaffected.
+
+**Implication for the agent:**
+
+1. **If you see the LOOP message in your rework prompt, you are
+   one cycle from permanent failure.** Switch strategy immediately —
+   the path you've tried twice does not work.
+
+2. **`search_replace` is your safest bet for a partial edit.**
+   It's diff-based and the drop guard doesn't apply. Use it when
+   you want to change a function body, fix a few imports, or
+   inject a new method into an existing class.
+
+3. **For a true full rewrite, `file_read` the existing file FIRST**
+   and reconcile your new emission against it. The most common cause
+   of this loop is the agent emitting what it THINKS the file should
+   look like without ever reading what's actually on disk.
+
+4. **Do NOT add "rest unchanged" / "rest stays the same" comments
+   to a `### File:` block** — the marker check catches those and
+   you'll fail for a different reason. CodeWriter does whole-file
+   replacement; partial content silently deletes the rest.
+
+**Bonus fix (data integrity):** `delete_request()` now also nulls
+`project_tasks.request_id` for any task that pointed at the deleted
+request. Previously a DELETE left dangling pointers; the task popup
+would load but fail to render review/test/commit data because the
+referenced request no longer existed. This isn't an agent issue —
+it's a backend cleanup — but if you see a task whose popup is blank
+where it should show history, the back-link is the culprit.
+
+**Observed in:** T-103e9025 (Phase 7: Projects Management UI —
+Build projects list page). 3 cycles all emitted 275-line ProjectFormModal.tsx
+(file was 764 lines on disk). Each cycle's rework prompt cited the
+drop-guard rejection. The agent's response titles across cycles all
+referenced "Looking at this conversation, I can see that…" suggesting
+context confusion. Closed by `tests/test_drop_guard_loop.py` (6 pinned
+behaviors verifying the escalation triggers ONLY on byte-identical
+re-emissions for the same request_id+file_path) and
+`tests/test_delete_request_cascade.py` (3 tests verifying the
+back-link nulling cascade).
+
+---
+
 ## How to add a new lesson
 
 When a new failure pattern is observed in production:
@@ -688,3 +774,12 @@ When a new failure pattern is observed in production:
   failures, etc. as retryable and waits 5/15/30/60/120s between
   attempts (~4 min cumulative). Test: `test_transient_network_retry.py`
   (13 patterns).
+- **2026-05-22 (drop-guard loop kill)** — Added L17 (same-shrunk-file
+  re-emission). T-103e9025 (REQ-FEC71B) died after 3 cycles each
+  emitting byte-identical 275-line shrink of a 764-line file. The
+  drop guard now sha256-fingerprints rejections per (request_id,
+  file_path) and escalates with a much louder error on a repeat.
+  Also fixed `delete_request()` to null the project_tasks.request_id
+  back-link — the DELETE was leaving dangling pointers that broke
+  the task popup. Tests: `test_drop_guard_loop.py` (6) +
+  `test_delete_request_cascade.py` (3).
