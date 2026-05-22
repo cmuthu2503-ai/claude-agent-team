@@ -25,6 +25,23 @@ from src.tools.file_tools import _maybe_ruff_format
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture(autouse=True)
+def _project_pyproject(tmp_path: Path) -> None:
+    """Drop a ``pyproject.toml`` into ``tmp_path`` so ruff picks up the
+    same selection a real per-project tree would. Without this, ruff
+    invoked with no ``--select`` falls back to its DEFAULT rules
+    (only E + F), and tests for I001 / UP / SIM categories silently
+    no-op. The content matches the platform's scaffold templates.
+    """
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.ruff]\n'
+        'line-length = 100\n'
+        'target-version = "py312"\n\n'
+        '[tool.ruff.lint]\n'
+        'select = ["E", "W", "F", "I", "N", "UP", "B", "SIM"]\n'
+    )
+
+
 async def test_strips_unused_imports(tmp_path: Path) -> None:
     """REQ-A6A4DB repro: `import re` + `from pydantic import ValidationError`
     were never referenced; agent failed 3 rework cycles unable to remove
@@ -103,3 +120,62 @@ async def test_keeps_explicit_reexports(tmp_path: Path) -> None:
     )
     out, _ = await _maybe_ruff_format(tmp_path / "__init__.py", src)
     assert "from os.path import join" in out
+
+
+# ── Broad auto-fix coverage (the "basic compilation errors" class) ───────────
+
+
+async def test_strips_unused_imports_alongside_non_fixable_errors(tmp_path: Path) -> None:
+    """`--exit-zero` is critical: when a file has BOTH an auto-fixable
+    issue (F401) AND a non-fixable issue (e.g. undefined name F821),
+    ruff exits non-zero. Without --exit-zero the auto-fix would be
+    skipped entirely and the agent would have to fix BOTH manually.
+    With --exit-zero, the F401 gets cleaned up and only the real
+    error surfaces to the rework loop.
+    """
+    src = (
+        "import os\n"           # unused (auto-fixable F401)
+        "import json\n"         # used below
+        "\n"
+        "print(json.dumps({'x': undefined_variable}))\n"  # F821 — NOT auto-fixable
+    )
+    out, _ = await _maybe_ruff_format(tmp_path / "x.py", src)
+    # F401 stripped:
+    assert "import os" not in out
+    # F821 left for the rework loop — `undefined_variable` still there
+    assert "undefined_variable" in out
+    # Used import preserved:
+    assert "import json" in out
+
+
+async def test_does_NOT_apply_unsafe_fixes(tmp_path: Path) -> None:
+    """E711 (`== None` → `is None`) is marked UNSAFE by ruff — a
+    weird ``__eq__`` override could change behaviour. We deliberately
+    don't pass ``--unsafe-fixes``, so this stays in the source for the
+    rework loop / agent to address. Pinning this so a future "enable
+    --unsafe-fixes" change is conscious, not accidental."""
+    src = (
+        "def is_root(x):\n"
+        "    return x == None\n"
+    )
+    out, _ = await _maybe_ruff_format(tmp_path / "x.py", src)
+    # Still there — agent has to handle it, not the auto-format pass.
+    assert "== None" in out
+
+
+async def test_modernizes_typing_imports(tmp_path: Path) -> None:
+    """UP006 / UP035 (use `list` instead of `typing.List`) is
+    auto-fixable [*] and is in the project's `UP` selection.
+    Catches stale typing imports that agents sometimes emit when
+    they've been trained on older Python."""
+    src = (
+        "from typing import List\n"
+        "\n"
+        "def names() -> List[str]:\n"
+        "    return ['a', 'b']\n"
+    )
+    out, changed = await _maybe_ruff_format(tmp_path / "x.py", src)
+    assert changed is True
+    # Either the import is gone (UP imports cleaned up) or `List` is replaced
+    # — the safe assertion is just that the modern form is present.
+    assert "list[str]" in out or "List[str]" not in out

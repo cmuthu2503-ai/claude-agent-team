@@ -45,18 +45,25 @@ async def _maybe_ruff_format(path: Path, content: str) -> tuple[str, bool]:
 
     Two passes (both stdin → stdout, no on-disk writes):
 
-      1. ``ruff check --fix --select F401,F811,I001 -`` — strips the
-         AUTO-FIXABLE [*] violations that ``ruff format`` does NOT
-         touch. Specifically:
-           • F401 — unused imports (the one that killed REQ-A6A4DB
-             after 3 cycles — agent emitted ``import re`` + ``from
-             pydantic import ValidationError`` without using them, and
-             the rework prompt couldn't talk it into removing them).
-           • F811 — redefined unused names.
-           • I001 — unsorted/unformatted import block.
-         These are all SEMANTICALLY SAFE: removing an unused import or
-         sorting one doesn't change runtime behaviour. We do NOT pass
-         a generic ``--fix`` — that would also apply non-safe fixes.
+      1. ``ruff check --fix --exit-zero -`` — applies EVERY safe
+         auto-fix ([*]-marked) within the project's configured lint
+         selection (no ``--select`` flag, so the project's pyproject
+         drives the rule set). This is the broad blanket that closes
+         the "basic compilation error" failure class:
+           • F401 — unused imports (REQ-A6A4DB died 3 cycles on this)
+           • F811 — redefined unused names
+           • I001 — unsorted import block
+           • UP00x — pyupgrade modernizations (typing.List → list,
+             Optional[X] → X | None, etc.)
+           • E711/E712/E713/E714/E721 — `== None`, `is True`, `not in`
+           • W605 — invalid escape sequence
+           • SIM108/SIM118 — safe simplifications
+           • …and any other [*] rule the project's `select` opted in.
+         ``--exit-zero`` is critical: without it, the presence of any
+         NON-fixable lint in the same file would short-circuit the
+         fix pass (ruff exits non-zero when remaining errors exist).
+         Ruff still skips its UNSAFE fixes by default — we do NOT
+         pass ``--unsafe-fixes``.
 
       2. ``ruff format -`` — reflows whitespace and quoting to the
          project's `line-length` setting. Knocks out E501 (line too
@@ -64,8 +71,11 @@ async def _maybe_ruff_format(path: Path, content: str) -> tuple[str, bool]:
 
     Why both: ``ruff format`` is purely a formatter — it does not touch
     semantics, even for trivially-safe ones like unused imports.
-    Adding the ``check --fix`` pass closes the gap so the commit-gate
-    never sees these classes of error.
+    Adding the broad ``check --fix`` pass closes the gap so the
+    commit-gate never sees the auto-fixable subset of errors.
+    Non-fixable errors (real syntax mistakes, type-confusion bugs,
+    incorrect imports the agent USES somewhere) still surface to the
+    rework loop — those need the LLM.
 
     Returns:
         (content, was_formatted). When was_formatted is False, content is
@@ -78,13 +88,17 @@ async def _maybe_ruff_format(path: Path, content: str) -> tuple[str, bool]:
         any_change = False
         cwd = str(path.parent)  # so ruff finds the nearest pyproject.toml
 
-        # ── Pass 1: ruff check --fix for safe categories ──
+        # ── Pass 1: ruff check --fix for ALL safe categories ──
+        # No --select: ruff uses the project's pyproject.toml `select`
+        # list to decide what to check, and applies every [*] auto-fix
+        # within it. --exit-zero so remaining (non-fixable) lints in
+        # the same file don't poison the stdout — they're for the
+        # commit gate / rework loop to deal with, not us.
         try:
             proc = await asyncio.create_subprocess_exec(
                 "ruff", "check",
                 "--fix",
-                "--select", "F401,F811,I001",
-                "--exit-zero",  # don't error on remaining (non-fixable) lints
+                "--exit-zero",
                 "-",
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,

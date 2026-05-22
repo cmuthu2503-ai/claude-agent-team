@@ -435,9 +435,12 @@ in LLM cost, 1.17M input + 100K output tokens, zero files written.
 
 ---
 
-## L14 — Unused imports are auto-stripped on write (you don't have to fix them)
+## L14 — Auto-fixable "basic compilation errors" are stripped on write
 
-**Signature:** This used to be a recurring death:
+**Signature:** Recurring failure class where the agent emits a file
+with a SAFE, auto-fixable lint violation and gets stuck in the rework
+loop because it can't translate "remove that one line" into an actual
+re-emission without the line. The canonical case:
 ```
 F401 [*] `re` imported but unused
   --> backend/app/services/crew_orchestrator.py:37:8
@@ -445,33 +448,59 @@ F401 [*] `pydantic.ValidationError` imported but unused
   --> backend/app/services/crew_orchestrator.py:42:22
 ```
 
-**Why it died agents repeatedly:** REQ-A6A4DB hit this on 3 successive
-rework cycles — the agent re-emitted the same file with the same
-unused imports each time, even though the rework prompt cited both
-lines explicitly. The agent's "I'll fix it" intention didn't actually
-translate to removing the lines.
+**Why these used to die:** REQ-A6A4DB hit this on 3 successive rework
+cycles — the rework prompt cited both lines exactly, but the agent
+still re-emitted the file with the imports intact each time.
+MAX_REWORK_CYCLES=2, so cycle 3 was the death.
 
 **What changed (2026-05-22):** the write-time auto-format pipeline
-now runs `ruff check --fix --select F401,F811,I001 -` BEFORE
-`ruff format -`. This strips:
-  - F401: unused imports
-  - F811: redefined unused names
-  - I001: unsorted import block
+(`src/tools/file_tools.py::_maybe_ruff_format`) now runs TWO passes
+before persisting a `.py` file:
 
-These are all `[*]` auto-fixable categories — ruff considers them
-semantically safe. The agent never sees these errors anymore;
-emissions land on disk with the unused imports already removed.
+  1. `ruff check --fix --exit-zero -` — applies EVERY `[*]`-marked
+     safe auto-fix in the project's configured `select` list. No
+     `--select` flag, so the project's pyproject drives it. This
+     blanket covers:
+       - **F401** — unused imports (REQ-A6A4DB)
+       - **F811** — redefined unused names
+       - **I001** — unsorted/unformatted import block
+       - **UP0xx** — pyupgrade modernizations (`typing.List` → `list`,
+         `Optional[X]` → `X | None`, percent-format → f-string, etc.)
+       - **W605** — invalid escape sequence
+       - **SIM108/SIM118** — safe simplifications
+       - …plus any other `[*]` rule the project's selection opted in.
+     `--exit-zero` is critical: presence of a NON-fixable lint in the
+     same file (e.g. F821 undefined name) would otherwise short-circuit
+     the fix pass.
+
+  2. `ruff format -` — whitespace, quoting, line-length reflow (E501).
+
+**What this does NOT touch (deliberate):**
+- `--unsafe-fixes` is NOT enabled. Ruff marks some fixes as unsafe
+  because of edge-case behaviour risk (e.g. E711 `== None` → `is None`
+  could differ if `__eq__` is overridden weirdly). Those stay in the
+  emission and surface to the rework loop. Agent has to address them.
+- Real semantic errors (F821 undefined name, type mismatches, broken
+  syntax). These need the LLM.
 
 **Implication for the agent:**
-- Don't manually try to remove unused imports — even if you accidentally
-  added `import re` thinking you'd use it later, it's gone by the time
-  the file lands.
-- Import ORDER doesn't matter — I001 sorts them deterministically.
-- Re-exports via `__all__` are preserved (F401 respects __all__).
+- Don't waste effort manually removing unused imports — they're gone
+  by the time the file lands on disk.
+- Don't worry about import ORDER — I001 sorts them deterministically.
+- Don't worry about `typing.List` vs `list` — UP rules modernize.
+- Re-exports via `__all__` are preserved (F401 respects `__all__`).
+- DO worry about real errors: undefined names, type mismatches,
+  missing return statements, unhandled exceptions, behaviour bugs.
+  Those are what the rework loop is FOR.
 
 **Observed in:** REQ-A6A4DB (T-6144cc94, "Build CrewAI orchestrator
 service") died after 3 cycles all citing the same two unused imports.
-Closed by `tests/test_ruff_autofix.py::test_strips_unused_imports`.
+Closed by 9 pinned behaviours in `tests/test_ruff_autofix.py`,
+including verification that:
+  - F401 / I001 / UP006 all auto-fix
+  - `__all__` re-exports survive
+  - non-fixable lint in same file doesn't block the fix pass
+  - unsafe fixes (E711) are deliberately NOT applied
 
 ---
 
@@ -515,3 +544,10 @@ When a new failure pattern is observed in production:
   F401,F811,I001` BEFORE `ruff format`. Closes REQ-A6A4DB's failure
   class (3 cycles all citing the same F401 imports). Regression test
   in `tests/test_ruff_autofix.py`.
+- **2026-05-22 (even later)** — Broadened L14: dropped the `--select`
+  narrow list. Auto-fix pass now applies EVERY `[*]` safe fix in the
+  project's configured ruff selection (F + I + UP + SIM + most E/W).
+  "Basic compilation errors" (unused imports, stale typing,
+  out-of-order imports, etc.) are now stripped at write-time
+  unconditionally. Agents only see the rework loop for REAL semantic
+  errors. Test count: 6 → 9.
