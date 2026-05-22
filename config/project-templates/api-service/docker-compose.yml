@@ -24,8 +24,13 @@ services:
       - LOG_LEVEL=INFO
     networks:
       - project-net
+    # Healthcheck hits the versioned FastAPI route. Agents are taught to
+    # mount routes under /api/v1/ (project_orchestrator + backend_specialist
+    # YAMLs both say so), so an unversioned /health probe would 404 against
+    # a correctly-built backend. Was `/health` until REQ-rebuild-all-fail
+    # at 2026-05-22 — first-ever per-project rebuild failed because of this.
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
       interval: 30s
       timeout: 5s
       start_period: 10s
