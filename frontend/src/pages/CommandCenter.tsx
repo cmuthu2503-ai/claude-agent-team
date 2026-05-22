@@ -4,6 +4,7 @@ import { StatusBadge } from "../components/ui/StatusBadge"
 import { RichTextInput, type RichTextInputHandle } from "../components/ui/RichTextInput"
 import { useSearchParams } from "react-router-dom"
 import { Plus, Send, X, Trash2 } from "lucide-react"
+import { RefreshButton } from "../components/ui/RefreshButton"
 import { useAuthStore } from "../stores/auth"
 import { CreateProjectModal, type CreatedProject } from "../components/projects/CreateProjectModal"
 import { ProjectChip } from "../components/projects/ProjectChip"
@@ -218,6 +219,20 @@ export function CommandCenterPage() {
 
   // Track per-request in-flight cancel/delete so buttons disable while action runs
   const [busyId, setBusyId] = useState<string | null>(null)
+  // Manual refresh affordance. The page already polls via WebSocket events,
+  // but server-side state can change without an event (e.g. supervisor
+  // flipped a deploy status, or an external script manually mutated a row)
+  // — explicit Refresh gives the user a way to force a re-fetch without
+  // a full page reload.
+  const [refreshing, setRefreshing] = useState(false)
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    try {
+      await Promise.all([loadRequests(), loadProjects()])
+    } finally {
+      setRefreshing(false)
+    }
+  }
   // Selected request for the popup-window drill-in. Clicking a row in
   // either the "In Flight" or "Recently Completed" sections opens this.
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null)
@@ -296,9 +311,12 @@ export function CommandCenterPage() {
           padding: 24,
         }}
       >
-        <h2 style={{ color: "var(--text-primary)", fontSize: 18, fontWeight: 600, marginBottom: 16 }}>
-          New_Request.init
-        </h2>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <h2 style={{ color: "var(--text-primary)", fontSize: 18, fontWeight: 600, margin: 0 }}>
+            New_Request.init
+          </h2>
+          <RefreshButton onClick={handleRefresh} refreshing={refreshing} />
+        </div>
 
         <RichTextInput
           ref={editorRef}

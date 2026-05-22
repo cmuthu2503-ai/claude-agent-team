@@ -20,6 +20,7 @@ import { Link, useParams } from "react-router-dom"
 import { ArrowLeft } from "lucide-react"
 import { api } from "../lib/api"
 import { ProjectChip } from "../components/projects/ProjectChip"
+import { RefreshButton } from "../components/ui/RefreshButton"
 import { EnrichedTaskCard } from "../components/board/EnrichedTaskCard"
 import { PopupWindow } from "../components/board/PopupWindow"
 import { TaskDrillIn } from "../components/board/TaskDrillIn"
@@ -100,6 +101,7 @@ export function ProjectStoryBoardPage() {
   const [tasks, setTasks] = useState<ProjectTask[] | null>(null)
   const [error, setError] = useState("")
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
 
   const load = async () => {
@@ -110,6 +112,14 @@ export function ProjectStoryBoardPage() {
     } catch (e: any) {
       setError(e?.message || "Failed to load tasks")
     }
+  }
+
+  // Manual refresh handler. Wraps `load()` with a `refreshing` flag so
+  // the button can show the spinner — the background 5s polling
+  // interval doesn't toggle this, only explicit clicks.
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    try { await load() } finally { setRefreshing(false) }
   }
 
   useEffect(() => {
@@ -192,6 +202,12 @@ export function ProjectStoryBoardPage() {
         <ProjectChip projectId={projectId} stopPropagation={false} />
         <span style={{ color: "var(--border)", fontSize: 12 }}>▸</span>
         <span style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 600 }}>Build Board</span>
+        {/* Refresh stays right-aligned via marginLeft:auto — keeps the
+            breadcrumb left-edge crumbs flush with the page padding while
+            the affordance sits opposite where the user's eye lands. */}
+        <div style={{ marginLeft: "auto" }}>
+          <RefreshButton onClick={handleRefresh} refreshing={refreshing} />
+        </div>
       </div>
 
       {/* Empty state */}

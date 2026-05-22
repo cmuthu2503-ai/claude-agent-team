@@ -2,6 +2,7 @@ import { useState, useEffect } from "react"
 import { useParams, Link } from "react-router-dom"
 import { api } from "../lib/api"
 import { ProjectChip } from "../components/projects/ProjectChip"
+import { RefreshButton } from "../components/ui/RefreshButton"
 
 /* ── Color tokens — mapped to theme CSS variables so the Story Board
    picks up whatever theme is active (was hardcoded light-mode colors
@@ -135,6 +136,11 @@ export function StoryBoardPage() {
 
   useEffect(() => { ensureKeyframes() }, [])
 
+  // Manual refresh flag — toggled only by the Refresh button, not by
+  // the 3s polling interval, so the spinner doesn't flash on every
+  // background fetch.
+  const [refreshing, setRefreshing] = useState(false)
+
   const loadData = async () => {
     if (!requestId) return
     try {
@@ -142,6 +148,11 @@ export function StoryBoardPage() {
       setData(res.data)
       setStories(res.data.stories || [])
     } catch {}
+  }
+
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    try { await loadData() } finally { setRefreshing(false) }
   }
 
   useEffect(() => {
@@ -308,6 +319,10 @@ export function StoryBoardPage() {
         <span style={{ fontSize: 13, color: C.text2, fontWeight: 600 }}>
           {data.request_id}
         </span>
+        {/* Refresh — right-aligned like the per-project board */}
+        <div style={{ marginLeft: "auto" }}>
+          <RefreshButton onClick={handleRefresh} refreshing={refreshing} />
+        </div>
       </div>
 
       {/* ── Request header ──────────────────────────── */}
