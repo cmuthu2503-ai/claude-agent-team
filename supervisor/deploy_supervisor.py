@@ -19,7 +19,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Force UTF-8 stdout/stderr on Windows (default cp1252 can't render the emoji
@@ -252,7 +252,7 @@ def mark_project_commit_skipped(db: sqlite3.Connection, deployment_id: str) -> N
     history.append({
         "step": "supervisor_skipped",
         "status": "skipped",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "detail": (
             "Per-project commit — supervisor does not deploy these. "
             "Use the project's Deploy button to start the project's stack."
@@ -261,7 +261,7 @@ def mark_project_commit_skipped(db: sqlite3.Connection, deployment_id: str) -> N
     db.execute(
         "UPDATE deployment_states SET current_step = ?, step_history = ?, "
         "completed_at = ? WHERE deployment_id = ?",
-        ("skipped", json.dumps(history), datetime.utcnow().isoformat(), deployment_id),
+        ("skipped", json.dumps(history), datetime.now(timezone.utc).replace(tzinfo=None).isoformat(), deployment_id),
     )
     db.commit()
 
@@ -322,12 +322,12 @@ def update_step(db: sqlite3.Connection, deployment_id: str, step: str, detail: s
     history.append({
         "step": step,
         "status": "error" if error else "done",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "detail": detail,
     })
 
     # Update
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
     if error:
         db.execute(
             """UPDATE deployment_states SET current_step=?, step_history=?,
@@ -787,7 +787,7 @@ def update_project_deploy_status(
     if clear_pending_action:
         sets.append("deploy_pending_action = NULL")
     sets.append("updated_at = ?")
-    params.append(datetime.utcnow().isoformat())
+    params.append(datetime.now(timezone.utc).replace(tzinfo=None).isoformat())
     params.append(project_id)
     db.execute(
         f"UPDATE projects SET {', '.join(sets)} WHERE project_id = ?",
