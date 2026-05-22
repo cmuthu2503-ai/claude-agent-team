@@ -566,6 +566,65 @@ an earlier attempt). Each cycle truncated at a different line of an
 
 ---
 
+## L16 — Transient network blips are now retried with backoff (not your fault)
+
+**Signature:** A subtask fails with one of these error messages even
+though your code/output was fine:
+
+- `peer closed connection without sending complete message body (incomplete chunked read)`
+- `Connection error.`
+- `[Errno -2] Name or service not known`
+- `Connection reset by peer` / `Connection refused`
+- `Read timed out` / `Broken pipe`
+
+These are **not agent errors**. They're transient host-side network
+failures (Anthropic API streaming dropped, DNS unresolvable, socket
+reset) that previously crashed the agent's subtask immediately and
+consumed a rework cycle for nothing.
+
+**What changed (2026-05-22, after REQ-E3A10E / T-acb5ab46):**
+
+`BaseAgent._call_anthropic`'s retry loop now classifies these as
+**transient network errors** and retries with backoff `5s → 15s →
+30s → 60s → 120s` (~4-minute cumulative budget across 5 attempts).
+Real-world blips of ~1-2 minutes are now invisible to the workflow.
+
+**Implication for the agent:**
+
+- **If you see one of these errors in your `error_message` field on
+  a previous subtask in the rework prompt, ignore it.** It's a
+  network blip, not something your code did wrong. Don't try to
+  "fix" the imports or rewrite the file because of a connection
+  error — the previous cycle never even sent your output, the
+  network just gave up.
+
+- **You can't cause these errors.** Nothing in your emission strategy
+  affects whether the host's DNS resolves or whether the TLS handshake
+  succeeds. Focus your rework attention on the actual code / lint
+  errors, not connection errors.
+
+- **If multiple cycles all show connection errors,** the host has a
+  bigger problem (extended outage). The workflow runner will eventually
+  give up; don't burn budget trying to compensate.
+
+**Observed in:** REQ-E3A10E (T-acb5ab46, "Build app shell with
+navigation and theme tokens"). A ~1-2 min network outage at
+18:17:48-18:19:26 caused:
+  - code_reviewer: peer-closed-connection (Anthropic stream died)
+  - tester_specialist: Connection error.
+  - GitHub publish: Name or service not known (DNS)
+  - frontend_specialist rework: Connection error.
+  - code_reviewer rework: Connection error.
+
+Tester eventually completed at 18:19:26 once the network recovered,
+but rework cycles had been consumed by then and the request was
+marked failed. Closed by `tests/test_transient_network_retry.py`
+(13 pinned behaviors verifying all observed transient patterns are
+classified retryable, AND that validation / auth / rate-limit /
+compile errors are NOT misclassified).
+
+---
+
 ## How to add a new lesson
 
 When a new failure pattern is observed in production:
@@ -621,3 +680,11 @@ When a new failure pattern is observed in production:
   truncated the multi-file emission. Code-writing agents now default
   to 32K (engages streaming). `stop_reason='max_tokens'` is logged
   explicitly so future truncations are debuggable from the trace.
+- **2026-05-22 (network resilience)** — Added L16 (transient network
+  blips retried with backoff). REQ-E3A10E (T-acb5ab46) failed
+  during a ~1-2 min host-side network outage that cascaded through
+  review + test + commit. Retry loop in `_call_anthropic` now
+  classifies "peer closed connection", "Connection error.", DNS
+  failures, etc. as retryable and waits 5/15/30/60/120s between
+  attempts (~4 min cumulative). Test: `test_transient_network_retry.py`
+  (13 patterns).

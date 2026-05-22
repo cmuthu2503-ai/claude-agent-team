@@ -15,6 +15,50 @@ import structlog
 logger = structlog.get_logger()
 
 
+# Substrings that identify a transient network failure in the LLM call's
+# exception message. When any of these appear in the stringified error,
+# the retry loop treats the failure as retryable (with backoff) instead
+# of bubbling it to the workflow as a permanent agent failure.
+#
+# Curated from REQ-E3A10E (T-acb5ab46) on 2026-05-22 — a ~1-2 min network
+# blip on the host produced all three patterns in sequence:
+#   - Anthropic streaming gave httpx-equivalent "peer closed connection
+#     without sending complete message body (incomplete chunked read)"
+#   - subsequent calls raised "Connection error." (anthropic.APIConnectionError)
+#   - GitHub publish raised "[Errno -2] Name or service not known" (DNS)
+#
+# Keep this list lowercase; matching is case-insensitive. Add new
+# patterns ONLY when you've seen them produce a permanent agent failure
+# for what was actually a transient blip.
+_TRANSIENT_NETWORK_ERROR_FRAGMENTS: tuple[str, ...] = (
+    "peer closed connection",
+    "incomplete chunked read",
+    "incomplete read",
+    "connection error",
+    "connection reset",
+    "connection refused",
+    "connection aborted",
+    "remote disconnected",
+    "name or service not known",   # DNS
+    "temporary failure in name resolution",
+    "timed out",                   # generic socket timeout (separate from asyncio.TimeoutError)
+    "broken pipe",
+    "ssl: unexpected_eof",
+    "read timeout",
+    "remoteprotocolerror",
+)
+
+
+def _is_transient_network_error(error_str: str) -> bool:
+    """True if the error string looks like a transient network blip
+    (DNS, connection reset, mid-stream disconnect, etc.) — the kind
+    that retries with backoff can outwait."""
+    if not error_str:
+        return False
+    s = error_str.lower()
+    return any(frag in s for frag in _TRANSIENT_NETWORK_ERROR_FRAGMENTS)
+
+
 class BaseAgent(ABC):
     """Abstract base class for all agents in the system."""
 
@@ -491,6 +535,7 @@ class BaseAgent(ABC):
                 )
             except Exception as e:
                 error_str = str(e)
+                # ── Rate limit (429) — existing behaviour, backoff 30/60/90/120s ──
                 if "429" in error_str or "rate_limit" in error_str:
                     wait = min(30 * (attempt + 1), 120)
                     logger.warning(
@@ -500,6 +545,39 @@ class BaseAgent(ABC):
                     )
                     await _asyncio.sleep(wait)
                     continue
+
+                # ── Transient network errors — added 2026-05-22 after REQ-E3A10E.
+                # A ~1-2 min network blip cascaded through review + test + commit
+                # for T-acb5ab46:
+                #   - "peer closed connection without sending complete message
+                #     body (incomplete chunked read)" — Anthropic stream died
+                #     mid-response (httpx.RemoteProtocolError equivalent)
+                #   - "Connection error." — anthropic.APIConnectionError
+                #   - "Name or service not known" — DNS failure
+                # All three are transient. The previous code re-raised them and
+                # the workflow marked the subtask failed permanently, which
+                # consumed a rework cycle each. Treat them as retryable with
+                # backoff that lasts long enough to outwait realistic blips
+                # (cumulative ~4 min over 5 attempts).
+                if _is_transient_network_error(error_str):
+                    # Exponential-ish: 5, 15, 30, 60, 120 — total ~230s budget
+                    wait = [5, 15, 30, 60, 120][min(attempt, 4)]
+                    logger.warning(
+                        "network_error_retrying",
+                        agent=self.agent_id, attempt=attempt + 1,
+                        wait=wait, error=error_str[:200],
+                    )
+                    if attempt < max_retries - 1:
+                        await _asyncio.sleep(wait)
+                        continue
+                    # Out of retries — surface a clear error so the rework
+                    # loop's cycle counter doesn't get poisoned by a
+                    # transient network issue (the agent had no chance to
+                    # produce output, so reworking is pointless).
+                    raise RuntimeError(
+                        f"LLM call failed after {max_retries} retries due to "
+                        f"transient network error: {error_str[:200]}",
+                    )
                 raise
 
         raise RuntimeError(f"Rate limit exceeded after {max_retries} retries")
