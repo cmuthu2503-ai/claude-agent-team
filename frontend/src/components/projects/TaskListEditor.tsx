@@ -11,8 +11,12 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { ListChecks, Plus, RefreshCw, CheckCircle2, AlertTriangle, Rocket, Trash2 } from "lucide-react"
+import {
+  ListChecks, Plus, RefreshCw, CheckCircle2, AlertTriangle, Rocket, Trash2,
+  ChevronRight, ChevronDown,
+} from "lucide-react"
 import { api } from "../../lib/api"
+import { PopupWindow } from "../board/PopupWindow"
 
 interface Task {
   task_id: string
@@ -61,6 +65,16 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
   // Pruned automatically when the underlying tasks list refreshes —
   // see the useEffect below.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // Collapse the table body (mirrors the PRD / API Spec "Show/Hide"
+  // pattern). Header bar + toolbar stay visible so Dispatch All etc.
+  // are still reachable. Defaults to expanded.
+  const [collapsed, setCollapsed] = useState(false)
+  // Selected task for the click-to-expand popup. Renders a draggable
+  // PopupWindow with the full title + description + metadata when set.
+  // Rows show only the first line of title/description in the table
+  // (Atlas-style task descriptions are multi-paragraph markdown blocks
+  // that would otherwise blow the row height).
+  const [popupTaskId, setPopupTaskId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -505,6 +519,25 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
                       : "Archive & Regenerate"}
                 </span>
               </button>
+              {/* Show/Hide Tasks — mirrors the PRD / API Spec collapse
+                  pattern so all three sections behave the same way. The
+                  table body collapses; the toolbar and selection
+                  affordances stay visible so the user can keep
+                  driving the list from the header. */}
+              <button
+                type="button"
+                onClick={() => setCollapsed((v) => !v)}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 4,
+                  padding: "4px 10px", fontSize: 11,
+                  background: "transparent", color: "var(--text-muted)",
+                  border: "1px solid var(--border)", borderRadius: "var(--radius)",
+                  cursor: "pointer", fontFamily: "var(--font)",
+                }}
+              >
+                {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+                {collapsed ? "Show Tasks" : "Hide Tasks"}
+              </button>
             </>
           )}
         </div>
@@ -567,6 +600,12 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
         </div>
       )}
 
+      {/* The table body is the part Show/Hide Tasks toggles. Everything
+          above (toolbar, review-comments textarea, parse-warning
+          banner) stays visible when collapsed so the user can keep
+          driving the list. Collapse is only available on finalized
+          lists — in draft, the whole purpose is to edit the rows. */}
+      {(!isFinalized || !collapsed) && (
       <div style={{
         overflow: "auto", border: "1px solid var(--border)",
         borderRadius: "var(--radius)",
@@ -673,9 +712,50 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
                 </Td>
                 <Td>
                   {isFinalized ? (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                      <span style={{ color: "var(--text-primary)", fontWeight: 500 }}>{t.title}</span>
-                      <span style={{ color: "var(--text-muted)", fontSize: 11 }}>{t.description}</span>
+                    /* Click anywhere on the title cell to open the full
+                       detail popup. Atlas-style descriptions can be
+                       multi-paragraph markdown — we show only the first
+                       line in the row so the table stays scannable, and
+                       offload the rest to the popup. */
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setPopupTaskId(t.task_id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault()
+                          setPopupTaskId(t.task_id)
+                        }
+                      }}
+                      title="Click to see the full title + description"
+                      style={{
+                        display: "flex", flexDirection: "column", gap: 2,
+                        cursor: "pointer",
+                        padding: "2px 4px", margin: "-2px -4px",
+                        borderRadius: 3,
+                        transition: "background 0.12s",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = "var(--bg-hover)"
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "transparent"
+                      }}
+                    >
+                      <span style={{
+                        color: "var(--text-primary)", fontWeight: 500,
+                        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                      }}>
+                        {firstLine(t.title)}
+                      </span>
+                      {t.description && (
+                        <span style={{
+                          color: "var(--text-muted)", fontSize: 11,
+                          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                        }}>
+                          {firstLine(t.description)}
+                        </span>
+                      )}
                     </div>
                   ) : (
                     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -812,6 +892,7 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
           </tbody>
         </table>
       </div>
+      )}
 
       {isFinalized && (
         <div style={{
@@ -823,9 +904,120 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
         </div>
       )}
 
+      {/* Click-to-expand popup. Triggered when the user clicks a
+          finalized row's title cell. Renders the full title +
+          description + all metadata in a draggable, non-modal popup
+          so the table stays interactive behind it. */}
+      {popupTaskId && tasks && (() => {
+        const t = tasks.find((x) => x.task_id === popupTaskId)
+        if (!t) return null
+        return (
+          <PopupWindow
+            subtitle={t.task_id}
+            title={t.title}
+            onClose={() => setPopupTaskId(null)}
+            width={640}
+            maxHeight="80vh"
+          >
+            <TaskDetailBody task={t} />
+          </PopupWindow>
+        )
+      })()}
+
       {error && <ErrorBanner>{error}</ErrorBanner>}
     </Stub>
   )
+}
+
+// ── Popup body ─────────────────────────────────────────────────────────
+
+/** Full task detail rendered inside PopupWindow. Mirrors the metadata
+ * row chips from the table but in a vertical grid + full title +
+ * full description (whitespace preserved). Kept presentational —
+ * no buttons here; the table row owns dispatch / delete. */
+function TaskDetailBody({ task }: { task: Task }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* Metadata grid */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "auto 1fr auto 1fr",
+        gap: "6px 14px",
+        fontSize: 11,
+        padding: "10px 12px",
+        background: "var(--bg-hover)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+      }}>
+        <span style={{ color: "var(--text-muted)" }}>Task ID</span>
+        <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-primary)" }}>
+          {task.task_id}
+        </span>
+        <span style={{ color: "var(--text-muted)" }}>Status</span>
+        <span style={{ color: "var(--text-primary)" }}>{task.task_status}</span>
+
+        <span style={{ color: "var(--text-muted)" }}>Type</span>
+        <span style={{ color: "var(--text-primary)" }}>
+          {task.task_type.replace(/_/g, " ")}
+        </span>
+        <span style={{ color: "var(--text-muted)" }}>Priority</span>
+        <span style={{ color: "var(--text-primary)" }}>{task.priority}</span>
+
+        <span style={{ color: "var(--text-muted)" }}>Agent</span>
+        <span style={{ color: "var(--text-primary)" }}>
+          {task.estimated_agent?.replace(/_/g, " ") || "—"}
+        </span>
+        <span style={{ color: "var(--text-muted)" }}>Request</span>
+        <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-primary)" }}>
+          {task.request_id || "—"}
+        </span>
+      </div>
+
+      {/* Full title */}
+      <div>
+        <div style={{
+          fontSize: 10, textTransform: "uppercase", letterSpacing: 1,
+          color: "var(--text-muted)", marginBottom: 4, fontWeight: 700,
+        }}>
+          Title
+        </div>
+        <div style={{
+          fontSize: 13, color: "var(--text-primary)", lineHeight: 1.45,
+          whiteSpace: "pre-wrap", wordBreak: "break-word",
+        }}>
+          {task.title}
+        </div>
+      </div>
+
+      {/* Full description (whitespace preserved for markdown bullets) */}
+      {task.description && (
+        <div>
+          <div style={{
+            fontSize: 10, textTransform: "uppercase", letterSpacing: 1,
+            color: "var(--text-muted)", marginBottom: 4, fontWeight: 700,
+          }}>
+            Description
+          </div>
+          <div style={{
+            fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5,
+            whiteSpace: "pre-wrap", wordBreak: "break-word",
+          }}>
+            {task.description}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Return the first non-empty line of a string, trimmed of trailing
+ * whitespace. Empty string in → empty string out. Used to keep
+ * multi-line task descriptions to one row in the table. */
+function firstLine(s: string): string {
+  if (!s) return ""
+  // Split on the FIRST newline so we don't allocate the whole array.
+  const nl = s.indexOf("\n")
+  return (nl >= 0 ? s.slice(0, nl) : s).trimEnd()
 }
 
 // ── Cell primitives ────────────────────────────────────────────────────
