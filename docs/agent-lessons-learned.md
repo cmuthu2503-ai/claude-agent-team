@@ -566,7 +566,7 @@ an earlier attempt). Each cycle truncated at a different line of an
 
 ---
 
-## L16 — Transient network blips are now retried with backoff (not your fault)
+## L16 — Transient network / API blips are now retried with backoff (not your fault)
 
 **Signature:** A subtask fails with one of these error messages even
 though your code/output was fine:
@@ -576,11 +576,13 @@ though your code/output was fine:
 - `[Errno -2] Name or service not known`
 - `Connection reset by peer` / `Connection refused`
 - `Read timed out` / `Broken pipe`
+- **`{'type': 'error', 'error': {'type': 'overloaded_error', 'message': 'Overloaded'}, ...}`**  ← Anthropic HTTP 529 throttle (added after REQ-FC2425)
+- **`anthropic.APIError: Overloaded`** / `Service Unavailable` / `Internal Server Error`
 
 These are **not agent errors**. They're transient host-side network
-failures (Anthropic API streaming dropped, DNS unresolvable, socket
-reset) that previously crashed the agent's subtask immediately and
-consumed a rework cycle for nothing.
+failures OR transient Anthropic API throttles (HTTP 529 Overloaded
+during peak hours, 5xx server errors) that previously crashed the
+agent's subtask immediately and consumed a rework cycle for nothing.
 
 **What changed (2026-05-22, after REQ-E3A10E / T-acb5ab46):**
 
@@ -783,3 +785,13 @@ When a new failure pattern is observed in production:
   back-link — the DELETE was leaving dangling pointers that broke
   the task popup. Tests: `test_drop_guard_loop.py` (6) +
   `test_delete_request_cascade.py` (3).
+- **2026-05-22 (anthropic overload)** — L16 classifier extended to
+  catch Anthropic's HTTP 529 `overloaded_error` envelope (and bare
+  `Overloaded`, `Service Unavailable`, `Internal Server Error`).
+  REQ-FC2425 (T-103e9025 re-dispatch) had its cycle-0 frontend
+  agent fail with `{'type':'overloaded_error','message':'Overloaded'}`;
+  the old classifier didn't match, so the subtask was marked
+  permanently failed and the downstream cascade burned the remaining
+  rework cycles. Test coverage: `test_transient_network_retry.py`
+  expanded 13 → 17 (added overloaded-envelope + bare-Overloaded +
+  503 + 500 patterns).

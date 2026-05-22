@@ -58,6 +58,35 @@ def test_classifies_broken_pipe() -> None:
     assert _is_transient_network_error("BrokenPipeError: [Errno 32] Broken pipe")
 
 
+# ── Anthropic API transient signals (added after REQ-FC2425) ─────────────────
+
+
+def test_classifies_anthropic_overloaded_error_envelope() -> None:
+    """The exact error envelope Anthropic returned in REQ-FC2425 cycle 0.
+    HTTP 529 = transient throttle; retrying with backoff is the right move."""
+    assert _is_transient_network_error(
+        "{'type': 'error', 'error': {'details': None, "
+        "'type': 'overloaded_error', 'message': 'Overloaded'}, "
+        "'request_id': 'req_011CbJ9HhRHW5TS2xe4XCzQ1'}"
+    )
+
+
+def test_classifies_simple_overloaded_message() -> None:
+    """The SDK sometimes surfaces this as a plain anthropic.APIError
+    with message 'Overloaded'."""
+    assert _is_transient_network_error("anthropic.APIError: Overloaded")
+
+
+def test_classifies_503_service_unavailable() -> None:
+    assert _is_transient_network_error("HTTP 503 Service Unavailable")
+
+
+def test_classifies_500_internal_server_error() -> None:
+    assert _is_transient_network_error(
+        "anthropic.InternalServerError: 500 Internal Server Error"
+    )
+
+
 def test_case_insensitive() -> None:
     """Matching is case-insensitive so we don't have to maintain
     duplicate patterns for variant casings from different SDK layers."""

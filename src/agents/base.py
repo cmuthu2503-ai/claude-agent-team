@@ -15,22 +15,26 @@ import structlog
 logger = structlog.get_logger()
 
 
-# Substrings that identify a transient network failure in the LLM call's
+# Substrings that identify a transient failure in the LLM call's
 # exception message. When any of these appear in the stringified error,
 # the retry loop treats the failure as retryable (with backoff) instead
 # of bubbling it to the workflow as a permanent agent failure.
 #
-# Curated from REQ-E3A10E (T-acb5ab46) on 2026-05-22 — a ~1-2 min network
-# blip on the host produced all three patterns in sequence:
-#   - Anthropic streaming gave httpx-equivalent "peer closed connection
-#     without sending complete message body (incomplete chunked read)"
-#   - subsequent calls raised "Connection error." (anthropic.APIConnectionError)
-#   - GitHub publish raised "[Errno -2] Name or service not known" (DNS)
+# Curated from production incidents:
+#   - REQ-E3A10E (T-acb5ab46, 2026-05-22): a ~1-2 min network blip
+#     produced "peer closed connection ... (incomplete chunked read)",
+#     "Connection error.", and "Name or service not known" (DNS).
+#   - REQ-FC2425 (T-103e9025, 2026-05-22): Anthropic returned
+#     ``{'type':'error','error':{'type':'overloaded_error','message':
+#     'Overloaded'}}`` (HTTP 529). This is Anthropic's transient
+#     throttle signal — by definition retryable, but the L16 retry
+#     loop wasn't catching it before.
 #
 # Keep this list lowercase; matching is case-insensitive. Add new
 # patterns ONLY when you've seen them produce a permanent agent failure
 # for what was actually a transient blip.
 _TRANSIENT_NETWORK_ERROR_FRAGMENTS: tuple[str, ...] = (
+    # Network / TCP layer
     "peer closed connection",
     "incomplete chunked read",
     "incomplete read",
@@ -46,6 +50,15 @@ _TRANSIENT_NETWORK_ERROR_FRAGMENTS: tuple[str, ...] = (
     "ssl: unexpected_eof",
     "read timeout",
     "remoteprotocolerror",
+    # Anthropic API-level transient signals (added after REQ-FC2425).
+    # The bare ": overloaded" / "overloaded" word is sufficient — this
+    # word doesn't appear in any non-transient error class we care
+    # about, and the SDK surfaces it in multiple wrappings
+    # (overloaded_error, "'type': 'overloaded'", "message: Overloaded",
+    # plain "Overloaded").
+    "overloaded",                  # HTTP 529 in any wrapping
+    "service unavailable",         # generic 503
+    "internal server error",       # generic 5xx (anthropic.InternalServerError)
 )
 
 
