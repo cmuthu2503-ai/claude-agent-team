@@ -245,6 +245,26 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [tasks],
   )
+
+  // Computed: render order. Successfully-deployed tasks fall to the
+  // bottom so the "what still needs work?" rows stay at the top of the
+  // table. Stable sort (preserves ordinal order WITHIN each bucket) so
+  // the original list ordering is intact for everything-not-deployed
+  // AND for everything-deployed. The selection set is keyed on task_id,
+  // so reordering rows can't desync the bulk-delete / dispatch-selected
+  // counters. Only applied to finalized lists — draft lists are for
+  // editing, where ordinal order is the contract.
+  const displayTasks = useMemo(() => {
+    if (!tasks) return tasks
+    const isFinal = tasks.every((t) => t.list_status === "finalized")
+    if (!isFinal) return tasks
+    return [...tasks].sort((a, b) => {
+      const aDeployed = a.task_status === "deployed" ? 1 : 0
+      const bDeployed = b.task_status === "deployed" ? 1 : 0
+      if (aDeployed !== bDeployed) return aDeployed - bDeployed
+      return a.ordinal - b.ordinal
+    })
+  }, [tasks])
   const allSelected =
     deletableTasks.length > 0 && deletableTasks.every((t) => selectedIds.has(t.task_id))
   const someSelected = selectedIds.size > 0 && !allSelected
@@ -641,7 +661,7 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
             </tr>
           </thead>
           <tbody>
-            {tasks.map((t) => (
+            {(displayTasks ?? tasks).map((t) => (
               <tr
                 key={t.task_id}
                 style={{

@@ -202,12 +202,11 @@ export function ProjectStoryBoardPage() {
         <ProjectChip projectId={projectId} stopPropagation={false} />
         <span style={{ color: "var(--border)", fontSize: 12 }}>▸</span>
         <span style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 600 }}>Build Board</span>
-        {/* Refresh stays right-aligned via marginLeft:auto — keeps the
-            breadcrumb left-edge crumbs flush with the page padding while
-            the affordance sits opposite where the user's eye lands. */}
-        <div style={{ marginLeft: "auto" }}>
-          <RefreshButton onClick={handleRefresh} refreshing={refreshing} />
-        </div>
+        {/* Refresh sits immediately adjacent to "Build Board" (parent
+            row uses gap:8). Previously this was right-aligned via
+            marginLeft:auto, but the user's eye lands on the label, so
+            the affordance reads more naturally next to it. */}
+        <RefreshButton onClick={handleRefresh} refreshing={refreshing} />
       </div>
 
       {/* Empty state */}
