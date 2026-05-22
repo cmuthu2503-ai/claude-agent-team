@@ -713,6 +713,70 @@ back-link nulling cascade).
 
 ---
 
+## L18 — Test-case UPSERT (deterministic TC-XXX IDs across cycles are safe)
+
+**Signature:** Look at the trace for a failed task. The tester subtask
+completes successfully (you can see `output_text` filled with the test
+report table), but the orchestrator logs:
+```
+test_case_parsing_failed error='UNIQUE constraint failed: test_cases.test_id'
+combined_gate_failed review_passed=... test_passed=False
+combined_gate_failed_reworking cycle=1 max_cycles=2
+```
+…and the SAME message repeats on cycle 2. Out of cycles → REQUEST FAILED.
+
+The most-recent cluster: T-b4954195 and T-3e1303b3 (Phase 11 quality
+& polish tasks) BOTH died on 2026-05-22 with this exact pattern —
+the tester correctly emitted `| TC-001 | … |` rows, but the backend
+crashed the entire parse batch on cycle 2 because TC-001 already
+existed from cycle 1.
+
+**What changed (2026-05-22):**
+
+1. `SQLiteStateStore.create_test_case` switched from plain INSERT to
+   `INSERT INTO test_cases (…) VALUES (…) ON CONFLICT(test_id) DO
+   UPDATE SET story_id=excluded.story_id, name=excluded.name,
+   status=excluded.status, last_run_at=excluded.last_run_at`. So the
+   second emission of TC-001 updates the row instead of failing.
+2. The orchestrator's `_parse_and_save_test_cases` loop now wraps
+   EACH `create_test_case` call in its own try/except. One bad row
+   no longer aborts the whole batch — the rest persist and the
+   combined gate gets a real test_passed reading.
+
+**Implication for the agent:**
+
+- **It's safe to emit the same TC-XXX IDs across rework cycles.** The
+  underlying backend now UPSERTs them. Don't try to invent new IDs
+  on a rework cycle just to "avoid duplicates" — that would be
+  WORSE: the dashboard would show stale TC-001 alongside fresh TC-099
+  for the same actual test.
+- **Status changes (pass → fail, or vice versa) are honored on
+  re-emit.** If a previously-passing test now fails, just emit the
+  same TC-XXX with the new status and the row will update.
+
+**Backend integrity note** (for me / future debuggers, not for the
+agent's behavior): the underlying problem here was a backend bug
+masquerading as an agent failure. The agent was emitting valid output;
+the persistence layer's plain INSERT raised UNIQUE; the orchestrator's
+broad `except Exception` swallowed the row error AND took down the
+whole batch's coverage stats. Three things had to go right for this
+to fail: (a) plain INSERT, (b) broad except, (c) gate consumer
+reading the (now-empty) coverage dict. Fixing (a) was sufficient
+because UPSERT can't raise UNIQUE; but I also fixed (b) so any
+future "single-row constraint we haven't anticipated" failure won't
+recreate the same cascade. Defense in depth.
+
+**Observed in:** T-b4954195 ("Add frontend component and integration
+tests") + T-3e1303b3 ("Add backend unit and integration tests"). Both
+hit the same UNIQUE constraint repeatedly on cycles 1 + 2 and timed
+out the rework budget. Same signature also visible in REQ-FC2425's
+trace (T-103e9025) where it compounded with the Anthropic overload
+error. Closed by `tests/test_test_case_upsert.py` (4 pinned
+behaviors: UPSERT overwrites, supports story_id relink, repeated
+inserts don't grow the table, per-row failure isolation).
+
+---
+
 ## How to add a new lesson
 
 When a new failure pattern is observed in production:
@@ -795,3 +859,13 @@ When a new failure pattern is observed in production:
   rework cycles. Test coverage: `test_transient_network_retry.py`
   expanded 13 → 17 (added overloaded-envelope + bare-Overloaded +
   503 + 500 patterns).
+- **2026-05-22 (test-case UPSERT)** — Added L18 (TC-XXX deterministic
+  IDs across cycles are now safe). T-b4954195 + T-3e1303b3 both died
+  on 2026-05-22 with `UNIQUE constraint failed: test_cases.test_id`
+  on cycle 1+2 — the tester correctly emitted the same IDs each
+  cycle (deterministic on purpose), but the backend's plain INSERT
+  raised, the orchestrator's broad except killed the whole batch's
+  coverage stats, and the combined gate flipped test_passed=False.
+  Two fixes: (a) SQL is now UPSERT on test_id; (b) orchestrator
+  parse loop isolates per-row failures. Test:
+  `test_test_case_upsert.py` (4 pinned behaviors).

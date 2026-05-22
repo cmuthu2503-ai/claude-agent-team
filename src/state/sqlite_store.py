@@ -1043,11 +1043,35 @@ class SQLiteStateStore(StateStore):
     # ── Test Cases ────────────────────────────────
 
     async def create_test_case(self, tc: TestCase) -> str:
+        """UPSERT a test case keyed on ``test_id``.
+
+        Why UPSERT and not plain INSERT: the tester agent emits the same
+        TC-XXX IDs deterministically per story (TC-001, TC-002, …) on
+        every rework cycle. A plain INSERT raised
+        ``UNIQUE constraint failed: test_cases.test_id`` on the SECOND
+        cycle, which bubbled out of the orchestrator's broad
+        ``except Exception`` and aborted the WHOLE batch of test_cases
+        for that request — story_tc_stats ended empty,
+        ``coverage_pct`` never updated, and the combined gate flipped
+        to ``test_passed=False`` even though the actual tests passed.
+        T-b4954195 and T-3e1303b3 both died this way on 2026-05-22.
+
+        ON CONFLICT(test_id) DO UPDATE keeps the row and refreshes the
+        mutable fields (status + last_run_at) — useful because a flaky
+        test's status can legitimately change between cycles. name and
+        story_id are stable; we update them too so a rename / re-link
+        doesn't go stale.
+        """
         db = await self._get_db()
         await db.execute(
             """INSERT INTO test_cases
                (test_id, story_id, name, status, last_run_at)
-               VALUES (?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(test_id) DO UPDATE SET
+                   story_id    = excluded.story_id,
+                   name        = excluded.name,
+                   status      = excluded.status,
+                   last_run_at = excluded.last_run_at""",
             (tc.test_id, tc.story_id, tc.name, tc.status, tc.last_run_at),
         )
         await db.commit()

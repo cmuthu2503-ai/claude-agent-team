@@ -1268,7 +1268,17 @@ class Orchestrator(AgentExecutor):
     async def _parse_and_save_test_cases(
         self, request_id: str, output_text: str
     ) -> None:
-        """Parse test cases from Tester output, link to stories, and extract coverage."""
+        """Parse test cases from Tester output, link to stories, and extract coverage.
+
+        Per-row exception isolation: a single test_case that fails to
+        persist (legacy plain-INSERT raised UNIQUE on rework cycle 2;
+        with the new UPSERT this is much rarer but still possible if a
+        constraint we haven't anticipated trips) MUST NOT abort the
+        whole batch. T-b4954195 / T-3e1303b3 both died because one
+        failing row took the entire story_tc_stats dict down with it,
+        which then flipped the combined gate to test_passed=False even
+        though the rest of the tests were fine.
+        """
         try:
             stories = await self.state.get_stories_for_request(request_id)
             story_map = {s.story_id: s for s in stories}
@@ -1277,8 +1287,22 @@ class Orchestrator(AgentExecutor):
 
             # Group TCs by story for coverage calculation
             story_tc_stats: dict[str, dict[str, int]] = {}  # story_id -> {total, passed}
+            row_failures = 0
             for tc in test_cases:
-                await self.state.create_test_case(tc)
+                # Per-row try/except: a single bad row doesn't bail the
+                # batch. The combined-gate consumer reads story_tc_stats
+                # to decide test_passed, so losing one row is much less
+                # bad than losing all of them.
+                try:
+                    await self.state.create_test_case(tc)
+                except Exception as e:  # noqa: BLE001
+                    row_failures += 1
+                    logger.warning(
+                        "test_case_row_persist_failed",
+                        request_id=request_id,
+                        test_id=tc.test_id, error=str(e)[:120],
+                    )
+                    continue
                 stats = story_tc_stats.setdefault(tc.story_id, {"total": 0, "passed": 0})
                 stats["total"] += 1
                 if tc.status == "pass":
@@ -1296,6 +1320,7 @@ class Orchestrator(AgentExecutor):
                 request_id=request_id,
                 count=len(test_cases),
                 stories_with_coverage=len(story_tc_stats),
+                row_failures=row_failures,
             )
         except Exception as e:
             logger.warning("test_case_parsing_failed", request_id=request_id, error=str(e))
