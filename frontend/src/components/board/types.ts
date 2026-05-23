@@ -74,4 +74,21 @@ export interface CardData {
   error_summary?: string | null
   /** Created timestamp ISO. */
   created_at?: string | null
+  /** BPD §6.8 fields. Populated by surfaces that have epic/feature
+   * context available (BuildPlanView). When undefined, the drill-in's
+   * BPD section is hidden — preserves legacy callers without forcing
+   * an extra fetch. */
+  bpd?: {
+    epic_id?: string | null
+    epic_title?: string | null
+    feature_id?: string | null
+    feature_title?: string | null
+    primary_file?: string | null
+    expected_loc?: number | null
+    acceptance_test?: string | null
+    /** Pairs of {task_id, title, status} for each depends_on entry,
+     * resolved by the caller. Status is the blocker's current
+     * task_status; UI color-codes accordingly. */
+    depends_on?: Array<{ task_id: string; title: string; status: string }>
+  }
 }

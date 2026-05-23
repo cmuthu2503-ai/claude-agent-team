@@ -332,6 +332,13 @@ export function ProjectDetailPage() {
         <StatCard label="Failed" value={String(data.stats.failed)} color={data.stats.failed > 0 ? "var(--danger)" : "var(--text-muted)"} />
       </div>
 
+      {/* ── BPD §6.8 — Build Plan rollup chip. Hidden when project
+          has no epics (legacy or unassigned). Renders inline so
+          the rollup info sits visually adjacent to the stat cards. */}
+      {data.project_id !== "proj-unassigned" && (
+        <BuildPlanRollupChip projectId={data.project_id} />
+      )}
+
       {/* ── Deployment (per-project working tree feature) ── */}
       {data.project_id !== "proj-unassigned" && (
         <DeploymentCard
@@ -1028,6 +1035,63 @@ function dangerBtn(disabled: boolean): React.CSSProperties {
 }
 
 // FastAPI errors arrive as "<status>: <body>" through the api client.
+/** BPD-34 — project header rollup chip. Fetches /build-plan/rollup
+ * and renders a compact "N/M epics done · X/Y tasks · Z blocked"
+ * strip. Returns null when the project has zero epics (legacy mode)
+ * so the existing 4-card stat row stays the only header info. */
+function BuildPlanRollupChip({ projectId }: { projectId: string }) {
+  const [data, setData] = useState<{
+    epics_done: number; epics_total: number;
+    tasks_done: number; tasks_total: number;
+    tasks_blocked: number; features_total: number;
+  } | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    const run = async () => {
+      try {
+        const res = await api.get(`/projects/${projectId}/build-plan/rollup`)
+        if (!cancelled) setData(res?.data || null)
+      } catch { /* soft — chip just doesn't render */ }
+    }
+    void run()
+    return () => { cancelled = true }
+  }, [projectId])
+  if (!data || data.epics_total === 0) return null
+  const epicsComplete = data.epics_done === data.epics_total
+  return (
+    <div style={{
+      display: "inline-flex", alignItems: "center", gap: 12,
+      padding: "8px 14px", borderRadius: "var(--radius)",
+      background: "var(--bg-card)", border: "1px solid var(--border)",
+      fontSize: 12, fontFamily: "var(--font-mono)",
+      alignSelf: "flex-start",
+    }}>
+      <span style={{ color: "var(--text-muted)", fontSize: 10, textTransform: "uppercase", letterSpacing: 1, fontWeight: 700 }}>
+        Build Plan:
+      </span>
+      <span style={{ color: epicsComplete ? "var(--success)" : "var(--text-primary)" }}>
+        <strong>{data.epics_done}</strong>
+        <span style={{ color: "var(--text-muted)" }}>/{data.epics_total} epics</span>
+      </span>
+      <span style={{ color: "var(--border)" }}>·</span>
+      <span style={{ color: data.tasks_done > 0 ? "var(--accent)" : "var(--text-secondary)" }}>
+        <strong>{data.tasks_done}</strong>
+        <span style={{ color: "var(--text-muted)" }}>/{data.tasks_total} tasks</span>
+      </span>
+      {data.tasks_blocked > 0 && (
+        <>
+          <span style={{ color: "var(--border)" }}>·</span>
+          <span style={{ color: "var(--warning, #d4a017)" }}>
+            <strong>{data.tasks_blocked}</strong>
+            <span style={{ color: "var(--text-muted)" }}> blocked</span>
+          </span>
+        </>
+      )}
+    </div>
+  )
+}
+
+
 // Pull the human-readable hint out of {detail: {error, hint, ...}}.
 function parseDetailMessage(msg: string | undefined): string | undefined {
   if (!msg) return undefined

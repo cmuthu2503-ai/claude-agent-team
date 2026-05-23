@@ -1142,15 +1142,15 @@ whose `depends_on` isn't fully `deployed`.
 
 | ID | Task | Effort | Depends On | Status |
 |----|------|--------|-----------|--------|
-| BPD-29 | Task List page: rebuild as three collapsible levels (epic → feature → task) with status rollups in headers (BPD-301) | L | BPD-27 | `[ ]` |
-| BPD-30 | Per-level toolbar actions: Generate Features (epic), Generate Tasks (feature), Dispatch / Edit / Delete (task). Mirror today's editor affordances (BPD-302) | M | BPD-29, BPD-13, BPD-15 | `[ ]` |
-| BPD-31 | TaskDrillIn popup: add `primary_file`, `acceptance_test`, `depends_on` chip section + `Epic › Feature › Task` breadcrumb (BPD-303) | M | BPD-29 | `[ ]` |
-| BPD-32 | Build Board: epic + feature filter dropdowns; cards show parent chips; blocked cards stay in Backlog with chain icon + tooltip (BPD-304) | L | BPD-27, BPD-29 | `[ ]` |
-| BPD-33 | Epic-detail popup (parallel to task popup) with feature list + rollup stats (cost / wall time / commits) (BPD-305) | M | BPD-27 | `[ ]` |
-| BPD-34 | Project header stat chip: `N/M epics done · X/Y tasks · Z blocked` (BPD-306) | S | BPD-27 | `[ ]` |
-| BPD-35 | Generation flow UI: three sequential approval gates + opt-in "Approve all and dispatch" mega-button (BPD-307) | M | BPD-17, BPD-29 | `[ ]` |
-| BPD-36 | Dependency validation inline error chips in Task List editor — bad `depends_on` surfaces a "Fix" hint (BPD-308) | M | BPD-29 | `[ ]` |
-| BPD-37 | Build Chat update: `project_orchestrator` gets new tools for `dispatch_epic` / `dispatch_feature` / `dispatch_all_ready` so chat-driven workflows compose with the new dispatch endpoints | M | BPD-21, BPD-22, BPD-23 | `[ ]` |
+| BPD-29 | Task List page: rebuild as three collapsible levels (epic → feature → task) with status rollups in headers (BPD-301) | L | BPD-27 | `[x]` |
+| BPD-30 | Per-level toolbar actions: Generate Features (epic), Generate Tasks (feature), Dispatch / Edit / Delete (task). Mirror today's editor affordances (BPD-302) | M | BPD-29, BPD-13, BPD-15 | `[x]` |
+| BPD-31 | TaskDrillIn popup: add `primary_file`, `acceptance_test`, `depends_on` chip section + `Epic › Feature › Task` breadcrumb (BPD-303) | M | BPD-29 | `[x]` |
+| BPD-32 | Build Board: epic + feature filter dropdowns; cards show parent chips; blocked cards stay in Backlog with chain icon + tooltip (BPD-304) | L | BPD-27, BPD-29 | `[~]` |
+| BPD-33 | Epic-detail popup (parallel to task popup) with feature list + rollup stats (cost / wall time / commits) (BPD-305) | M | BPD-27 | `[~]` |
+| BPD-34 | Project header stat chip: `N/M epics done · X/Y tasks · Z blocked` (BPD-306) | S | BPD-27 | `[x]` |
+| BPD-35 | Generation flow UI: three sequential approval gates + opt-in "Approve all and dispatch" mega-button (BPD-307) | M | BPD-17, BPD-29 | `[x]` |
+| BPD-36 | Dependency validation inline error chips in Task List editor — bad `depends_on` surfaces a "Fix" hint (BPD-308) | M | BPD-29 | `[~]` |
+| BPD-37 | Build Chat update: `project_orchestrator` gets new tools for `dispatch_epic` / `dispatch_feature` / `dispatch_all_ready` so chat-driven workflows compose with the new dispatch endpoints | M | BPD-21, BPD-22, BPD-23 | `[x]` |
 
 ### Phase E: Migration + polish + verification (~1.5 hours)
 
@@ -1172,9 +1172,35 @@ whose `depends_on` isn't fully `deployed`.
 | Phase A: Design + schema foundation | 9 | 9 | 0 | 0 | 0 |
 | Phase B: Three-pass generation | 10 | 10 | 0 | 0 | 0 |
 | Phase C: Dispatch engine + auto-dispatch | 9 | 9 | 0 | 0 | 0 |
-| Phase D: UI rework | 9 | 0 | 0 | 0 | 9 |
+| Phase D: UI rework | 9 | 6 | 3 | 0 | 0 |
 | Phase E: Migration + polish + verification | 8 | 0 | 0 | 0 | 8 |
-| **Total** | **45** | **28** | **0** | **0** | **17** |
+| **Total** | **45** | **34** | **3** | **0** | **8** |
+
+### Phase D partial-status notes
+
+Three Phase-D tasks shipped a deliberately scoped subset in this commit
+(marked `[~]` in-progress) — the rest fits cleanly in a Phase D2
+follow-up so the core BPD UI is usable today without blocking on
+polish surfaces:
+
+- **BPD-32** (Build Board filters + blocked chain icon): legacy
+  per-request `StoryBoard` and per-project `ProjectStoryBoard`
+  continue to work unchanged. The new `BuildPlanView` IS a
+  3-level hierarchy view (with status badges + blocker chips on
+  task rows) and serves the primary "see the DAG" use case. The
+  per-project Kanban gains filter dropdowns + blocked-card chain
+  icons in a follow-up.
+- **BPD-33** (Epic-detail popup): epic rows in `BuildPlanView`
+  expand inline to show features + tasks with rollup chips. A
+  separate floating popup (parallel to TaskDrillIn) is a polish
+  surface that ships in a follow-up — the current expand-in-place
+  affordance covers the primary use case.
+- **BPD-36** (inline DAG validation chips): the legacy
+  `TaskListEditor` is untouched (no DAG editing in legacy
+  projects). New BPD tasks surface dangling depends_on as a
+  "missing" chip in TaskDrillIn (BPD-31), which is enough to
+  see the problem; inline-edit-and-fix in the table is the
+  follow-up.
 
 ### Open questions to resolve in BPD-01 before Phase B starts
 

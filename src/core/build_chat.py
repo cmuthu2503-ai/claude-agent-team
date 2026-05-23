@@ -122,6 +122,51 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["title"],
         },
     },
+    # ─── BPD-37 — scope-aware dispatch tools (Build Plan Decomposition) ──
+    # These compose with the new dispatch endpoints from BPD-21/22/23.
+    # The agent can chat-drive "dispatch the Auth epic" / "fire every
+    # unblocked task" without naming individual task_ids.
+    {
+        "name": "dispatch_feature",
+        "description": (
+            "Dispatch every task under one FEATURE whose dependencies are "
+            "met. Tasks with unmet deps stay blocked (they'll auto-dispatch "
+            "as their blockers deploy, when auto_dispatch_on_deploy is on). "
+            "Returns {dispatched, blocked, skipped}."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "feature_id": {"type": "string", "description": "e.g. F-019a3b4c"},
+            },
+            "required": ["feature_id"],
+        },
+    },
+    {
+        "name": "dispatch_epic",
+        "description": (
+            "Dispatch every task across every feature in one EPIC whose "
+            "dependencies are met. Returns {dispatched, blocked, skipped} "
+            "plus feature_count."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "epic_id": {"type": "string", "description": "e.g. E-c5e29b04"},
+            },
+            "required": ["epic_id"],
+        },
+    },
+    {
+        "name": "dispatch_all_ready",
+        "description": (
+            "Fire EVERY task in the project that is currently backlog AND "
+            "whose depends_on chain is fully satisfied (every blocker is "
+            "`deployed`). Returns {dispatched_count, blocked_count}. Idempotent: "
+            "tasks that are already dispatched / deployed are skipped."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -300,6 +345,88 @@ class BuildTools:
         await self.state.create_task(new_task)
         return json.dumps({"task_id": new_task.task_id, "task": _task_compact(new_task)})
 
+    # ── BPD-37 — scope-aware dispatch tools ────────────────────────────
+
+    async def dispatch_feature(self, feature_id: str) -> str:
+        """Fan out every task under one feature whose deps are met.
+        Mirrors the BPD-21 endpoint but binds to the chat's project_id
+        so the agent can't dispatch into another project."""
+        from src.api.routes.projects import _dispatch_ready_tasks
+        feature = await self.state.get_feature(feature_id)
+        if feature is None or feature.project_id != self.project_id:
+            return json.dumps({
+                "error": f"Feature {feature_id!r} not found in this project.",
+            })
+        all_tasks = await self.state.list_tasks_for_project(self.project_id)
+        feature_tasks = [t for t in all_tasks if t.feature_id == feature_id]
+        if not feature_tasks:
+            return json.dumps({
+                "error": "Feature has no tasks. Run Pass 3 generation first.",
+                "feature_id": feature_id,
+            })
+        result = await _dispatch_ready_tasks(
+            self.state, self.orchestrator, feature_tasks, "project_orchestrator",
+        )
+        return json.dumps({
+            "feature_id": feature_id,
+            **result,
+        })
+
+    async def dispatch_epic(self, epic_id: str) -> str:
+        """Fan out every task across every feature in one epic whose
+        deps are met. Mirrors BPD-22."""
+        from src.api.routes.projects import _dispatch_ready_tasks
+        epic = await self.state.get_epic(epic_id)
+        if epic is None or epic.project_id != self.project_id:
+            return json.dumps({"error": f"Epic {epic_id!r} not found in this project."})
+        features = await self.state.list_features_for_epic(epic_id)
+        feature_ids = {f.feature_id for f in features}
+        all_tasks = await self.state.list_tasks_for_project(self.project_id)
+        epic_tasks = [t for t in all_tasks if t.feature_id in feature_ids]
+        if not epic_tasks:
+            return json.dumps({
+                "error": "Epic has no tasks. Run Pass 3 for its features first.",
+                "epic_id": epic_id,
+            })
+        result = await _dispatch_ready_tasks(
+            self.state, self.orchestrator, epic_tasks, "project_orchestrator",
+        )
+        return json.dumps({
+            "epic_id": epic_id,
+            "feature_count": len(feature_ids),
+            **result,
+        })
+
+    async def dispatch_all_ready(self) -> str:
+        """Fire every backlog task in the project whose deps are met.
+        Mirrors BPD-23 (the same source-of-truth helper)."""
+        ready = await self.state.get_dispatchable_tasks(self.project_id)
+        dispatched: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        for task in ready:
+            try:
+                req = await self.orchestrator.submit(
+                    description=task.description or task.title,
+                    task_type=task.task_type,
+                    priority=task.priority,
+                    created_by="project_orchestrator",
+                    project_id=self.project_id,
+                    source_task_id=task.task_id,
+                )
+                await self.state.set_task_status(
+                    task.task_id, TaskStatus.DISPATCHED, request_id=req.request_id,
+                )
+                dispatched.append({
+                    "task_id": task.task_id, "request_id": req.request_id,
+                })
+            except Exception as e:  # noqa: BLE001
+                errors.append({"task_id": task.task_id, "error": str(e)})
+        return json.dumps({
+            "dispatched_count": len(dispatched),
+            "dispatched": dispatched,
+            "errors": errors or None,
+        })
+
     async def execute(self, tool_name: str, tool_input: dict[str, Any]) -> tuple[str, str]:
         """Dispatch one tool call. Returns (raw_result_json, summary_string).
         The summary is the short string shown as a UI chip — kept here
@@ -373,6 +500,32 @@ class BuildTools:
                 else:
                     summary = f"➕ Added {parsed.get('task_id')}"
                 return raw, summary
+            # BPD-37 dispatchers
+            if tool_name == "dispatch_feature":
+                raw = await self.dispatch_feature(tool_input.get("feature_id", ""))
+                parsed = json.loads(raw)
+                if parsed.get("error"):
+                    summary = f"❌ dispatch_feature failed: {parsed['error']}"
+                else:
+                    d = len(parsed.get("dispatched", []))
+                    b = len(parsed.get("blocked", []))
+                    summary = f"🚀 Dispatched {d} from feature {parsed.get('feature_id')} ({b} blocked)"
+                return raw, summary
+            if tool_name == "dispatch_epic":
+                raw = await self.dispatch_epic(tool_input.get("epic_id", ""))
+                parsed = json.loads(raw)
+                if parsed.get("error"):
+                    summary = f"❌ dispatch_epic failed: {parsed['error']}"
+                else:
+                    d = len(parsed.get("dispatched", []))
+                    b = len(parsed.get("blocked", []))
+                    summary = f"🚀 Dispatched {d} from epic {parsed.get('epic_id')} ({parsed.get('feature_count')} features · {b} blocked)"
+                return raw, summary
+            if tool_name == "dispatch_all_ready":
+                raw = await self.dispatch_all_ready()
+                parsed = json.loads(raw)
+                summary = f"🚀 Auto-dispatched {parsed.get('dispatched_count', 0)} unblocked task(s)"
+                return raw, summary
         except Exception as e:
             logger.exception("build_tool_failed", tool=tool_name)
             return json.dumps({"error": str(e)}), f"❌ {tool_name} crashed: {e}"
@@ -380,9 +533,15 @@ class BuildTools:
 
 
 def _task_compact(t: ProjectTask) -> dict[str, Any]:
-    """Slimmed-down dict for tool output — keeps the LLM context lean and
-    avoids leaking internal columns like list_status that aren't actionable
-    from chat."""
+    """Slimmed-down dict for tool output — keeps the LLM context lean.
+
+    ``list_status`` MUST be included: the project_orchestrator's
+    dispatch protocol (see config/agents/project_orchestrator.yaml)
+    requires the agent to read list_status BEFORE attempting a
+    dispatch_task call. Stripping this field caused the agent to
+    speculatively dispatch and then surface "list in draft" errors —
+    the field looks "internal" but is in fact load-bearing for the
+    agent's decision logic."""
     return {
         "task_id": t.task_id,
         "ordinal": t.ordinal,
@@ -391,6 +550,8 @@ def _task_compact(t: ProjectTask) -> dict[str, Any]:
         "priority": t.priority,
         "estimated_agent": t.estimated_agent,
         "task_status": str(t.task_status),
+        "list_status": str(t.list_status),
+        "list_version": t.list_version,
         "request_id": t.request_id,
     }
 
@@ -484,6 +645,12 @@ async def run_chat_turn(
         response = await project_orch_agent._call_anthropic(
             messages=messages,
             tool_schemas=TOOL_SCHEMAS,
+            # Force sequential tool calls. Without this, the orchestrator
+            # fires list_tasks AND dispatch_task × N in parallel — the
+            # dispatches all fail "list in draft" because the model hasn't
+            # observed list_tasks' result yet. Sequential = read first,
+            # decide second.
+            disable_parallel_tool_use=True,
         )
         text = (response.get("text") or "").strip()
         if text:
@@ -519,6 +686,21 @@ async def run_chat_turn(
         })
 
     final_text = "\n\n".join(aggregated_text) if aggregated_text else "(no response)"
+
+    # Dedupe identical failure chips. If the orchestrator slipped past
+    # disable_parallel_tool_use (e.g. the SDK silently ignored the flag
+    # for some model variant), we'd otherwise stack N identical "list
+    # in draft" chips. Collapse by (tool, summary) — different tool
+    # calls or different summaries stay distinct.
+    seen_summaries: set[tuple[str, str]] = set()
+    deduped_summaries: list[dict[str, Any]] = []
+    for tcs in tool_call_summaries:
+        key = (tcs.get("tool", ""), tcs.get("result_summary", ""))
+        if key in seen_summaries:
+            continue
+        seen_summaries.add(key)
+        deduped_summaries.append(tcs)
+    tool_call_summaries = deduped_summaries
 
     # Persist the assistant turn + emit.
     asst_msg = BuildMessage(

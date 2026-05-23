@@ -22,6 +22,8 @@ import { MarkdownRenderer } from "../ui/MarkdownRenderer"
 import { TaskListEditor } from "./TaskListEditor"
 import { BuildChatPanel } from "./BuildChatPanel"
 import { APISpecSection } from "./APISpecSection"
+import { BuildPlanGenerator } from "./BuildPlanGenerator"
+import { BuildPlanView } from "./BuildPlanView"
 
 interface Artifact {
   artifact_id: string
@@ -676,6 +678,14 @@ function PRDFinalized({
           tasks prompt picks it up so generated sub-tasks reference
           real endpoints. */}
       <APISpecSection projectId={projectId} prdFinalized={true} />
+
+      {/* BPD §6.8 — Build Plan Decomposition. The generator surfaces
+          the 3-pass flow (epics → features → atomic tasks + DAG); the
+          view shows the resulting hierarchy alongside the legacy flat
+          TaskListEditor. BuildPlanView returns null when no epics
+          exist, so legacy projects see no change. */}
+      <BuildPlanGenerator projectId={projectId} onChanged={reload} />
+      <BuildPlanView projectId={projectId} />
 
       {/* Tasks list comes last. Stacked layout (previously a 2-column
           chat-on-left / tasks-on-right grid) per user-requested order:

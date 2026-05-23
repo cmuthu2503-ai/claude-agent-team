@@ -3575,6 +3575,110 @@ def _count_by_status(tasks: list[ProjectTask]) -> dict[str, int]:
     return out
 
 
+# ── BPD-29-prerequisite — GET endpoints for the UI to read epics / features ─
+
+
+@router.get("/{project_id}/epics")
+async def list_epics(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Return all epics for a project (latest non-archived version).
+    Used by the Task List page's epic-level rendering and by the
+    project header rollup chip (BPD-34)."""
+    state = request.app.state.state_store
+    await _require_project(state, project_id)
+    epics = await state.list_epics_for_project(project_id)
+    return {
+        "data": [e.model_dump(mode="json") for e in epics],
+        "meta": {"count": len(epics)},
+        "error": None,
+    }
+
+
+@router.get("/{project_id}/features")
+async def list_features(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Return all features for a project, scoped to the latest
+    non-archived list_version. Returned flat (epic_id on each row);
+    UI groups by epic when rendering the 3-level tree."""
+    state = request.app.state.state_store
+    await _require_project(state, project_id)
+    features = await state.list_features_for_project(project_id)
+    return {
+        "data": [f.model_dump(mode="json") for f in features],
+        "meta": {"count": len(features)},
+        "error": None,
+    }
+
+
+# ── BPD-34 — project-level rollup chip data ──────────────────────────────
+
+
+@router.get("/{project_id}/build-plan/rollup")
+async def get_build_plan_rollup(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """One-shot fetch for the project header stat chip:
+       {epics_done, epics_total, tasks_done, tasks_total, tasks_blocked}.
+
+    `blocked` counts tasks whose depends_on chain isn't satisfied AND
+    that aren't yet in flight."""
+    state = request.app.state.state_store
+    await _require_project(state, project_id)
+    epics = await state.list_epics_for_project(project_id)
+    features = await state.list_features_for_project(project_id)
+    tasks = await state.list_tasks_for_project(project_id)
+
+    # Epic complete = every feature under it is complete = every task
+    # under those features is deployed.
+    feature_by_id = {f.feature_id: f for f in features}
+    feature_complete: dict[str, bool] = {}
+    for f in features:
+        ft = [t for t in tasks if t.feature_id == f.feature_id]
+        feature_complete[f.feature_id] = (
+            len(ft) > 0 and all(t.task_status == TaskStatus.DEPLOYED for t in ft)
+        )
+    epics_done = 0
+    for e in epics:
+        epic_feature_ids = [f.feature_id for f in features if f.epic_id == e.epic_id]
+        if epic_feature_ids and all(
+            feature_complete.get(fid, False) for fid in epic_feature_ids
+        ):
+            epics_done += 1
+
+    tasks_done = sum(1 for t in tasks if t.task_status == TaskStatus.DEPLOYED)
+    # Blocked = backlog + has unmet deps. Tasks without deps aren't
+    # "blocked" — they're just not dispatched yet.
+    dispatchable = await state.get_dispatchable_tasks(project_id)
+    dispatchable_ids = {t.task_id for t in dispatchable}
+    tasks_blocked = sum(
+        1 for t in tasks
+        if t.task_status == TaskStatus.BACKLOG
+        and t.list_status == ArtifactStatus.FINALIZED
+        and t.depends_on
+        and t.task_id not in dispatchable_ids
+    )
+    return {
+        "data": {
+            "epics_done": epics_done,
+            "epics_total": len(epics),
+            "tasks_done": tasks_done,
+            "tasks_total": len(tasks),
+            "tasks_blocked": tasks_blocked,
+            "features_total": len(features),
+        },
+        "meta": None,
+        "error": None,
+    }
+
+
 # ─────────────────────── Project-driven Build: Chat (PDB-37/38) ─────────────
 
 

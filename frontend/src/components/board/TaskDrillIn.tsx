@@ -143,6 +143,116 @@ export function TaskDrillIn({ card }: { card: CardData }) {
       {/* Summary chip row */}
       <SummaryChips card={card} detail={detail} />
 
+      {/* BPD §6.8 — Epic › Feature breadcrumb (when this task lives
+          under the new hierarchy). For legacy tasks card.bpd is
+          undefined and this block is skipped. */}
+      {card.bpd?.epic_title && card.bpd?.feature_title && (
+        <Section label="Hierarchy">
+          <div style={{
+            display: "inline-flex", alignItems: "center", gap: 4,
+            fontSize: 11, fontFamily: "var(--font-mono)",
+            color: "var(--text-secondary)",
+          }}>
+            <span style={{
+              padding: "2px 7px", borderRadius: 2,
+              background: "color-mix(in srgb, var(--info, #b026ff) 12%, transparent)",
+              border: "1px solid var(--info, #b026ff)",
+              color: "var(--info, #b026ff)",
+            }}>
+              Epic · {card.bpd.epic_title}
+            </span>
+            <span style={{ color: "var(--text-muted)" }}>›</span>
+            <span style={{
+              padding: "2px 7px", borderRadius: 2,
+              background: "color-mix(in srgb, var(--accent) 12%, transparent)",
+              border: "1px solid var(--accent)", color: "var(--accent)",
+            }}>
+              Feature · {card.bpd.feature_title}
+            </span>
+            <span style={{ color: "var(--text-muted)" }}>›</span>
+            <span style={{
+              padding: "2px 7px", borderRadius: 2,
+              background: "var(--bg-hover)", border: "1px solid var(--border)",
+            }}>
+              Task
+            </span>
+          </div>
+        </Section>
+      )}
+
+      {/* BPD §6.8 — Atomic-task contract surface. Shows primary_file +
+          acceptance_test + depends_on chips when the task was emitted
+          under Pass 3 of the decomposition flow. */}
+      {card.bpd && (card.bpd.primary_file || card.bpd.acceptance_test) && (
+        <Section label="Atomic Task">
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {card.bpd.primary_file && (
+              <div style={{
+                padding: "6px 10px", borderRadius: 3,
+                background: "var(--bg-hover)", border: "1px solid var(--border)",
+                fontSize: 11, color: "var(--text-secondary)",
+                display: "flex", alignItems: "center", gap: 6,
+              }}>
+                <span style={{ color: "var(--text-muted)", fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>
+                  Primary file:
+                </span>
+                <code style={{ fontFamily: "var(--font-mono)", color: "var(--accent)" }}>
+                  {card.bpd.primary_file}
+                </code>
+                {card.bpd.expected_loc && (
+                  <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 10, fontFamily: "var(--font-mono)" }}>
+                    ~{card.bpd.expected_loc} LOC
+                  </span>
+                )}
+              </div>
+            )}
+            {card.bpd.acceptance_test && (
+              <div style={{
+                padding: "6px 10px", borderRadius: 3,
+                background: "var(--bg-hover)", border: "1px solid var(--border)",
+                fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5,
+              }}>
+                <span style={{ color: "var(--text-muted)", fontSize: 10, textTransform: "uppercase", letterSpacing: 1, marginRight: 6 }}>
+                  Acceptance:
+                </span>
+                {card.bpd.acceptance_test}
+              </div>
+            )}
+          </div>
+        </Section>
+      )}
+
+      {/* depends_on chips */}
+      {card.bpd?.depends_on && card.bpd.depends_on.length > 0 && (
+        <Section label={`Depends On · ${card.bpd.depends_on.length}`}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {card.bpd.depends_on.map((dep) => {
+              const isDone = dep.status === "deployed"
+              const isMissing = dep.status === "missing"
+              const color = isDone
+                ? "var(--success)"
+                : isMissing ? "var(--danger)" : "var(--warning, #d4a017)"
+              return (
+                <span
+                  key={dep.task_id}
+                  title={`${dep.task_id} — ${dep.title} · ${dep.status}`}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 4,
+                    padding: "2px 7px", fontSize: 10,
+                    fontFamily: "var(--font-mono)",
+                    background: "color-mix(in srgb, " + color + " 12%, transparent)",
+                    color, border: "1px solid " + color,
+                    borderRadius: 2,
+                  }}
+                >
+                  {isDone ? "✓" : isMissing ? "⚠" : "🔗"} {dep.task_id}
+                </span>
+              )
+            })}
+          </div>
+        </Section>
+      )}
+
       {/* Workflow stage strip */}
       {card.current_stage && (
         <Section label="Workflow">
