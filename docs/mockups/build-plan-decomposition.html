@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mockup — Build Plan Decomposition (Epic → Feature → Task)</title>
+<style>
+  :root {
+    --bg: #0a0014;
+    --bg-card: #14082b;
+    --bg-hover: #1d0f3a;
+    --bg-input: #1a0a30;
+    --border: #2a1850;
+    --accent: #00f0ff;
+    --accent-subtle: rgba(0, 240, 255, 0.12);
+    --accent-dim: rgba(0, 240, 255, 0.4);
+    --success: #00ff88;
+    --success-subtle: rgba(0, 255, 136, 0.12);
+    --danger: #ff3860;
+    --danger-subtle: rgba(255, 56, 96, 0.12);
+    --warning: #ffaa00;
+    --warning-subtle: rgba(255, 170, 0, 0.12);
+    --info: #b026ff;
+    --text-primary: #e0d4ff;
+    --text-secondary: #a59bcb;
+    --text-muted: #6b5e8c;
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'SF Mono', Menlo, Consolas, monospace;
+    --radius: 4px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: var(--font);
+    font-size: 13px;
+    padding: 20px 24px 60px;
+    background-image:
+      radial-gradient(circle at 20% 50%, rgba(176, 38, 255, 0.06), transparent 50%),
+      radial-gradient(circle at 80% 80%, rgba(0, 240, 255, 0.04), transparent 50%);
+    min-height: 100vh;
+  }
+
+  /* matrix overlay */
+  .matrix-bg {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none; z-index: 0; opacity: 0.05;
+    background:
+      repeating-linear-gradient(90deg, transparent, transparent 80px,
+                                rgba(0, 240, 255, 0.08) 80px, rgba(0, 240, 255, 0.08) 81px);
+  }
+  .page { position: relative; z-index: 1; max-width: 1600px; margin: 0 auto; }
+
+  /* section banner */
+  .section-banner {
+    margin: 40px 0 16px;
+    padding: 10px 16px;
+    background: var(--accent-subtle);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    font-size: 14px; font-weight: 700;
+    color: var(--accent);
+    text-transform: uppercase; letter-spacing: 1.5px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .section-banner .num {
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--text-muted); font-weight: 600;
+  }
+  .section-banner .label-sub {
+    margin-left: auto; font-size: 11px;
+    color: var(--text-muted); letter-spacing: 0.5px;
+    text-transform: none; font-weight: 500;
+  }
+  .section-banner:first-child { margin-top: 0; }
+
+  /* card frame mimicking the live app */
+  .frame {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+
+  /* breadcrumb / title strip */
+  .crumb {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 0 16px;
+    font-size: 13px; color: var(--text-secondary);
+  }
+  .crumb .accent { color: var(--accent); }
+  .crumb .sep { color: var(--border); }
+  .crumb .current { color: var(--text-primary); font-weight: 600; }
+  .crumb .stat-chip {
+    margin-left: auto;
+    display: inline-flex; gap: 12px;
+    padding: 4px 10px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 11px; font-family: var(--font-mono);
+  }
+  .stat-chip .num { color: var(--text-primary); font-weight: 700; }
+  .stat-chip .lbl { color: var(--text-muted); margin-left: 3px; }
+  .stat-chip .div { color: var(--border); }
+
+  /* ===== Three-level Task List ===== */
+  .task-list { font-size: 13px; }
+
+  /* epic row */
+  .epic-row {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--info);
+    border-radius: var(--radius);
+    margin-bottom: 8px;
+    overflow: hidden;
+  }
+  .epic-row.expanded { border-left-color: var(--accent); }
+  .epic-header {
+    padding: 12px 14px;
+    display: flex; align-items: center; gap: 10px;
+    cursor: pointer;
+  }
+  .epic-header:hover { background: var(--bg-hover); }
+  .caret { color: var(--text-muted); font-family: var(--font-mono); width: 14px; }
+  .epic-icon {
+    font-size: 11px; font-family: var(--font-mono);
+    padding: 1px 6px; border-radius: 2px;
+    background: rgba(176, 38, 255, 0.15);
+    color: var(--info);
+    border: 1px solid var(--info);
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .epic-title { font-weight: 600; color: var(--text-primary); }
+  .epic-rollup { margin-left: auto; display: flex; gap: 10px; font-size: 11px; font-family: var(--font-mono); }
+  .epic-rollup .seg {
+    padding: 2px 7px; border-radius: 2px;
+    background: var(--bg-hover); border: 1px solid var(--border);
+    color: var(--text-secondary);
+  }
+  .epic-rollup .seg.done { color: var(--success); border-color: var(--success); }
+  .epic-rollup .seg.blocked { color: var(--warning); border-color: var(--warning); }
+
+  /* feature rows nested in epic */
+  .epic-body { padding: 0 14px 12px 32px; }
+  .feature-row {
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--accent);
+    border-radius: 3px;
+    margin: 6px 0;
+    overflow: hidden;
+  }
+  .feature-row.complete { border-left-color: var(--success); opacity: 0.85; }
+  .feature-header {
+    padding: 8px 12px;
+    display: flex; align-items: center; gap: 10px;
+    cursor: pointer;
+  }
+  .feature-header:hover { background: rgba(0, 240, 255, 0.06); }
+  .feature-icon {
+    font-size: 10px; font-family: var(--font-mono);
+    padding: 1px 6px; border-radius: 2px;
+    background: var(--accent-subtle);
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .feature-row.complete .feature-icon {
+    background: var(--success-subtle); color: var(--success); border-color: var(--success);
+  }
+  .feature-title { font-weight: 500; color: var(--text-primary); font-size: 12px; }
+  .feature-rollup { margin-left: auto; font-size: 10px; font-family: var(--font-mono); color: var(--text-muted); }
+  .feature-rollup.done { color: var(--success); }
+
+  /* feature body: task rows */
+  .feature-body { padding: 0 12px 8px 28px; }
+  .task-card {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 10px; margin: 4px 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .task-card:hover { border-color: var(--accent); background: rgba(0, 240, 255, 0.05); }
+  .task-id {
+    font-family: var(--font-mono); font-size: 10px;
+    color: var(--accent); padding: 1px 6px;
+    background: var(--accent-subtle);
+    border: 1px solid var(--accent-dim);
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .task-title { color: var(--text-primary); flex: 1; }
+  .task-file {
+    font-family: var(--font-mono); font-size: 10px;
+    color: var(--text-muted);
+  }
+  .task-status {
+    font-family: var(--font-mono); font-size: 10px;
+    padding: 1px 6px; border-radius: 2px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .task-status.done { background: var(--success-subtle); color: var(--success); border: 1px solid var(--success); }
+  .task-status.todo { background: var(--bg-hover); color: var(--text-muted); border: 1px solid var(--border); }
+  .task-status.progress { background: var(--accent-subtle); color: var(--accent); border: 1px solid var(--accent); }
+  .task-status.blocked { background: var(--warning-subtle); color: var(--warning); border: 1px solid var(--warning); }
+
+  .blocker-chain {
+    font-size: 10px; color: var(--warning);
+    padding: 1px 5px; background: var(--warning-subtle);
+    border: 1px solid var(--warning); border-radius: 2px;
+    font-family: var(--font-mono);
+  }
+
+  /* legacy epic */
+  .epic-row.legacy { border-left-color: var(--text-muted); opacity: 0.7; }
+  .epic-row.legacy .epic-icon { background: var(--bg-hover); color: var(--text-muted); border-color: var(--border); }
+
+  /* per-level action buttons */
+  .action-btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 8px; font-size: 10px;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    cursor: pointer;
+    font-family: var(--font);
+  }
+  .action-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .action-btn.primary { color: var(--accent); border-color: var(--accent); }
+  .action-btn.danger { color: var(--danger); border-color: var(--danger); opacity: 0.8; }
+  .action-btn.disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ===== Popup window (TaskDrillIn) ===== */
+  .popup {
+    background: var(--bg-card);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+    max-width: 640px;
+    margin-bottom: 12px;
+  }
+  .popup-bar {
+    padding: 8px 12px;
+    background: var(--bg-hover);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px;
+  }
+  .popup-bar .drag { color: var(--text-muted); }
+  .popup-bar .subt { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); }
+  .popup-bar .title { font-weight: 700; color: var(--text-primary); flex: 1; }
+  .popup-bar .ctl { color: var(--text-muted); width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+  .popup-body { padding: 14px; }
+  .popup-section { margin-bottom: 14px; }
+  .popup-section:last-child { margin-bottom: 0; }
+  .popup-section .lbl {
+    font-size: 10px; font-weight: 700; letter-spacing: 1px;
+    color: var(--text-muted); text-transform: uppercase;
+    margin-bottom: 6px; display: flex; align-items: center; gap: 6px;
+  }
+  .popup-section .lbl .sub {
+    text-transform: none; letter-spacing: 0; font-weight: 500;
+    color: var(--text-secondary);
+  }
+  .breadcrumb-chips {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 11px; font-family: var(--font-mono);
+    color: var(--text-secondary);
+  }
+  .breadcrumb-chips .crumb-x {
+    padding: 2px 7px; background: var(--bg-hover);
+    border: 1px solid var(--border); border-radius: 2px;
+  }
+  .breadcrumb-chips .sep { color: var(--text-muted); }
+
+  /* depends_on chips */
+  .dep-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .dep-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 7px; font-size: 10px;
+    font-family: var(--font-mono);
+    background: var(--success-subtle);
+    color: var(--success);
+    border: 1px solid var(--success);
+    border-radius: 2px;
+    cursor: pointer;
+  }
+  .dep-chip.blocked {
+    background: var(--warning-subtle);
+    color: var(--warning); border-color: var(--warning);
+  }
+
+  /* primary file / acceptance test boxes */
+  .info-box {
+    padding: 8px 10px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+  .info-box .mono { font-family: var(--font-mono); color: var(--accent); }
+
+  /* status chips reused */
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 7px; font-size: 10px;
+    font-family: var(--font-mono);
+    background: var(--bg-hover); border: 1px solid var(--border);
+    border-radius: 2px;
+    color: var(--text-secondary);
+  }
+  .chip.cost { color: var(--success); border-color: var(--success); background: var(--success-subtle); }
+  .chip.dur { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-subtle); }
+  .chip.status-deployed { color: var(--success); border-color: var(--success); background: var(--success-subtle); }
+  .summary-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+
+  /* ===== Build Board (mini) ===== */
+  .board-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .board-header .filter {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 10px; font-size: 11px;
+    background: var(--bg-input); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 2px;
+  }
+  .board-header .filter .key { color: var(--text-muted); margin-right: 4px; }
+  .board-grid {
+    display: grid; grid-template-columns: repeat(6, 1fr);
+    gap: 8px; padding: 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border); border-top: none;
+    border-radius: 0 0 var(--radius) var(--radius);
+  }
+  .board-col {
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: 3px; min-height: 200px;
+  }
+  .board-col-header {
+    padding: 8px 10px; font-size: 10px; font-weight: 700;
+    letter-spacing: 1px; text-transform: uppercase;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .board-col-header .dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted);
+  }
+  .board-col-header.in-progress .dot { background: var(--accent); }
+  .board-col-header.review .dot { background: var(--info); }
+  .board-col-header.testing .dot { background: var(--warning); }
+  .board-col-header.deployed .dot { background: var(--success); }
+  .board-col-header.failed .dot { background: var(--danger); }
+  .board-col-header .count { margin-left: auto; color: var(--text-muted); font-family: var(--font-mono); }
+  .board-col-body { padding: 6px; display: flex; flex-direction: column; gap: 6px; }
+  .board-card {
+    padding: 8px; background: var(--bg-card);
+    border: 1px solid var(--border); border-radius: 3px;
+    font-size: 11px;
+  }
+  .board-card .row1 { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+  .board-card .row1 .id { font-family: var(--font-mono); font-size: 10px; color: var(--accent); }
+  .board-card .row1 .chain { margin-left: auto; color: var(--warning); font-size: 11px; }
+  .board-card .ttl { color: var(--text-primary); line-height: 1.3; margin-bottom: 4px; }
+  .board-card .parent-chips { display: flex; gap: 3px; flex-wrap: wrap; }
+  .board-card .pc {
+    font-size: 9px; padding: 1px 4px; border-radius: 2px;
+    background: var(--bg-hover); color: var(--text-muted);
+    border: 1px solid var(--border);
+  }
+  .board-card .pc.epic { color: var(--info); border-color: var(--info); }
+  .board-card .pc.feature { color: var(--accent); border-color: var(--accent-dim); }
+  .board-card.blocked { opacity: 0.7; border-style: dashed; }
+
+  /* ===== Generation flow ===== */
+  .flow {
+    display: flex; align-items: stretch; gap: 12px;
+    margin: 12px 0;
+  }
+  .gate {
+    flex: 1; padding: 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    text-align: center;
+    position: relative;
+  }
+  .gate.done {
+    border-color: var(--success);
+    background: linear-gradient(180deg, var(--success-subtle), var(--bg-card) 80%);
+  }
+  .gate.current {
+    border-color: var(--accent); border-width: 2px;
+    background: linear-gradient(180deg, var(--accent-subtle), var(--bg-card) 80%);
+    box-shadow: 0 0 30px rgba(0, 240, 255, 0.15);
+  }
+  .gate.next { opacity: 0.6; }
+  .gate-num {
+    font-family: var(--font-mono); font-size: 10px;
+    color: var(--text-muted); margin-bottom: 6px;
+  }
+  .gate-title {
+    font-size: 13px; font-weight: 700;
+    color: var(--text-primary); margin-bottom: 4px;
+  }
+  .gate.done .gate-title { color: var(--success); }
+  .gate.current .gate-title { color: var(--accent); }
+  .gate-sub {
+    font-size: 10px; color: var(--text-muted);
+  }
+  .gate-action {
+    margin-top: 10px;
+  }
+  .gate-arrow {
+    align-self: center; color: var(--text-muted);
+    font-family: var(--font-mono); font-size: 18px;
+  }
+  .mega-btn {
+    margin-top: 12px; width: 100%;
+    padding: 10px;
+    background: linear-gradient(135deg, var(--accent), var(--info));
+    color: var(--bg);
+    border: none; border-radius: var(--radius);
+    font-weight: 700; font-size: 12px;
+    cursor: pointer; letter-spacing: 0.5px;
+  }
+  .mega-btn:hover { filter: brightness(1.1); }
+
+  /* ===== Epic detail popup ===== */
+  .epic-popup-body { padding: 14px; }
+  .epic-stat-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+    margin-bottom: 14px;
+  }
+  .epic-stat {
+    padding: 10px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    text-align: center;
+  }
+  .epic-stat .val {
+    font-size: 18px; font-weight: 700; color: var(--accent);
+    font-family: var(--font-mono);
+  }
+  .epic-stat .lbl {
+    font-size: 9px; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 1px; margin-top: 4px;
+  }
+
+  /* inline error chip */
+  .err-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    margin-left: 8px; padding: 2px 6px;
+    background: var(--danger-subtle); color: var(--danger);
+    border: 1px solid var(--danger); border-radius: 2px;
+    font-size: 10px; font-family: var(--font-mono);
+  }
+  .err-chip .fix {
+    margin-left: 4px; padding: 0 4px;
+    background: var(--danger); color: var(--bg);
+    border-radius: 1px; cursor: pointer;
+  }
+
+  /* note line at the top */
+  .note {
+    padding: 10px 14px;
+    background: var(--bg-card);
+    border: 1px dashed var(--accent);
+    border-radius: var(--radius);
+    color: var(--text-secondary);
+    font-size: 12px; line-height: 1.5;
+    margin-bottom: 20px;
+  }
+  .note strong { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="matrix-bg"></div>
+<div class="page">
+
+  <div class="note">
+    <strong>Build Plan Decomposition — Mockup</strong>
+    · Visualises the BPD §6.8 PRD changes (Epic → Feature → Task hierarchy + dependency DAG + three-pass generation).
+    Theme matches the live cyberpunk UI. Each numbered section maps to a BPD requirement ID; scroll through to see all UI deltas in one place.
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <!-- 1. Project header chip change -->
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <div class="section-banner">
+    <span class="num">BPD-306</span>
+    Project header stat chip
+    <span class="label-sub">today's "4/12 tasks · 2 failed" → epic rollup</span>
+  </div>
+  <div class="frame">
+    <div class="crumb">
+      <span style="font-size: 13px; color: var(--accent); font-weight: 700;">⚡ CrewAI</span>
+      <span class="sep">/</span>
+      <span class="current">Tasks</span>
+      <div class="stat-chip">
+        <span><span class="num">3</span><span class="lbl">/8 epics done</span></span>
+        <span class="div">·</span>
+        <span><span class="num">47</span><span class="lbl">/156 tasks</span></span>
+        <span class="div">·</span>
+        <span style="color: var(--warning);"><span class="num">5</span><span class="lbl">blocked</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <!-- 2. Three-level Task List -->
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <div class="section-banner">
+    <span class="num">BPD-301 · 302 · 308</span>
+    Task List — three-level collapsible (epic → feature → task)
+    <span class="label-sub">default state: epics collapsed with status rollups; expand to drill in</span>
+  </div>
+
+  <div class="task-list">
+
+    <!-- Epic 1: collapsed -->
+    <div class="epic-row">
+      <div class="epic-header">
+        <span class="caret">▶</span>
+        <span class="epic-icon">Epic E-3a7c1f</span>
+        <span class="epic-title">Authentication</span>
+        <span class="epic-rollup">
+          <span class="seg done">3/5 features</span>
+          <span class="seg">18/27 tasks</span>
+          <span class="seg blocked">2 blocked</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- Epic 2: collapsed -->
+    <div class="epic-row">
+      <div class="epic-header">
+        <span class="caret">▶</span>
+        <span class="epic-icon">Epic E-b91d04</span>
+        <span class="epic-title">Dashboard &amp; Analytics</span>
+        <span class="epic-rollup">
+          <span class="seg">1/4 features</span>
+          <span class="seg">6/19 tasks</span>
+          <span class="seg blocked">4 blocked</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- Epic 3: EXPANDED with features -->
+    <div class="epic-row expanded">
+      <div class="epic-header">
+        <span class="caret" style="color: var(--accent);">▼</span>
+        <span class="epic-icon">Epic E-c5e29b</span>
+        <span class="epic-title">Project CRUD &amp; Lifecycle</span>
+        <span class="epic-rollup">
+          <span class="seg done">4/4 features</span>
+          <span class="seg done">22/22 tasks</span>
+          <span class="seg" style="color: var(--success); border-color: var(--success);">✓ EPIC COMPLETE</span>
+        </span>
+        <button class="action-btn primary" style="margin-left: 10px;">+ Generate Features</button>
+      </div>
+      <div class="epic-body">
+
+        <!-- Feature 1 collapsed, complete -->
+        <div class="feature-row complete">
+          <div class="feature-header">
+            <span class="caret">▶</span>
+            <span class="feature-icon">Feature F-019a</span>
+            <span class="feature-title">Create project flow</span>
+            <span class="feature-rollup done">8/8 ✓</span>
+          </div>
+        </div>
+
+        <!-- Feature 2 EXPANDED with atomic tasks -->
+        <div class="feature-row">
+          <div class="feature-header">
+            <span class="caret" style="color: var(--accent);">▼</span>
+            <span class="feature-icon">Feature F-2d7e</span>
+            <span class="feature-title">Edit project metadata</span>
+            <span class="feature-rollup">5/6 · 1 in progress</span>
+            <button class="action-btn" style="margin-left: 10px;">+ Generate Tasks</button>
+          </div>
+          <div class="feature-body">
+            <div class="task-card">
+              <span class="task-id">T-4a91</span>
+              <span class="task-title">Add ProjectUpdate Pydantic model</span>
+              <span class="task-file">backend/app/models/project.py</span>
+              <span class="task-status done">deployed</span>
+            </div>
+            <div class="task-card">
+              <span class="task-id">T-4a92</span>
+              <span class="task-title">Wire PATCH /projects/:id endpoint</span>
+              <span class="task-file">backend/app/api/v1/projects.py</span>
+              <span class="task-status done">deployed</span>
+            </div>
+            <div class="task-card">
+              <span class="task-id">T-4a93</span>
+              <span class="task-title">Add edit-modal trigger in ProjectChip</span>
+              <span class="task-file">frontend/src/components/projects/ProjectChip.tsx</span>
+              <span class="task-status done">deployed</span>
+            </div>
+            <div class="task-card">
+              <span class="task-id">T-4a94</span>
+              <span class="task-title">Build EditProjectModal component</span>
+              <span class="task-file">frontend/src/components/projects/EditProjectModal.tsx</span>
+              <span class="task-status done">deployed</span>
+            </div>
+            <div class="task-card">
+              <span class="task-id">T-4a95</span>
+              <span class="task-title">Wire optimistic update + rollback on PATCH error</span>
+              <span class="task-file">frontend/src/components/projects/EditProjectModal.tsx</span>
+              <span class="task-status progress">in_progress</span>
+            </div>
+            <div class="task-card">
+              <span class="task-id">T-4a96</span>
+              <span class="task-title">Add e2e test: edit name → optimistic → PATCH succeeds</span>
+              <span class="task-file">tests/e2e/edit_project.spec.ts</span>
+              <span class="task-status todo">backlog</span>
+              <span class="blocker-chain">🔗 blocked by T-4a95</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Feature 3 — collapsed, with an inline dependency-validation error -->
+        <div class="feature-row">
+          <div class="feature-header">
+            <span class="caret">▶</span>
+            <span class="feature-icon">Feature F-3f80</span>
+            <span class="feature-title">Archive &amp; restore project</span>
+            <span class="feature-rollup">4/4 ✓</span>
+            <span class="err-chip">DAG: T-4a99 → missing T-???? <span class="fix">Fix</span></span>
+          </div>
+        </div>
+
+        <!-- Feature 4 collapsed -->
+        <div class="feature-row complete">
+          <div class="feature-header">
+            <span class="caret">▶</span>
+            <span class="feature-icon">Feature F-4c12</span>
+            <span class="feature-title">Hard-delete with cascade</span>
+            <span class="feature-rollup done">5/5 ✓</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Legacy epic (BPD-402) -->
+    <div class="epic-row legacy">
+      <div class="epic-header">
+        <span class="caret">▶</span>
+        <span class="epic-icon">Legacy</span>
+        <span class="epic-title">Tasks from previous list (pre-decomposition)</span>
+        <span class="epic-rollup">
+          <span class="seg">12 tasks · feature_id=NULL</span>
+        </span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <!-- 3. Task popup (TaskDrillIn) -->
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <div class="section-banner">
+    <span class="num">BPD-303</span>
+    Task popup — primary_file, acceptance_test, depends_on chips
+    <span class="label-sub">opens when user clicks any task card</span>
+  </div>
+
+  <div class="popup">
+    <div class="popup-bar">
+      <span class="drag">⇕</span>
+      <span class="subt">T-4a96</span>
+      <span class="title">Add e2e test: edit name → optimistic → PATCH succeeds</span>
+      <span class="ctl">−</span>
+      <span class="ctl">×</span>
+    </div>
+    <div class="popup-body">
+
+      <div class="popup-section">
+        <div class="lbl">Breadcrumb</div>
+        <div class="breadcrumb-chips">
+          <span class="crumb-x" style="color: var(--info);">Epic · Project CRUD &amp; Lifecycle</span>
+          <span class="sep">›</span>
+          <span class="crumb-x" style="color: var(--accent);">Feature · Edit project metadata</span>
+          <span class="sep">›</span>
+          <span class="crumb-x">Task</span>
+        </div>
+      </div>
+
+      <div class="popup-section">
+        <div class="lbl">Summary</div>
+        <div class="summary-chips">
+          <span class="chip status-deployed">status: backlog</span>
+          <span class="chip" style="color: var(--warning); border-color: var(--warning);">priority: medium</span>
+          <span class="chip" style="color: var(--text-secondary);">agent: tester_specialist</span>
+          <span class="chip" style="color: var(--text-muted);">expected: ~80 LOC</span>
+        </div>
+      </div>
+
+      <div class="popup-section">
+        <div class="lbl">Primary File · <span class="sub">the one file this task owns</span></div>
+        <div class="info-box">
+          <span class="mono">tests/e2e/edit_project.spec.ts</span> · NEW
+        </div>
+      </div>
+
+      <div class="popup-section">
+        <div class="lbl">Acceptance Test · <span class="sub">the single condition for "done"</span></div>
+        <div class="info-box">
+          Playwright test: open Edit modal, change name, click Save.
+          Row in the project list updates IMMEDIATELY (optimistic), and the
+          PATCH request resolves 200 within 500ms. On a forced 500 response,
+          the row reverts to its previous name and a toast is shown.
+        </div>
+      </div>
+
+      <div class="popup-section">
+        <div class="lbl">Depends On · <span class="sub">all must be `deployed` before this can dispatch</span></div>
+        <div class="dep-chips">
+          <span class="dep-chip">✓ T-4a92 · PATCH endpoint</span>
+          <span class="dep-chip">✓ T-4a94 · EditProjectModal</span>
+          <span class="dep-chip blocked">⏳ T-4a95 · optimistic update (in_progress)</span>
+        </div>
+      </div>
+
+      <div class="popup-section">
+        <div class="lbl">Existing sections preserved</div>
+        <div class="info-box" style="color: var(--text-muted); font-style: italic;">
+          Code Review · Tests Executed · Code Committed · Deployment · Agent Timeline · Error
+          (rendered identically to today — see Story Board mockup)
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <!-- 4. Build Board with filters + blocked column -->
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <div class="section-banner">
+    <span class="num">BPD-304</span>
+    Build Board — epic/feature filters + blocked cards in Backlog
+    <span class="label-sub">blocked cards stay in Backlog with a chain icon; click to see blockers</span>
+  </div>
+
+  <div class="board-header">
+    <span style="font-size: 13px; font-weight: 700; color: var(--accent);">📋 Build Board</span>
+    <span style="color: var(--text-muted); margin: 0 8px;">·</span>
+    <div class="filter"><span class="key">Epic:</span>All ▾</div>
+    <div class="filter"><span class="key">Feature:</span>All ▾</div>
+    <div class="filter" style="color: var(--accent); border-color: var(--accent);"><span class="key">Status:</span>Backlog + In Progress ▾</div>
+    <div style="margin-left: auto; display: flex; gap: 6px;">
+      <button class="action-btn">⟳ Refresh</button>
+      <button class="action-btn primary">🚀 Dispatch All Ready (8 of 47)</button>
+    </div>
+  </div>
+  <div class="board-grid">
+    <div class="board-col">
+      <div class="board-col-header"><span class="dot"></span>Backlog <span class="count">12</span></div>
+      <div class="board-col-body">
+        <div class="board-card blocked">
+          <div class="row1">
+            <span class="id">T-4a96</span>
+            <span class="chain">🔗</span>
+          </div>
+          <div class="ttl">Add e2e test: edit name flow</div>
+          <div class="parent-chips">
+            <span class="pc epic">Project CRUD</span>
+            <span class="pc feature">Edit metadata</span>
+          </div>
+          <div style="font-size: 9px; color: var(--warning); margin-top: 4px;">blocked by 1 task</div>
+        </div>
+        <div class="board-card blocked">
+          <div class="row1">
+            <span class="id">T-5a12</span>
+            <span class="chain">🔗</span>
+          </div>
+          <div class="ttl">Render dashboard KPIs from summary endpoint</div>
+          <div class="parent-chips">
+            <span class="pc epic">Dashboard</span>
+            <span class="pc feature">KPI cards</span>
+          </div>
+          <div style="font-size: 9px; color: var(--warning); margin-top: 4px;">blocked by 3 tasks</div>
+        </div>
+        <div class="board-card">
+          <div class="row1"><span class="id">T-7b09</span></div>
+          <div class="ttl">Add toast component for save errors</div>
+          <div class="parent-chips">
+            <span class="pc epic">Foundation</span>
+            <span class="pc feature">Notifications</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="board-col">
+      <div class="board-col-header in-progress"><span class="dot"></span>In Progress <span class="count">2</span></div>
+      <div class="board-col-body">
+        <div class="board-card">
+          <div class="row1"><span class="id">T-4a95</span></div>
+          <div class="ttl">Optimistic update + rollback on PATCH error</div>
+          <div class="parent-chips">
+            <span class="pc epic">Project CRUD</span>
+            <span class="pc feature">Edit metadata</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="board-col">
+      <div class="board-col-header review"><span class="dot"></span>Review <span class="count">1</span></div>
+      <div class="board-col-body"></div>
+    </div>
+    <div class="board-col">
+      <div class="board-col-header testing"><span class="dot"></span>Testing <span class="count">0</span></div>
+      <div class="board-col-body"></div>
+    </div>
+    <div class="board-col">
+      <div class="board-col-header deployed"><span class="dot"></span>Deployed <span class="count">47</span></div>
+      <div class="board-col-body">
+        <div class="board-card">
+          <div class="row1"><span class="id">T-4a94</span></div>
+          <div class="ttl">Build EditProjectModal component</div>
+          <div class="parent-chips">
+            <span class="pc epic">Project CRUD</span>
+            <span class="pc feature">Edit metadata</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="board-col">
+      <div class="board-col-header failed"><span class="dot"></span>Failed <span class="count">0</span></div>
+      <div class="board-col-body"></div>
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <!-- 5. Three-gate generation flow -->
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <div class="section-banner">
+    <span class="num">BPD-307</span>
+    Generation flow — three approval gates
+    <span class="label-sub">Pass 1 → review → Pass 2 → review → Pass 3 → review → dispatch ready</span>
+  </div>
+
+  <div class="frame">
+    <div class="flow">
+      <div class="gate done">
+        <div class="gate-num">PASS 1 · BPD-101</div>
+        <div class="gate-title">✓ Epics</div>
+        <div class="gate-sub">8 epics generated · approved 2026-05-22 14:12 by chand</div>
+        <div class="gate-action">
+          <button class="action-btn">Regenerate with comments</button>
+        </div>
+      </div>
+      <div class="gate-arrow">→</div>
+      <div class="gate done">
+        <div class="gate-num">PASS 2 · BPD-102</div>
+        <div class="gate-title">✓ Features</div>
+        <div class="gate-sub">34 features across 8 epics · approved 2026-05-22 14:38</div>
+        <div class="gate-action">
+          <button class="action-btn">Regenerate with comments</button>
+        </div>
+      </div>
+      <div class="gate-arrow">→</div>
+      <div class="gate current">
+        <div class="gate-num">PASS 3 · BPD-103</div>
+        <div class="gate-title">⚡ Tasks</div>
+        <div class="gate-sub">156 atomic tasks generated · reviewing now</div>
+        <div class="gate-action">
+          <button class="action-btn primary">✓ Approve &amp; Finalize</button>
+          <button class="action-btn" style="margin-left: 4px;">Edit</button>
+        </div>
+      </div>
+      <div class="gate-arrow">→</div>
+      <div class="gate next">
+        <div class="gate-num">DISPATCH</div>
+        <div class="gate-title">Ready</div>
+        <div class="gate-sub">unblocks "Dispatch All Ready" on Build Board</div>
+      </div>
+    </div>
+
+    <button class="mega-btn">⚡ Approve All Passes &amp; Auto-Dispatch (opt-in)</button>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <!-- 6. Epic detail popup -->
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <div class="section-banner">
+    <span class="num">BPD-305</span>
+    Epic-detail popup
+    <span class="label-sub">opens when user clicks an epic header — feature list + rollup stats</span>
+  </div>
+
+  <div class="popup" style="max-width: 720px;">
+    <div class="popup-bar">
+      <span class="drag">⇕</span>
+      <span class="subt">E-c5e29b</span>
+      <span class="title">Epic · Project CRUD &amp; Lifecycle</span>
+      <span class="ctl">−</span>
+      <span class="ctl">×</span>
+    </div>
+    <div class="epic-popup-body">
+
+      <div class="epic-stat-grid">
+        <div class="epic-stat">
+          <div class="val" style="color: var(--success);">4 / 4</div>
+          <div class="lbl">Features complete</div>
+        </div>
+        <div class="epic-stat">
+          <div class="val">$3.47</div>
+          <div class="lbl">Aggregate LLM cost</div>
+        </div>
+        <div class="epic-stat">
+          <div class="val">1h 42m</div>
+          <div class="lbl">Wall-clock time</div>
+        </div>
+        <div class="epic-stat">
+          <div class="val">22 / 22</div>
+          <div class="lbl">Tasks deployed</div>
+        </div>
+        <div class="epic-stat">
+          <div class="val">11</div>
+          <div class="lbl">Commits landed</div>
+        </div>
+        <div class="epic-stat">
+          <div class="val" style="color: var(--success);">100%</div>
+          <div class="lbl">Test coverage avg</div>
+        </div>
+      </div>
+
+      <div class="popup-section">
+        <div class="lbl">Acceptance Criterion</div>
+        <div class="info-box">
+          Authenticated users can create, edit, archive, and delete projects.
+          PATCH respects RBAC (admin-only for status changes). Hard-delete
+          cascades to project_tasks, requests, and stories. UI surfaces
+          optimistic updates with rollback on error.
+        </div>
+      </div>
+
+      <div class="popup-section">
+        <div class="lbl">Features (4)</div>
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          <div class="task-card">
+            <span class="task-id">F-019a</span>
+            <span class="task-title">Create project flow</span>
+            <span class="task-file">8 tasks · $0.84</span>
+            <span class="task-status done">complete</span>
+          </div>
+          <div class="task-card">
+            <span class="task-id">F-2d7e</span>
+            <span class="task-title">Edit project metadata</span>
+            <span class="task-file">6 tasks · $1.12</span>
+            <span class="task-status done">complete</span>
+          </div>
+          <div class="task-card">
+            <span class="task-id">F-3f80</span>
+            <span class="task-title">Archive &amp; restore project</span>
+            <span class="task-file">4 tasks · $0.62</span>
+            <span class="task-status done">complete</span>
+          </div>
+          <div class="task-card">
+            <span class="task-id">F-4c12</span>
+            <span class="task-title">Hard-delete with cascade</span>
+            <span class="task-file">5 tasks · $0.89</span>
+            <span class="task-status done">complete</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <!-- 7. Build Chat — orchestrator gains new tools -->
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <div class="section-banner">
+    <span class="num">BPD-37</span>
+    Build Chat — orchestrator composes with new dispatch endpoints
+    <span class="label-sub">chat-driven workflows can dispatch by feature / epic / "all ready"</span>
+  </div>
+
+  <div class="frame" style="padding: 0;">
+    <div style="padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px;">
+      <span style="color: var(--accent); font-weight: 700;">💬 Build Chat</span>
+      <span style="color: var(--text-muted); font-size: 11px; margin-left: auto;">chat with the project_orchestrator agent</span>
+    </div>
+
+    <div style="padding: 14px; display: flex; flex-direction: column; gap: 10px;">
+
+      <div style="align-self: flex-end; max-width: 70%; padding: 8px 12px; background: var(--accent-subtle); border: 1px solid var(--accent-dim); border-radius: 8px 8px 2px 8px; font-size: 12px;">
+        Dispatch the Authentication epic.
+      </div>
+
+      <div style="max-width: 80%; padding: 8px 12px; background: var(--bg-hover); border: 1px solid var(--border); border-radius: 8px 8px 8px 2px; font-size: 12px; color: var(--text-secondary); line-height: 1.5;">
+        <div style="margin-bottom: 8px;">Checking the dependency graph for Epic E-3a7c1f (Authentication)…</div>
+        <div style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 3px; padding: 6px 8px; margin: 6px 0; font-family: var(--font-mono); font-size: 10px;">
+          <div style="color: var(--accent);">🔧 dispatch_epic_ready</div>
+          <div style="color: var(--text-muted); margin: 2px 0;">  epic_id: E-3a7c1f</div>
+          <div style="color: var(--success); margin-top: 4px;">→ 11 of 27 tasks dispatched (5 features unlocked)</div>
+          <div style="color: var(--warning); margin-top: 2px;">→ 16 tasks remain blocked (will auto-dispatch as deps clear)</div>
+        </div>
+        <div style="margin-top: 8px;">Dispatched the first wave. Auto-dispatch is on for this epic, so the rest will fire as their dependencies complete. Watch the Build Board.</div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
