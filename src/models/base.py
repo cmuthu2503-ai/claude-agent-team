@@ -354,6 +354,12 @@ class Project(BaseModel):
     # legacy rebuild-all behaviour" (manual Deploy button clicks that
     # never went through the judge).
     deploy_pending_action: str | None = None
+    # BPD-25 — auto-dispatch on `request.deployed`. When True, the
+    # post-deploy event handler (BPD-24) recomputes the dispatchable
+    # set (BPD-205) and fires every newly-unblocked task automatically.
+    # Default False per BPD §2.3 — cost-surprise prevention; opt-in via
+    # the project's Deployment panel.
+    auto_dispatch_on_deploy: bool = False
     # Audit
     created_by: str | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)

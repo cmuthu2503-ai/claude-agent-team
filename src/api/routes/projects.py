@@ -142,6 +142,10 @@ class UpdateProjectBody(BaseModel):
     default_team: Literal["engineering", "research", "content"] | None = None
     target_date: str | None = None
     template_id: str | None = None
+    # BPD-25 — per-project toggle. False (default) means dispatch on
+    # request.deployed is manual; True means the post-deploy handler
+    # auto-fires every newly-unblocked task. Off by default per BPD §2.3.
+    auto_dispatch_on_deploy: bool | None = None
 
 
 # ─────────────────────────────── Serializers ──────────────────────────────
@@ -601,6 +605,8 @@ async def update_project(
                     detail=f"Unknown template_id {body.template_id!r}.",
                 )
             project.template_id = body.template_id or None
+        if body.auto_dispatch_on_deploy is not None:
+            project.auto_dispatch_on_deploy = bool(body.auto_dispatch_on_deploy)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -3132,6 +3138,79 @@ class DispatchBody(BaseModel):
     task_ids: list[str]
 
 
+# In-flight statuses that short-circuit dispatch as no-ops (per BLD-004
+# extended for retry — only terminal-but-not-deployed rows are eligible
+# for re-dispatch). Module-level so the shared dispatch helper + the
+# auto-dispatch event handler agree on the set.
+_DISPATCH_IN_FLIGHT_STATUSES = {
+    TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS,
+    TaskStatus.REVIEW, TaskStatus.TESTING,
+}
+
+
+async def _dispatch_one_task(
+    state, orchestrator, task: ProjectTask, user_id: str,
+) -> dict[str, Any]:
+    """Internal helper: submit one ProjectTask through the orchestrator
+    and stamp the row with the new request_id + DISPATCHED status.
+    Caller is responsible for ALL pre-flight checks (list_status,
+    depends_on, in-flight short-circuit).
+
+    Returns the same shape as the dispatch endpoint's `dispatched`
+    array entries — caller decides whether to use the returned dict
+    or aggregate."""
+    if (task.task_status in _DISPATCH_IN_FLIGHT_STATUSES
+            or task.task_status == TaskStatus.DEPLOYED) and task.request_id:
+        return {
+            "task_id": task.task_id,
+            "request_id": task.request_id,
+            "status": "already_dispatched",
+        }
+    req = await orchestrator.submit(
+        description=task.description or task.title,
+        task_type=task.task_type,
+        priority=task.priority,
+        created_by=user_id,
+        project_id=task.project_id,
+        source_task_id=task.task_id,
+    )
+    await state.set_task_status(task.task_id, TaskStatus.DISPATCHED, request_id=req.request_id)
+    return {
+        "task_id": task.task_id,
+        "request_id": req.request_id,
+        "status": "dispatched",
+    }
+
+
+async def _check_dependencies_unmet(
+    state, task: ProjectTask,
+) -> list[dict[str, str]] | None:
+    """BPD-201 — returns a list of unmet blockers if `task` can't yet
+    dispatch (blockers not all `deployed`), else None. Legacy tasks
+    with depends_on=[] always return None (no blockers)."""
+    if not task.depends_on:
+        return None
+    blockers = await state.get_task_blockers(task.task_id)
+    blocker_by_id = {b.task_id: b for b in blockers}
+    unmet: list[dict[str, str]] = []
+    for dep_id in task.depends_on:
+        b = blocker_by_id.get(dep_id)
+        if b is None:
+            unmet.append({
+                "task_id": dep_id,
+                "title": "(missing — dangling depends_on reference)",
+                "status": "missing",
+            })
+            continue
+        if b.task_status != TaskStatus.DEPLOYED:
+            unmet.append({
+                "task_id": dep_id,
+                "title": b.title,
+                "status": str(b.task_status),
+            })
+    return unmet or None
+
+
 @router.post("/{project_id}/build/dispatch")
 async def dispatch_tasks(
     project_id: str,
@@ -3140,9 +3219,15 @@ async def dispatch_tasks(
     user: dict = Depends(get_current_user),
 ):
     """For each task_id: validate it belongs to this project AND its current
-    task_status is 'backlog'. Already-dispatched tasks are returned as no-ops
-    with the existing request_id (idempotent per BLD-004). Archived or
-    unknown task_ids fail the dispatch with a 400 listing the offenders."""
+    task_status is 'backlog' AND its depends_on chain is satisfied.
+
+    Returns 409 dependencies_unmet (BPD-201) when ANY task in the batch
+    has unmet dependencies, with the blocker list per offending task.
+    Otherwise dispatches the batch.
+
+    Already-dispatched tasks are returned as no-ops with the existing
+    request_id (idempotent per BLD-004). Archived or unknown task_ids
+    fail the dispatch with a 400 listing the offenders."""
     state = request.app.state.state_store
     try:
         assert_not_unassigned(project_id, "modified")
@@ -3171,56 +3256,43 @@ async def dispatch_tasks(
             detail={"error": "invalid_task_ids", "issues": errors},
         )
 
+    # BPD-20: dependency pre-check. For tasks that are NOT already
+    # in-flight / deployed (those short-circuit anyway), refuse if
+    # their depends_on chain isn't fully satisfied. The check is
+    # all-or-nothing per request — if ANY task has unmet deps, the
+    # whole batch is refused so the UI gets a consistent picture.
+    unmet_per_task: dict[str, list[dict[str, str]]] = {}
+    for tid, task in tasks_by_id.items():
+        if task.task_status in _DISPATCH_IN_FLIGHT_STATUSES or task.task_status == TaskStatus.DEPLOYED:
+            continue
+        unmet = await _check_dependencies_unmet(state, task)
+        if unmet:
+            unmet_per_task[tid] = unmet
+    if unmet_per_task:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "dependencies_unmet",
+                "blockers": unmet_per_task,
+                "hint": (
+                    "Dispatch the blockers first, or use "
+                    "POST /build/dispatch-all-ready to fire every "
+                    "task in the project whose deps are met."
+                ),
+            },
+        )
+
     orchestrator = request.app.state.orchestrator
     dispatched: list[dict[str, Any]] = []
-    # BLD-004 (extended for retry): only IN-FLIGHT and DEPLOYED rows are
-    # no-op short-circuits. Terminal-but-not-deployed rows (FAILED,
-    # CANCELLED) ARE eligible for re-dispatch — they fall through and
-    # get a fresh request_id; the old failed request stays in History
-    # so the user can compare cycles. This is what powers the UI's
-    # "Dispatch Selected" button on a row with status `failed`.
-    _IN_FLIGHT_STATUSES = {
-        TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS,
-        TaskStatus.REVIEW, TaskStatus.TESTING,
-    }
     for tid, task in tasks_by_id.items():
-        is_in_flight = task.task_status in _IN_FLIGHT_STATUSES
-        is_already_done = task.task_status == TaskStatus.DEPLOYED
-        if (is_in_flight or is_already_done) and task.request_id:
-            dispatched.append({
-                "task_id": tid,
-                "request_id": task.request_id,
-                "status": "already_dispatched",
-            })
-            continue
-
-        # Submit through the existing orchestrator path so the workflow
-        # selection / project-active validation / event emission all match
-        # the one-off Submit Request behavior. `source_task_id` is the new
-        # back-link that the PDB-25 handler reads to map status updates.
         try:
-            req = await orchestrator.submit(
-                description=task.description or task.title,
-                task_type=task.task_type,
-                priority=task.priority,
-                created_by=user.get("user_id") or "",
-                project_id=project_id,
-                source_task_id=tid,
+            result = await _dispatch_one_task(
+                state, orchestrator, task, user.get("user_id") or "",
             )
         except ValueError as e:
-            # Project archived between validate-and-act, or workflow lookup
-            # failed. Mark this task as failed-to-dispatch but keep going
-            # for the rest — the user can retry.
             errors.append(f"{tid}: {e}")
             continue
-
-        # Stamp the task itself with the new request_id + status.
-        await state.set_task_status(tid, TaskStatus.DISPATCHED, request_id=req.request_id)
-        dispatched.append({
-            "task_id": tid,
-            "request_id": req.request_id,
-            "status": "dispatched",
-        })
+        dispatched.append(result)
 
     return {
         "data": {"dispatched": dispatched},
@@ -3230,6 +3302,277 @@ async def dispatch_tasks(
         },
         "error": None,
     }
+
+
+# ── BPD-21/22/23 — Dispatch by scope (feature / epic / all-ready) ────────
+
+
+async def _dispatch_ready_tasks(
+    state, orchestrator, tasks: list[ProjectTask], user_id: str,
+) -> dict[str, Any]:
+    """Run the same dispatch loop as dispatch_tasks, but filter to
+    tasks whose deps are met AND that are backlog / failed / cancelled.
+    Returns {dispatched: [...], blocked: [...], skipped: [...]}."""
+    dispatched: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for task in tasks:
+        if task.list_status != ArtifactStatus.FINALIZED:
+            skipped.append({"task_id": task.task_id, "reason": "not_finalized"})
+            continue
+        if (task.task_status in _DISPATCH_IN_FLIGHT_STATUSES
+                or task.task_status == TaskStatus.DEPLOYED):
+            skipped.append({
+                "task_id": task.task_id,
+                "reason": "already_dispatched_or_deployed",
+            })
+            continue
+        unmet = await _check_dependencies_unmet(state, task)
+        if unmet:
+            blocked.append({"task_id": task.task_id, "blockers": unmet})
+            continue
+        try:
+            result = await _dispatch_one_task(state, orchestrator, task, user_id)
+            dispatched.append(result)
+        except ValueError as e:
+            blocked.append({"task_id": task.task_id, "error": str(e)})
+    return {
+        "dispatched": dispatched,
+        "blocked": blocked,
+        "skipped": skipped,
+    }
+
+
+@router.post("/{project_id}/build/dispatch-feature/{feature_id}")
+async def dispatch_feature(
+    project_id: str,
+    feature_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """BPD-21 — dispatch every task under a feature whose deps are met.
+    Tasks with unmet deps are returned in the `blocked` list with their
+    blocker chain; they'll auto-dispatch as their deps clear (when
+    auto_dispatch_on_deploy is on)."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    await _require_project(state, project_id)
+    feature = await state.get_feature(feature_id)
+    if feature is None or feature.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Feature not found in this project.")
+
+    all_tasks = await state.list_tasks_for_project(project_id)
+    feature_tasks = [t for t in all_tasks if t.feature_id == feature_id]
+    if not feature_tasks:
+        raise HTTPException(
+            status_code=404,
+            detail="Feature has no tasks. Run Pass 3 generation first.",
+        )
+
+    orchestrator = request.app.state.orchestrator
+    result = await _dispatch_ready_tasks(
+        state, orchestrator, feature_tasks, user.get("user_id") or "",
+    )
+    return {
+        "data": result,
+        "meta": {
+            "feature_id": feature_id,
+            "dispatched_count": len(result["dispatched"]),
+            "blocked_count": len(result["blocked"]),
+            "skipped_count": len(result["skipped"]),
+        },
+        "error": None,
+    }
+
+
+@router.post("/{project_id}/build/dispatch-epic/{epic_id}")
+async def dispatch_epic(
+    project_id: str,
+    epic_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """BPD-22 — dispatch every task across every feature under an epic
+    whose deps are met. Tasks with unmet deps are reported (will auto-
+    dispatch if the toggle is on)."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    await _require_project(state, project_id)
+    epic = await state.get_epic(epic_id)
+    if epic is None or epic.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Epic not found in this project.")
+
+    features = await state.list_features_for_epic(epic_id)
+    feature_ids = {f.feature_id for f in features}
+    all_tasks = await state.list_tasks_for_project(project_id)
+    epic_tasks = [t for t in all_tasks if t.feature_id in feature_ids]
+    if not epic_tasks:
+        raise HTTPException(
+            status_code=404,
+            detail="Epic has no tasks. Run Pass 3 generation for its features first.",
+        )
+
+    orchestrator = request.app.state.orchestrator
+    result = await _dispatch_ready_tasks(
+        state, orchestrator, epic_tasks, user.get("user_id") or "",
+    )
+    return {
+        "data": result,
+        "meta": {
+            "epic_id": epic_id,
+            "feature_count": len(feature_ids),
+            "dispatched_count": len(result["dispatched"]),
+            "blocked_count": len(result["blocked"]),
+            "skipped_count": len(result["skipped"]),
+        },
+        "error": None,
+    }
+
+
+@router.post("/{project_id}/build/dispatch-all-ready")
+async def dispatch_all_ready(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """BPD-23 — fan out every backlog task in the project whose deps
+    are met. Re-evaluates on each `request.deployed` event when
+    auto_dispatch_on_deploy is True (BPD-24)."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    await _require_project(state, project_id)
+
+    # Use the dedicated helper which already encodes the same predicate
+    # (backlog + finalized + deps satisfied). Then dispatch each.
+    ready = await state.get_dispatchable_tasks(project_id)
+    orchestrator = request.app.state.orchestrator
+    dispatched: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for task in ready:
+        try:
+            result = await _dispatch_one_task(
+                state, orchestrator, task, user.get("user_id") or "",
+            )
+            dispatched.append(result)
+        except ValueError as e:
+            errors.append({"task_id": task.task_id, "error": str(e)})
+
+    # Count what's still blocked for reporting
+    all_tasks = await state.list_tasks_for_project(project_id)
+    blocked_count = sum(
+        1 for t in all_tasks
+        if t.task_status == TaskStatus.BACKLOG
+        and t.list_status == ArtifactStatus.FINALIZED
+        and t.depends_on
+        and t.task_id not in {d["task_id"] for d in dispatched}
+    )
+    return {
+        "data": {"dispatched": dispatched, "errors": errors or None},
+        "meta": {
+            "dispatched_count": len(dispatched),
+            "blocked_count": blocked_count,
+        },
+        "error": None,
+    }
+
+
+# ── BPD-27 — Status rollups (feature / epic completion derived) ──────────
+
+
+@router.get("/{project_id}/features/{feature_id}/status")
+async def get_feature_status(
+    project_id: str,
+    feature_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Rollup: a feature is 'complete' when every task under it is
+    `deployed`. Returns counts by task_status + a derived overall
+    label ('complete' | 'in_progress' | 'backlog')."""
+    state = request.app.state.state_store
+    feature = await state.get_feature(feature_id)
+    if feature is None or feature.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Feature not found.")
+    all_tasks = await state.list_tasks_for_project(project_id)
+    children = [t for t in all_tasks if t.feature_id == feature_id]
+    counts = _count_by_status(children)
+    return {
+        "data": {
+            "feature_id": feature_id,
+            "task_count": len(children),
+            "counts_by_status": counts,
+            "complete": len(children) > 0 and counts.get("deployed", 0) == len(children),
+        },
+        "meta": None,
+        "error": None,
+    }
+
+
+@router.get("/{project_id}/epics/{epic_id}/status")
+async def get_epic_status(
+    project_id: str,
+    epic_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Rollup: an epic is 'complete' when every feature under it is
+    complete. Returns per-feature status + aggregate task counts."""
+    state = request.app.state.state_store
+    epic = await state.get_epic(epic_id)
+    if epic is None or epic.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Epic not found.")
+    features = await state.list_features_for_epic(epic_id)
+    feature_ids = {f.feature_id for f in features}
+    all_tasks = await state.list_tasks_for_project(project_id)
+    epic_tasks = [t for t in all_tasks if t.feature_id in feature_ids]
+    per_feature: list[dict[str, Any]] = []
+    for f in features:
+        ft = [t for t in epic_tasks if t.feature_id == f.feature_id]
+        ft_counts = _count_by_status(ft)
+        per_feature.append({
+            "feature_id": f.feature_id,
+            "title": f.title,
+            "task_count": len(ft),
+            "counts_by_status": ft_counts,
+            "complete": len(ft) > 0 and ft_counts.get("deployed", 0) == len(ft),
+        })
+    epic_counts = _count_by_status(epic_tasks)
+    return {
+        "data": {
+            "epic_id": epic_id,
+            "feature_count": len(features),
+            "features_complete": sum(1 for f in per_feature if f["complete"]),
+            "task_count": len(epic_tasks),
+            "counts_by_status": epic_counts,
+            "complete": (
+                len(features) > 0
+                and all(f["complete"] for f in per_feature)
+            ),
+            "features": per_feature,
+        },
+        "meta": None,
+        "error": None,
+    }
+
+
+def _count_by_status(tasks: list[ProjectTask]) -> dict[str, int]:
+    """Histogram task_status enum values to a {status_str: count} dict
+    suitable for JSON serialization. Used by feature/epic rollup
+    endpoints."""
+    out: dict[str, int] = {}
+    for t in tasks:
+        key = str(t.task_status)
+        out[key] = out.get(key, 0) + 1
+    return out
 
 
 # ─────────────────────── Project-driven Build: Chat (PDB-37/38) ─────────────

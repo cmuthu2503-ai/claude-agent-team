@@ -1128,15 +1128,15 @@ whose `depends_on` isn't fully `deployed`.
 
 | ID | Task | Effort | Depends On | Status |
 |----|------|--------|-----------|--------|
-| BPD-20 | Update `POST /projects/{id}/build/dispatch` to enforce `depends_on`; return 409 with blocker list on unmet deps (BPD-201) | M | BPD-08, BPD-04 | `[ ]` |
-| BPD-21 | New endpoint `POST /projects/{id}/build/dispatch-feature/{feature_id}` (BPD-202) | M | BPD-20 | `[ ]` |
-| BPD-22 | New endpoint `POST /projects/{id}/build/dispatch-epic/{epic_id}` (BPD-203) | M | BPD-20 | `[ ]` |
-| BPD-23 | New endpoint `POST /projects/{id}/build/dispatch-all-ready` (BPD-204) | M | BPD-20 | `[ ]` |
-| BPD-24 | EventEmitter handler: on `request.deployed`, recompute dispatchable set; auto-fire if `auto_dispatch_on_deploy` is on (BPD-205) | M | BPD-23 | `[ ]` |
-| BPD-25 | Add `auto_dispatch_on_deploy: bool` column to `projects`; PATCH endpoint accepts it (BPD-206) | S | BPD-24 | `[ ]` |
-| BPD-26 | Emit `project.tasks.auto_dispatched` WS event with fired task_ids; per-project audit-log row | S | BPD-24 | `[ ]` |
-| BPD-27 | Feature/epic completion rollup: `get_feature_status()`, `get_epic_status()` derived from child statuses (BPD-207) | S | BPD-06, BPD-07 | `[ ]` |
-| BPD-28 | Tests: dispatch refusal on unmet deps; auto-dispatch cascade across a small DAG; feature-complete + epic-complete rollups | L | BPD-23, BPD-24, BPD-27 | `[ ]` |
+| BPD-20 | Update `POST /projects/{id}/build/dispatch` to enforce `depends_on`; return 409 with blocker list on unmet deps (BPD-201) | M | BPD-08, BPD-04 | `[x]` |
+| BPD-21 | New endpoint `POST /projects/{id}/build/dispatch-feature/{feature_id}` (BPD-202) | M | BPD-20 | `[x]` |
+| BPD-22 | New endpoint `POST /projects/{id}/build/dispatch-epic/{epic_id}` (BPD-203) | M | BPD-20 | `[x]` |
+| BPD-23 | New endpoint `POST /projects/{id}/build/dispatch-all-ready` (BPD-204) | M | BPD-20 | `[x]` |
+| BPD-24 | EventEmitter handler: on `request.deployed`, recompute dispatchable set; auto-fire if `auto_dispatch_on_deploy` is on (BPD-205) | M | BPD-23 | `[x]` |
+| BPD-25 | Add `auto_dispatch_on_deploy: bool` column to `projects`; PATCH endpoint accepts it (BPD-206) | S | BPD-24 | `[x]` |
+| BPD-26 | Emit `project.tasks.auto_dispatched` WS event with fired task_ids; per-project audit-log row | S | BPD-24 | `[x]` |
+| BPD-27 | Feature/epic completion rollup: `get_feature_status()`, `get_epic_status()` derived from child statuses (BPD-207) | S | BPD-06, BPD-07 | `[x]` |
+| BPD-28 | Tests: dispatch refusal on unmet deps; auto-dispatch cascade across a small DAG; feature-complete + epic-complete rollups | L | BPD-23, BPD-24, BPD-27 | `[x]` |
 
 ### Phase D: UI rework (~3 hours)
 
@@ -1171,10 +1171,10 @@ whose `depends_on` isn't fully `deployed`.
 |-------|-------|------|-------------|----------|-------------|
 | Phase A: Design + schema foundation | 9 | 9 | 0 | 0 | 0 |
 | Phase B: Three-pass generation | 10 | 10 | 0 | 0 | 0 |
-| Phase C: Dispatch engine + auto-dispatch | 9 | 0 | 0 | 0 | 9 |
+| Phase C: Dispatch engine + auto-dispatch | 9 | 9 | 0 | 0 | 0 |
 | Phase D: UI rework | 9 | 0 | 0 | 0 | 9 |
 | Phase E: Migration + polish + verification | 8 | 0 | 0 | 0 | 8 |
-| **Total** | **45** | **19** | **0** | **0** | **26** |
+| **Total** | **45** | **28** | **0** | **0** | **17** |
 
 ### Open questions to resolve in BPD-01 before Phase B starts
 

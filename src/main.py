@@ -7,7 +7,19 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import agents, auth, cost, documents, notifications, projects, prompts, releases, requests, users
+from src.api.middleware.sse_headers import SSEHeadersMiddleware
+from src.api.routes import (
+    agents,
+    auth,
+    cost,
+    documents,
+    notifications,
+    projects,
+    prompts,
+    releases,
+    requests,
+    users,
+)
 from src.api.websocket import router as ws_router
 from src.auth.service import AuthService
 from src.config.loader import ConfigLoader
@@ -29,8 +41,17 @@ async def lifespan(app: FastAPI):
     config.load_all()
     app.state.config = config
 
-    # Initialize state store
-    db_path = os.getenv("DATABASE_PATH", "data/agent_team.db")
+    # Initialize state store. Resolution order:
+    #   1. CREWAI_DB_PATH — preferred; set by docker-compose to
+    #      /app/data/crewai.db on the `crewai_data` named volume.
+    #   2. AIAGENT_DB_PATH — legacy alias kept for older compose files.
+    #   3. DATABASE_PATH   — even older alias from the pre-Docker era.
+    #   4. ./data/agent_team.db relative to cwd (non-Docker local default).
+    db_path = (
+        os.getenv("CREWAI_DB_PATH")
+        or os.getenv("AIAGENT_DB_PATH")
+        or os.getenv("DATABASE_PATH", "data/agent_team.db")
+    )
     state = SQLiteStateStore(db_path=db_path)
     await state.initialize()
     app.state.state_store = state
@@ -61,6 +82,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize agent system with real LLM (if API key is set)
     from src.agents.executor import AgentSystemExecutor
+
     # `state` threaded in so tools like `wait_for_deployment` (used by
     # devops_specialist) can read deployment_states without opening a
     # parallel SQLite connection.
@@ -79,8 +101,19 @@ async def lifespan(app: FastAPI):
     # `project_tasks.task_status` updates whenever a Request was created
     # from a project task (i.e. source_task_id is set).
     from src.core.project_task_status import make_project_task_status_handler
+
     events.on(make_project_task_status_handler(state))
     logger.info("project_task_status_handler_registered")
+
+    # BPD-24 — auto-dispatch handler. Listens for request.completed /
+    # request.status_changed and, when the project has
+    # auto_dispatch_on_deploy=True, fires every newly-unblocked task
+    # via the orchestrator. Emits project.tasks.auto_dispatched
+    # (BPD-26) so the UI can render the cascade live.
+    from src.core.auto_dispatch import make_auto_dispatch_handler
+
+    events.on(make_auto_dispatch_handler(state, orchestrator, events))
+    logger.info("auto_dispatch_handler_registered")
 
     logger.info("backend_started", environment=ENVIRONMENT)
     yield
@@ -107,9 +140,9 @@ app = FastAPI(
 # Starlette but break credentialed requests; prefer explicit hostnames.
 _cors_default_map = {
     "development": ["http://localhost:3000"],
-    "staging":     ["http://localhost:3010"],
-    "production":  ["http://localhost:3020"],
-    "demo":        ["http://localhost:3030"],
+    "staging": ["http://localhost:3010"],
+    "production": ["http://localhost:3020"],
+    "demo": ["http://localhost:3030"],
 }
 _cors_env = os.getenv("CORS_ORIGINS", "").strip()
 if _cors_env:
@@ -126,6 +159,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# REQ-005 — proxy-safe headers on any path containing `/events`. Registered
+# AFTER CORS so the SSE headers reach the outgoing response unmodified;
+# Starlette runs middleware in reverse-registration order on the response
+# path, so this wraps closest to the route handlers.
+app.add_middleware(SSEHeadersMiddleware)
 
 # Register routers
 app.include_router(auth.router)
@@ -148,3 +187,12 @@ async def health() -> dict:
         "version": "0.1.0",
         "environment": ENVIRONMENT,
     }
+
+
+# Top-level /health for the docker-compose smoke test
+# (`curl http://localhost:8000/health`). Kept distinct from the versioned
+# /api/v1/health so future API-version bumps can't accidentally break the
+# container-orchestration probe.
+@app.get("/health")
+async def health_root() -> dict:
+    return {"status": "ok"}

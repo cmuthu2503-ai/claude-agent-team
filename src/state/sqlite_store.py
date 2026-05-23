@@ -660,6 +660,11 @@ class SQLiteStateStore(StateStore):
             "ALTER TABLE project_tasks ADD COLUMN acceptance_test TEXT",
             "CREATE INDEX IF NOT EXISTS idx_tasks_feature "
             "  ON project_tasks(feature_id)",
+            # BPD-25 — per-project auto-dispatch toggle. Default False
+            # (BPD §2.3) so existing projects don't unexpectedly start
+            # cascading dispatches when the BPD feature ships. Stored as
+            # INTEGER (SQLite has no native BOOLEAN) — 0 / 1.
+            "ALTER TABLE projects ADD COLUMN auto_dispatch_on_deploy INTEGER NOT NULL DEFAULT 0",
         ]
         for stmt in migrations:
             try:
@@ -1920,7 +1925,8 @@ class SQLiteStateStore(StateStore):
             """UPDATE projects SET
                  name = ?, description = ?, status = ?, color = ?, icon = ?,
                  tags = ?, lead_user_id = ?, repo_url = ?, default_team = ?,
-                 target_date = ?, template_id = ?, updated_at = ?
+                 target_date = ?, template_id = ?, updated_at = ?,
+                 auto_dispatch_on_deploy = ?
                WHERE project_id = ?""",
             (
                 project.name,
@@ -1935,6 +1941,7 @@ class SQLiteStateStore(StateStore):
                 project.target_date.isoformat() if project.target_date else None,
                 project.template_id,
                 datetime.utcnow().isoformat(),
+                1 if project.auto_dispatch_on_deploy else 0,
                 project.project_id,
             ),
         )
@@ -2093,6 +2100,7 @@ class SQLiteStateStore(StateStore):
             last_deploy_commit_sha=_opt("last_deploy_commit_sha"),
             deploy_judge_preferences=_opt("deploy_judge_preferences", "") or "",
             deploy_pending_action=_opt("deploy_pending_action"),
+            auto_dispatch_on_deploy=bool(_opt("auto_dispatch_on_deploy", 0)),
         )
 
     async def update_project_deploy(
