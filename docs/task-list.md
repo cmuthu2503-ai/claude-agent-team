@@ -1099,7 +1099,7 @@ whose `depends_on` isn't fully `deployed`.
 
 | ID | Task | Effort | Depends On | Status |
 |----|------|--------|-----------|--------|
-| BPD-01 | Author `docs/prd-build-plan-decomposition.md` (rationale + open-question resolutions + schema rationale + worked example mapping CrewAI's current tasks into the new hierarchy) | M | — | `[ ]` |
+| BPD-01 | Author `docs/prd-build-plan-decomposition.md` (rationale + open-question resolutions + schema rationale + worked example mapping CrewAI's current tasks into the new hierarchy) | M | — | `[x]` |
 | BPD-02 | Schema migration: `epics` table per BPD-001 | S | BPD-01 | `[ ]` |
 | BPD-03 | Schema migration: `features` table per BPD-002 | S | BPD-01 | `[ ]` |
 | BPD-04 | Schema migration: ALTER `project_tasks` add `feature_id` / `depends_on` / `primary_file` / `expected_loc` / `acceptance_test` (BPD-003); legacy rows default to `feature_id=NULL, depends_on='[]'` (BPD-401) | S | BPD-01 | `[ ]` |
@@ -1169,12 +1169,12 @@ whose `depends_on` isn't fully `deployed`.
 
 | Phase | Tasks | Done | In Progress | Deferred | Not Started |
 |-------|-------|------|-------------|----------|-------------|
-| Phase A: Design + schema foundation | 9 | 0 | 0 | 0 | 9 |
+| Phase A: Design + schema foundation | 9 | 1 | 0 | 0 | 8 |
 | Phase B: Three-pass generation | 10 | 0 | 0 | 0 | 10 |
 | Phase C: Dispatch engine + auto-dispatch | 9 | 0 | 0 | 0 | 9 |
 | Phase D: UI rework | 9 | 0 | 0 | 0 | 9 |
 | Phase E: Migration + polish + verification | 8 | 0 | 0 | 0 | 8 |
-| **Total** | **45** | **0** | **0** | **0** | **45** |
+| **Total** | **45** | **1** | **0** | **0** | **44** |
 
 ### Open questions to resolve in BPD-01 before Phase B starts
 
