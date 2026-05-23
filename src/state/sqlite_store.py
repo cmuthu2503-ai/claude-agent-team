@@ -19,6 +19,8 @@ from src.models.base import (
     Document,
     Artifact,
     Deployment,
+    Epic,
+    Feature,
     Metric,
     Notification,
     Project,
@@ -324,6 +326,52 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project_status
 CREATE INDEX IF NOT EXISTS idx_tasks_request
     ON project_tasks(request_id);
 
+-- Build Plan Decomposition (BPD §6.8, BPD-02) — top-level grouping
+-- under a project. Holds 1-8 features each. Lifecycle mirrors
+-- project_artifacts and project_tasks (draft → finalized → archived per
+-- list_version). Legacy projects have zero rows here; their tasks
+-- render under a synthetic "Legacy" epic in the UI.
+CREATE TABLE IF NOT EXISTS epics (
+    epic_id              TEXT PRIMARY KEY,                  -- 'E-<8hex>'
+    project_id           TEXT NOT NULL,
+    list_version         INTEGER NOT NULL,
+    list_status          TEXT NOT NULL DEFAULT 'draft',     -- 'draft' | 'finalized' | 'archived'
+    ordinal              INTEGER NOT NULL,
+    title                TEXT NOT NULL,
+    description          TEXT NOT NULL DEFAULT '',
+    acceptance_criteria  TEXT NOT NULL DEFAULT '',
+    review_input         TEXT,                              -- comments that drove this regeneration
+    created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at           TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_epics_project_status
+    ON epics(project_id, list_status);
+CREATE INDEX IF NOT EXISTS idx_epics_project_version
+    ON epics(project_id, list_version);
+
+-- Build Plan Decomposition (BPD-03) — mid-level grouping inside an
+-- epic. Holds 3-15 atomic project_tasks each. Feature-level
+-- depends_on is rare (most deps are task-level); when used, references
+-- other feature_ids in the same project.
+CREATE TABLE IF NOT EXISTS features (
+    feature_id           TEXT PRIMARY KEY,                  -- 'F-<8hex>'
+    epic_id              TEXT NOT NULL,
+    project_id           TEXT NOT NULL,
+    list_version         INTEGER NOT NULL,
+    list_status          TEXT NOT NULL DEFAULT 'draft',
+    ordinal              INTEGER NOT NULL,
+    title                TEXT NOT NULL,
+    description          TEXT NOT NULL DEFAULT '',
+    acceptance_criteria  TEXT NOT NULL DEFAULT '',
+    depends_on           TEXT NOT NULL DEFAULT '[]',        -- JSON array of feature_ids
+    review_input         TEXT,
+    created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at           TIMESTAMP,
+    FOREIGN KEY (epic_id) REFERENCES epics(epic_id)
+);
+CREATE INDEX IF NOT EXISTS idx_features_epic ON features(epic_id);
+CREATE INDEX IF NOT EXISTS idx_features_project ON features(project_id);
+
 -- Project-driven Build (PDB-33) — chat with project_orchestrator agent.
 -- One row per turn (user message, assistant message, or tool result).
 -- tool_calls JSON column carries structured summaries the UI renders as chips
@@ -599,6 +647,19 @@ class SQLiteStateStore(StateStore):
             ),
             "CREATE INDEX IF NOT EXISTS idx_deploy_decisions_project_status "
             "  ON deploy_decisions(project_id, status, created_at)",
+            # ── Build Plan Decomposition (BPD §6.8 / BPD-04) ─────────
+            # Additive columns on project_tasks. Legacy rows default to
+            # feature_id=NULL (renders under synthetic "Legacy" epic in UI),
+            # depends_on='[]' (no blockers, dispatches like today),
+            # primary_file=NULL, expected_loc=NULL, acceptance_test=NULL.
+            # No existing query path reads these — safe to add to a live DB.
+            "ALTER TABLE project_tasks ADD COLUMN feature_id TEXT",
+            "ALTER TABLE project_tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE project_tasks ADD COLUMN primary_file TEXT",
+            "ALTER TABLE project_tasks ADD COLUMN expected_loc INTEGER",
+            "ALTER TABLE project_tasks ADD COLUMN acceptance_test TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_tasks_feature "
+            "  ON project_tasks(feature_id)",
         ]
         for stmt in migrations:
             try:
@@ -2425,8 +2486,9 @@ class SQLiteStateStore(StateStore):
                (task_id, project_id, list_version, list_status, ordinal,
                 title, description, task_type, priority, estimated_agent,
                 task_status, request_id, amended, created_at, updated_at,
-                review_input)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                review_input, feature_id, depends_on, primary_file,
+                expected_loc, acceptance_test)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 task.task_id,
                 task.project_id,
@@ -2444,6 +2506,12 @@ class SQLiteStateStore(StateStore):
                 task.created_at.isoformat(),
                 task.updated_at.isoformat() if task.updated_at else None,
                 task.review_input,
+                # BPD fields (BPD-003)
+                task.feature_id,
+                json.dumps(task.depends_on or []),
+                task.primary_file,
+                task.expected_loc,
+                task.acceptance_test,
             ),
         )
         await db.commit()
@@ -2509,6 +2577,15 @@ class SQLiteStateStore(StateStore):
             "estimated_agent",
             "ordinal",
             "amended",
+            # BPD fields (BPD-003) — editable via inline edits on the
+            # Task List page. feature_id is mutable to support drag-to-
+            # reassign in a future UI; depends_on is mutable so a user
+            # can fix a bad DAG edge surfaced by validation (BPD-308).
+            "feature_id",
+            "depends_on",
+            "primary_file",
+            "expected_loc",
+            "acceptance_test",
         }
         sets = []
         params: list = []
@@ -2517,6 +2594,9 @@ class SQLiteStateStore(StateStore):
                 continue
             if k == "amended":
                 params.append(1 if v else 0)
+            elif k == "depends_on":
+                # Always serialize JSON arrays even if caller passed a list.
+                params.append(json.dumps(v or []))
             else:
                 params.append(v)
             sets.append(f"{k} = ?")
@@ -2620,10 +2700,23 @@ class SQLiteStateStore(StateStore):
         await db.commit()
 
     def _row_to_task(self, row: aiosqlite.Row) -> ProjectTask:
+        def _safe(name: str, default: Any = None) -> Any:
+            """Defensive read — newer columns may not exist on rows from
+            older DB schemas. Falls back to `default` rather than raising."""
+            try:
+                return row[name]
+            except (IndexError, KeyError):
+                return default
+
+        # BPD fields (BPD-003) — legacy rows return defaults
+        raw_deps = _safe("depends_on") or "[]"
         try:
-            review_input = row["review_input"]
-        except (IndexError, KeyError):
-            review_input = None
+            depends_on = json.loads(raw_deps) if isinstance(raw_deps, str) else list(raw_deps)
+            if not isinstance(depends_on, list):
+                depends_on = []
+        except Exception:
+            depends_on = []
+
         return ProjectTask(
             task_id=row["task_id"],
             project_id=row["project_id"],
@@ -2638,10 +2731,462 @@ class SQLiteStateStore(StateStore):
             task_status=TaskStatus(row["task_status"]),
             request_id=row["request_id"],
             amended=bool(row["amended"]),
-            review_input=review_input,
+            review_input=_safe("review_input"),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=(datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None),
+            # BPD fields — legacy rows get all None / [] defaults
+            feature_id=_safe("feature_id"),
+            depends_on=depends_on,
+            primary_file=_safe("primary_file"),
+            expected_loc=_safe("expected_loc"),
+            acceptance_test=_safe("acceptance_test"),
         )
+
+    # ── Build Plan Decomposition: Epics (BPD-06) ─────────────
+
+    async def create_epic(self, epic: Epic) -> str:
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO epics
+               (epic_id, project_id, list_version, list_status, ordinal,
+                title, description, acceptance_criteria, review_input,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                epic.epic_id,
+                epic.project_id,
+                epic.list_version,
+                str(epic.list_status),
+                epic.ordinal,
+                epic.title,
+                epic.description,
+                epic.acceptance_criteria,
+                epic.review_input,
+                epic.created_at.isoformat(),
+                epic.updated_at.isoformat() if epic.updated_at else None,
+            ),
+        )
+        await db.commit()
+        return epic.epic_id
+
+    async def list_epics_for_project(
+        self,
+        project_id: str,
+        list_status: ArtifactStatus | None = None,
+        list_version: int | None = None,
+    ) -> list[Epic]:
+        db = await self._get_db()
+        if list_version is None and list_status is None:
+            async with db.execute(
+                "SELECT COALESCE(MAX(list_version), 0) AS v FROM epics "
+                "WHERE project_id = ? AND list_status != ?",
+                (project_id, str(ArtifactStatus.ARCHIVED)),
+            ) as cursor:
+                row = await cursor.fetchone()
+                v = int(row["v"]) if row and row["v"] else 0
+            if v == 0:
+                return []
+            list_version = v
+
+        where = ["project_id = ?"]
+        params: list = [project_id]
+        if list_version is not None:
+            where.append("list_version = ?")
+            params.append(list_version)
+        if list_status is not None:
+            where.append("list_status = ?")
+            params.append(str(list_status))
+
+        sql = (
+            "SELECT * FROM epics WHERE " + " AND ".join(where)
+            + " ORDER BY ordinal ASC"
+        )
+        async with db.execute(sql, tuple(params)) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_epic(r) for r in rows]
+
+    async def get_epic(self, epic_id: str) -> Epic | None:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM epics WHERE epic_id = ?", (epic_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return self._row_to_epic(row) if row else None
+
+    async def update_epic(self, epic_id: str, fields: dict) -> Epic:
+        allowed = {"title", "description", "acceptance_criteria", "ordinal"}
+        sets = []
+        params: list = []
+        for k, v in fields.items():
+            if k not in allowed:
+                continue
+            sets.append(f"{k} = ?")
+            params.append(v)
+        if not sets:
+            existing = await self.get_epic(epic_id)
+            if existing is None:
+                raise ValueError(f"Epic {epic_id!r} not found.")
+            return existing
+        sets.append("updated_at = ?")
+        params.append(datetime.utcnow().isoformat())
+        params.append(epic_id)
+        db = await self._get_db()
+        await db.execute(
+            f"UPDATE epics SET {', '.join(sets)} WHERE epic_id = ?",
+            tuple(params),
+        )
+        await db.commit()
+        updated = await self.get_epic(epic_id)
+        if updated is None:
+            raise ValueError(f"Epic {epic_id!r} not found after update.")
+        return updated
+
+    async def finalize_epic_list(
+        self, project_id: str, list_version: int
+    ) -> None:
+        db = await self._get_db()
+        # Archive any other finalized version, then mark the requested
+        # version finalized. Atomic via transaction.
+        await db.execute(
+            "UPDATE epics SET list_status = ? WHERE project_id = ? "
+            "AND list_status = ? AND list_version != ?",
+            (str(ArtifactStatus.ARCHIVED), project_id,
+             str(ArtifactStatus.FINALIZED), list_version),
+        )
+        await db.execute(
+            "UPDATE epics SET list_status = ?, updated_at = ? "
+            "WHERE project_id = ? AND list_version = ?",
+            (str(ArtifactStatus.FINALIZED), datetime.utcnow().isoformat(),
+             project_id, list_version),
+        )
+        await db.commit()
+
+    async def archive_epic_list(
+        self, project_id: str, list_version: int
+    ) -> None:
+        db = await self._get_db()
+        await db.execute(
+            "UPDATE epics SET list_status = ?, updated_at = ? "
+            "WHERE project_id = ? AND list_version = ?",
+            (str(ArtifactStatus.ARCHIVED), datetime.utcnow().isoformat(),
+             project_id, list_version),
+        )
+        await db.commit()
+
+    async def delete_epic_list_draft(
+        self, project_id: str, list_version: int
+    ) -> None:
+        db = await self._get_db()
+        # Cascade-delete features under each epic, then the epics.
+        async with db.execute(
+            "SELECT epic_id FROM epics WHERE project_id = ? "
+            "AND list_version = ? AND list_status = ?",
+            (project_id, list_version, str(ArtifactStatus.DRAFT)),
+        ) as cursor:
+            epic_ids = [r["epic_id"] for r in await cursor.fetchall()]
+        for eid in epic_ids:
+            # NULL the task back-link before deleting features, so
+            # tasks survive (they may have been written under a
+            # previously-finalized feature that got archived).
+            await db.execute(
+                "UPDATE project_tasks SET feature_id = NULL "
+                "WHERE feature_id IN (SELECT feature_id FROM features WHERE epic_id = ?)",
+                (eid,),
+            )
+            await db.execute(
+                "DELETE FROM features WHERE epic_id = ?", (eid,),
+            )
+        await db.execute(
+            "DELETE FROM epics WHERE project_id = ? AND list_version = ? "
+            "AND list_status = ?",
+            (project_id, list_version, str(ArtifactStatus.DRAFT)),
+        )
+        await db.commit()
+
+    async def delete_epic(self, epic_id: str) -> None:
+        db = await self._get_db()
+        # NULL task back-links, then delete features, then the epic.
+        await db.execute(
+            "UPDATE project_tasks SET feature_id = NULL "
+            "WHERE feature_id IN (SELECT feature_id FROM features WHERE epic_id = ?)",
+            (epic_id,),
+        )
+        await db.execute(
+            "DELETE FROM features WHERE epic_id = ?", (epic_id,),
+        )
+        await db.execute(
+            "DELETE FROM epics WHERE epic_id = ?", (epic_id,),
+        )
+        await db.commit()
+
+    def _row_to_epic(self, row: aiosqlite.Row) -> Epic:
+        def _safe(name: str, default: Any = None) -> Any:
+            try:
+                return row[name]
+            except (IndexError, KeyError):
+                return default
+        return Epic(
+            epic_id=row["epic_id"],
+            project_id=row["project_id"],
+            list_version=int(row["list_version"]),
+            list_status=ArtifactStatus(row["list_status"]),
+            ordinal=int(row["ordinal"]),
+            title=row["title"],
+            description=row["description"] or "",
+            acceptance_criteria=row["acceptance_criteria"] or "",
+            review_input=_safe("review_input"),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=(
+                datetime.fromisoformat(row["updated_at"])
+                if row["updated_at"] else None
+            ),
+        )
+
+    # ── Build Plan Decomposition: Features (BPD-07) ──────────
+
+    async def create_feature(self, feature: Feature) -> str:
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO features
+               (feature_id, epic_id, project_id, list_version, list_status,
+                ordinal, title, description, acceptance_criteria,
+                depends_on, review_input, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                feature.feature_id,
+                feature.epic_id,
+                feature.project_id,
+                feature.list_version,
+                str(feature.list_status),
+                feature.ordinal,
+                feature.title,
+                feature.description,
+                feature.acceptance_criteria,
+                json.dumps(feature.depends_on or []),
+                feature.review_input,
+                feature.created_at.isoformat(),
+                feature.updated_at.isoformat() if feature.updated_at else None,
+            ),
+        )
+        await db.commit()
+        return feature.feature_id
+
+    async def list_features_for_epic(
+        self,
+        epic_id: str,
+        list_status: ArtifactStatus | None = None,
+    ) -> list[Feature]:
+        db = await self._get_db()
+        sql = "SELECT * FROM features WHERE epic_id = ?"
+        params: list = [epic_id]
+        if list_status is not None:
+            sql += " AND list_status = ?"
+            params.append(str(list_status))
+        sql += " ORDER BY ordinal ASC"
+        async with db.execute(sql, tuple(params)) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_feature(r) for r in rows]
+
+    async def list_features_for_project(
+        self,
+        project_id: str,
+        list_status: ArtifactStatus | None = None,
+    ) -> list[Feature]:
+        db = await self._get_db()
+        sql = "SELECT * FROM features WHERE project_id = ?"
+        params: list = [project_id]
+        if list_status is not None:
+            sql += " AND list_status = ?"
+            params.append(str(list_status))
+        sql += " ORDER BY ordinal ASC"
+        async with db.execute(sql, tuple(params)) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_feature(r) for r in rows]
+
+    async def get_feature(self, feature_id: str) -> Feature | None:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM features WHERE feature_id = ?", (feature_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return self._row_to_feature(row) if row else None
+
+    async def update_feature(self, feature_id: str, fields: dict) -> Feature:
+        allowed = {
+            "title", "description", "acceptance_criteria",
+            "ordinal", "depends_on",
+        }
+        sets = []
+        params: list = []
+        for k, v in fields.items():
+            if k not in allowed:
+                continue
+            if k == "depends_on":
+                params.append(json.dumps(v or []))
+            else:
+                params.append(v)
+            sets.append(f"{k} = ?")
+        if not sets:
+            existing = await self.get_feature(feature_id)
+            if existing is None:
+                raise ValueError(f"Feature {feature_id!r} not found.")
+            return existing
+        sets.append("updated_at = ?")
+        params.append(datetime.utcnow().isoformat())
+        params.append(feature_id)
+        db = await self._get_db()
+        await db.execute(
+            f"UPDATE features SET {', '.join(sets)} WHERE feature_id = ?",
+            tuple(params),
+        )
+        await db.commit()
+        updated = await self.get_feature(feature_id)
+        if updated is None:
+            raise ValueError(f"Feature {feature_id!r} not found after update.")
+        return updated
+
+    async def delete_feature(self, feature_id: str) -> None:
+        db = await self._get_db()
+        # Tasks under this feature lose their back-link (NULL'd) but
+        # survive — agent's emission shouldn't disappear on a feature
+        # rename / consolidation.
+        await db.execute(
+            "UPDATE project_tasks SET feature_id = NULL WHERE feature_id = ?",
+            (feature_id,),
+        )
+        await db.execute(
+            "DELETE FROM features WHERE feature_id = ?", (feature_id,),
+        )
+        await db.commit()
+
+    def _row_to_feature(self, row: aiosqlite.Row) -> Feature:
+        def _safe(name: str, default: Any = None) -> Any:
+            try:
+                return row[name]
+            except (IndexError, KeyError):
+                return default
+        raw_deps = _safe("depends_on") or "[]"
+        try:
+            deps = json.loads(raw_deps) if isinstance(raw_deps, str) else list(raw_deps)
+            if not isinstance(deps, list):
+                deps = []
+        except Exception:
+            deps = []
+        return Feature(
+            feature_id=row["feature_id"],
+            epic_id=row["epic_id"],
+            project_id=row["project_id"],
+            list_version=int(row["list_version"]),
+            list_status=ArtifactStatus(row["list_status"]),
+            ordinal=int(row["ordinal"]),
+            title=row["title"],
+            description=row["description"] or "",
+            acceptance_criteria=row["acceptance_criteria"] or "",
+            depends_on=deps,
+            review_input=_safe("review_input"),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=(
+                datetime.fromisoformat(row["updated_at"])
+                if row["updated_at"] else None
+            ),
+        )
+
+    # ── Build Plan Decomposition: Dependency graph (BPD-08) ──
+
+    async def get_task_blockers(self, task_id: str) -> list[ProjectTask]:
+        """Return ProjectTask rows that `task_id` depends on. Dangling
+        refs (depends_on entries pointing at deleted tasks) are silently
+        dropped — caller can detect them by comparing len() to the
+        source task's depends_on length."""
+        task = await self.get_task(task_id)
+        if task is None or not task.depends_on:
+            return []
+        # SQLite's parameter binding doesn't support arrays — build the
+        # IN clause with literal placeholders.
+        placeholders = ",".join("?" for _ in task.depends_on)
+        db = await self._get_db()
+        async with db.execute(
+            f"SELECT * FROM project_tasks WHERE task_id IN ({placeholders})",
+            tuple(task.depends_on),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_task(r) for r in rows]
+
+    async def get_dispatchable_tasks(
+        self, project_id: str
+    ) -> list[ProjectTask]:
+        """All backlog tasks whose every depends_on entry resolves to
+        a `deployed` task. Tasks with empty depends_on are always
+        dispatchable. Walks the whole project's task table once (cheap
+        at hundreds of rows) rather than recursing per task."""
+        all_tasks = await self.list_tasks_for_project(project_id)
+        status_by_id = {t.task_id: t.task_status for t in all_tasks}
+        out: list[ProjectTask] = []
+        for t in all_tasks:
+            if t.task_status != TaskStatus.BACKLOG:
+                continue
+            if t.list_status != ArtifactStatus.FINALIZED:
+                continue
+            if not t.depends_on:
+                out.append(t)
+                continue
+            # All blockers must exist in this list AND be DEPLOYED.
+            blocked = False
+            for blocker_id in t.depends_on:
+                blocker_status = status_by_id.get(blocker_id)
+                if blocker_status != TaskStatus.DEPLOYED:
+                    blocked = True
+                    break
+            if not blocked:
+                out.append(t)
+        return out
+
+    async def has_task_cycle(
+        self, project_id: str, list_version: int
+    ) -> tuple[bool, list[str]]:
+        """Cycle detection via iterative DFS with white/gray/black
+        coloring. Returns the first cycle found as a list of task_ids,
+        or ([], False) if the graph is a DAG. Called at persist time
+        after Pass-3 generation (BPD-005)."""
+        tasks = await self.list_tasks_for_project(
+            project_id, list_version=list_version,
+        )
+        graph = {t.task_id: list(t.depends_on or []) for t in tasks}
+        WHITE, GRAY, BLACK = 0, 1, 2
+        color = {tid: WHITE for tid in graph}
+        for start in graph:
+            if color[start] != WHITE:
+                continue
+            # Iterative DFS with stack of (node, parent_iter)
+            stack: list[tuple[str, list[str]]] = []
+            path: list[str] = []
+            color[start] = GRAY
+            path.append(start)
+            stack.append((start, list(graph.get(start, []))))
+            while stack:
+                node, remaining = stack[-1]
+                if not remaining:
+                    color[node] = BLACK
+                    path.pop()
+                    stack.pop()
+                    continue
+                nxt = remaining.pop(0)
+                if nxt not in graph:
+                    # Dangling dep — not a cycle, just an invalid ref.
+                    continue
+                if color[nxt] == GRAY:
+                    # Cycle — slice path from where nxt first appears.
+                    try:
+                        idx = path.index(nxt)
+                    except ValueError:
+                        idx = 0
+                    return True, path[idx:] + [nxt]
+                if color[nxt] == BLACK:
+                    continue
+                color[nxt] = GRAY
+                path.append(nxt)
+                stack.append((nxt, list(graph.get(nxt, []))))
+        return False, []
 
     # ── Build Session Messages (PDB-33) ──────────
 

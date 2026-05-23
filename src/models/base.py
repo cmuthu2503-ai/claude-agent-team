@@ -437,6 +437,65 @@ class ProjectTask(BaseModel):
     # comments against the prior task list.
     review_input: str | None = None
 
+    # ── BPD (Build Plan Decomposition, §6.8 / BPD-003) fields ──
+    # New in v3.13. Legacy tasks (those generated before BPD shipped)
+    # have feature_id=None, depends_on=[], etc. — they render under a
+    # synthetic "Legacy" epic in the UI and dispatch unchanged.
+    feature_id: str | None = None              # FK features.feature_id when emitted under the new hierarchy
+    depends_on: list[str] = Field(default_factory=list)  # task_ids that must be `deployed` before dispatch
+    primary_file: str | None = None             # the ONE file this task owns (atomic-task contract)
+    expected_loc: int | None = None             # rough size hint, typical 50-300
+    acceptance_test: str | None = None          # one-sentence "done when X" criterion
+
+
+# ── Build Plan Decomposition models (BPD §6.8) ────────────────────
+# Three-level hierarchy on top of project_tasks. Epic groups features
+# semantically; Feature groups atomic tasks. Each level has its own
+# acceptance criterion and supports the same draft/finalize/archive
+# lifecycle as project_artifacts and project_tasks.
+
+
+class Epic(BaseModel):
+    """Top-level grouping in the Build Plan Decomposition hierarchy.
+
+    One epic = one user-facing capability area (e.g. "Authentication",
+    "Dashboard"). The agent's Pass-1 generator emits 5-12 epics per
+    project from the finalized PRD."""
+
+    epic_id: str                                 # "E-<8hex>"
+    project_id: str
+    list_version: int                            # monotonic per project; new version on each Pass-1 regen
+    list_status: ArtifactStatus = ArtifactStatus.DRAFT
+    ordinal: int                                 # display order within list_version
+    title: str
+    description: str = ""
+    acceptance_criteria: str = ""                # one-sentence "epic done when X" criterion
+    review_input: str | None = None              # comments that drove this regeneration (same value on every row of a list_version)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime | None = None
+
+
+class Feature(BaseModel):
+    """Mid-level grouping in the Build Plan Decomposition hierarchy.
+
+    One feature = one deliverable capability within an epic (e.g.
+    "Login flow", "Password reset"). The agent's Pass-2 generator
+    emits 1-8 features per epic. Atomic project_tasks hang underneath."""
+
+    feature_id: str                              # "F-<8hex>"
+    epic_id: str
+    project_id: str
+    list_version: int
+    list_status: ArtifactStatus = ArtifactStatus.DRAFT
+    ordinal: int
+    title: str
+    description: str = ""
+    acceptance_criteria: str = ""
+    depends_on: list[str] = Field(default_factory=list)  # feature_ids in same project (rare; mostly task-level)
+    review_input: str | None = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime | None = None
+
 
 # ── AI Deploy Judge (per-project) ────────────────
 # One row per judge decision or user override. The latest non-applied

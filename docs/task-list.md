@@ -1100,14 +1100,14 @@ whose `depends_on` isn't fully `deployed`.
 | ID | Task | Effort | Depends On | Status |
 |----|------|--------|-----------|--------|
 | BPD-01 | Author `docs/prd-build-plan-decomposition.md` (rationale + open-question resolutions + schema rationale + worked example mapping CrewAI's current tasks into the new hierarchy) | M | — | `[x]` |
-| BPD-02 | Schema migration: `epics` table per BPD-001 | S | BPD-01 | `[ ]` |
-| BPD-03 | Schema migration: `features` table per BPD-002 | S | BPD-01 | `[ ]` |
-| BPD-04 | Schema migration: ALTER `project_tasks` add `feature_id` / `depends_on` / `primary_file` / `expected_loc` / `acceptance_test` (BPD-003); legacy rows default to `feature_id=NULL, depends_on='[]'` (BPD-401) | S | BPD-01 | `[ ]` |
-| BPD-05 | Pydantic models: `Epic`, `Feature`, extend `ProjectTask` | S | BPD-02, BPD-03, BPD-04 | `[ ]` |
-| BPD-06 | StateStore CRUD: epics (list/get/create/update/finalize/archive/delete) | M | BPD-05 | `[ ]` |
-| BPD-07 | StateStore CRUD: features (same shape, scoped to epic) | M | BPD-05 | `[ ]` |
-| BPD-08 | StateStore CRUD: dependency graph helpers — `get_blockers(task_id)`, `get_dispatchable_tasks(project_id)`, `has_cycle(project_id, list_version)` (BPD-005) | M | BPD-04 | `[ ]` |
-| BPD-09 | Unit tests: epics + features + dependency-graph helpers (cycle detection, cross-feature dep validation per BPD-006) | M | BPD-06, BPD-07, BPD-08 | `[ ]` |
+| BPD-02 | Schema migration: `epics` table per BPD-001 | S | BPD-01 | `[x]` |
+| BPD-03 | Schema migration: `features` table per BPD-002 | S | BPD-01 | `[x]` |
+| BPD-04 | Schema migration: ALTER `project_tasks` add `feature_id` / `depends_on` / `primary_file` / `expected_loc` / `acceptance_test` (BPD-003); legacy rows default to `feature_id=NULL, depends_on='[]'` (BPD-401) | S | BPD-01 | `[x]` |
+| BPD-05 | Pydantic models: `Epic`, `Feature`, extend `ProjectTask` | S | BPD-02, BPD-03, BPD-04 | `[x]` |
+| BPD-06 | StateStore CRUD: epics (list/get/create/update/finalize/archive/delete) | M | BPD-05 | `[x]` |
+| BPD-07 | StateStore CRUD: features (same shape, scoped to epic) | M | BPD-05 | `[x]` |
+| BPD-08 | StateStore CRUD: dependency graph helpers — `get_blockers(task_id)`, `get_dispatchable_tasks(project_id)`, `has_cycle(project_id, list_version)` (BPD-005) | M | BPD-04 | `[x]` |
+| BPD-09 | Unit tests: epics + features + dependency-graph helpers (cycle detection, cross-feature dep validation per BPD-006) | M | BPD-06, BPD-07, BPD-08 | `[x]` |
 
 ### Phase B: Three-pass generation (~3 hours)
 
@@ -1169,12 +1169,12 @@ whose `depends_on` isn't fully `deployed`.
 
 | Phase | Tasks | Done | In Progress | Deferred | Not Started |
 |-------|-------|------|-------------|----------|-------------|
-| Phase A: Design + schema foundation | 9 | 1 | 0 | 0 | 8 |
+| Phase A: Design + schema foundation | 9 | 9 | 0 | 0 | 0 |
 | Phase B: Three-pass generation | 10 | 0 | 0 | 0 | 10 |
 | Phase C: Dispatch engine + auto-dispatch | 9 | 0 | 0 | 0 | 9 |
 | Phase D: UI rework | 9 | 0 | 0 | 0 | 9 |
 | Phase E: Migration + polish + verification | 8 | 0 | 0 | 0 | 8 |
-| **Total** | **45** | **1** | **0** | **0** | **44** |
+| **Total** | **45** | **9** | **0** | **0** | **36** |
 
 ### Open questions to resolve in BPD-01 before Phase B starts
 

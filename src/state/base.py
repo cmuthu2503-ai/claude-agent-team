@@ -13,6 +13,8 @@ from src.models.base import (
     DeployDecision,
     Deployment,
     Document,
+    Epic,
+    Feature,
     Metric,
     Notification,
     Project,
@@ -518,6 +520,134 @@ class StateStore(ABC):
         linked Request, the request's `source_task_id` is set to NULL
         rather than deleted — the Request stays valid, it just loses its
         back-link to the (now gone) project task."""
+        ...
+
+    # ── Build Plan Decomposition: Epics (BPD-06) ─────────────
+    # New in v3.13. One epic = top-level grouping under a project; holds
+    # 1-8 features. Lifecycle mirrors project_tasks (draft / finalized /
+    # archived per list_version). Legacy projects have zero epic rows.
+
+    @abstractmethod
+    async def create_epic(self, epic: "Epic") -> str: ...
+
+    @abstractmethod
+    async def list_epics_for_project(
+        self,
+        project_id: str,
+        list_status: ArtifactStatus | None = None,
+        list_version: int | None = None,
+    ) -> list["Epic"]:
+        """When list_status is None, returns epics from the latest
+        version. When list_status is supplied, filters by status. When
+        list_version is supplied, only that version is returned."""
+        ...
+
+    @abstractmethod
+    async def get_epic(self, epic_id: str) -> "Epic | None": ...
+
+    @abstractmethod
+    async def update_epic(self, epic_id: str, fields: dict) -> "Epic":
+        """Partial update. Whitelisted fields:
+        title, description, acceptance_criteria, ordinal."""
+        ...
+
+    @abstractmethod
+    async def finalize_epic_list(
+        self, project_id: str, list_version: int
+    ) -> None: ...
+
+    @abstractmethod
+    async def archive_epic_list(
+        self, project_id: str, list_version: int
+    ) -> None: ...
+
+    @abstractmethod
+    async def delete_epic_list_draft(
+        self, project_id: str, list_version: int
+    ) -> None: ...
+
+    @abstractmethod
+    async def delete_epic(self, epic_id: str) -> None:
+        """Cascades to features (and through them to project_tasks'
+        feature_id back-link, which is NULL'd rather than deleted —
+        the tasks themselves survive)."""
+        ...
+
+    # ── Build Plan Decomposition: Features (BPD-07) ───────────
+    # One feature = a deliverable capability within an epic. Holds
+    # 3-15 atomic project_tasks. Features can declare feature-level
+    # depends_on (rare — most deps are task-level).
+
+    @abstractmethod
+    async def create_feature(self, feature: "Feature") -> str: ...
+
+    @abstractmethod
+    async def list_features_for_epic(
+        self,
+        epic_id: str,
+        list_status: ArtifactStatus | None = None,
+    ) -> list["Feature"]: ...
+
+    @abstractmethod
+    async def list_features_for_project(
+        self,
+        project_id: str,
+        list_status: ArtifactStatus | None = None,
+    ) -> list["Feature"]: ...
+
+    @abstractmethod
+    async def get_feature(self, feature_id: str) -> "Feature | None": ...
+
+    @abstractmethod
+    async def update_feature(self, feature_id: str, fields: dict) -> "Feature":
+        """Partial update. Whitelisted fields:
+        title, description, acceptance_criteria, ordinal, depends_on."""
+        ...
+
+    @abstractmethod
+    async def delete_feature(self, feature_id: str) -> None:
+        """Hard-delete one feature. Children project_tasks have their
+        feature_id NULL'd; they don't get deleted (this would lose
+        work). Caller is responsible for the user-warning flow."""
+        ...
+
+    # ── Build Plan Decomposition: Dependency graph (BPD-08) ───
+    # Read-only helpers consumed by the dispatcher. The depends_on
+    # arrays live on project_tasks (and features); these helpers walk
+    # the graph to answer "what's ready to dispatch?" and "is this
+    # graph valid?".
+
+    @abstractmethod
+    async def get_task_blockers(self, task_id: str) -> list["ProjectTask"]:
+        """Return the ProjectTask rows that `task_id` depends on. Only
+        returns rows that exist in the DB; dangling depends_on entries
+        (referencing a deleted task) are silently dropped from the
+        result. Caller can compare len(result) vs len(task.depends_on)
+        to detect dangling refs."""
+        ...
+
+    @abstractmethod
+    async def get_dispatchable_tasks(
+        self, project_id: str
+    ) -> list["ProjectTask"]:
+        """Return every backlog task in the project whose depends_on
+        chain is fully satisfied (all blockers in TaskStatus.DEPLOYED).
+        Tasks with empty depends_on are always dispatchable.
+
+        Used by "Dispatch All Ready" (BPD-204) and by the
+        auto-dispatch handler (BPD-205) on each `request.deployed`
+        event."""
+        ...
+
+    @abstractmethod
+    async def has_task_cycle(
+        self, project_id: str, list_version: int
+    ) -> tuple[bool, list[str]]:
+        """Detect cycles in the task-level depends_on graph for a
+        given project + list_version. Returns (has_cycle, cycle_path)
+        where cycle_path is a list of task_ids in the offending cycle
+        (empty when has_cycle is False). Used at persist time after
+        Pass-3 generation to reject invalid graphs with 422."""
         ...
 
     # ── Build Session Messages (PDB-33) ──────────
