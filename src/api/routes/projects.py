@@ -61,6 +61,8 @@ from src.models.base import (
     DeployDecision,
     DeployDecisionStatus,
     DeployStatus,
+    Epic,
+    Feature,
     Project,
     ProjectArtifact,
     ProjectStatus,
@@ -3344,3 +3346,1010 @@ async def post_build_chat(
         raise HTTPException(status_code=502, detail=f"Chat turn failed: {e}")
 
     return {"data": result, "meta": None, "error": None}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Build Plan Decomposition — Phase B (BPD-10..19)
+# ════════════════════════════════════════════════════════════════════════════
+# Three-pass generation: PRD → Epics → Features → Atomic Tasks.
+# Each pass has its own endpoint + review-comments flow so the user
+# can approve / regenerate one level without disturbing the others.
+# Pass-3 persistence runs cycle detection (BPD-08) before insert.
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def _extract_json_array(text: str) -> tuple[list[dict[str, Any]] | None, str]:
+    """Extract a JSON array of objects from agent output.
+
+    Strategy:
+      1. Prefer a ```json fenced block.
+      2. Fall back to the FIRST raw `[ ... ]` substring.
+      3. Returns (None, mode) where mode ∈ {"empty", "malformed"} on
+         failure so the caller can surface a clear error.
+
+    Returns (parsed_list_or_None, mode) where mode is one of:
+      "json"      — fenced block parsed cleanly
+      "raw"       — raw [...] parsed (no fence)
+      "malformed" — found JSON-ish text but couldn't parse
+      "empty"     — nothing found
+    """
+    if not text:
+        return None, "empty"
+    fenced = re.search(r"```json\s*\n(.+?)\n```", text, re.DOTALL)
+    if fenced:
+        try:
+            data = json.loads(fenced.group(1).strip())
+            if isinstance(data, list):
+                return [x for x in data if isinstance(x, dict)], "json"
+        except json.JSONDecodeError:
+            pass
+    # Fall back to first `[...]` substring at top-level
+    bracket = re.search(r"\[\s*\{.+?\}\s*\]", text, re.DOTALL)
+    if bracket:
+        try:
+            data = json.loads(bracket.group(0))
+            if isinstance(data, list):
+                return [x for x in data if isinstance(x, dict)], "raw"
+        except json.JSONDecodeError:
+            pass
+    if fenced or bracket:
+        return None, "malformed"
+    return None, "empty"
+
+
+def _check_truncation(result: dict[str, Any]) -> str | None:
+    """Return a user-actionable hint when the agent's response was
+    cut off at max_tokens (BPD-18). The downstream parser may still
+    produce a partial result; the hint tells the caller to scope the
+    next regen smaller."""
+    if (result.get("stop_reason") or "") == "max_tokens":
+        return (
+            "The generator's response was truncated at the token cap. "
+            "Try one of: regenerate this level with review comments asking "
+            "for fewer items; split a large epic into 2; or escalate to "
+            "the per-level batch endpoint which generates one parent at a time."
+        )
+    return None
+
+
+# ── Pass 1 — PRD → Epics ─────────────────────────────────────────────────
+
+
+def _build_epic_generation_prompt(
+    prd_content: str,
+    api_spec_content: str,
+    review_comments: str,
+    previous_epics: list[Epic] | None,
+) -> str:
+    """BPD-10. PRD → 5-12 epics. When `review_comments` + `previous_epics`
+    are supplied, the agent revises the existing list rather than starting
+    fresh — unaffected epics MUST be preserved word-for-word per BPD-108."""
+    api_spec_block = (
+        f"## API Specification (reference only)\n{api_spec_content}\n\n"
+        if api_spec_content else ""
+    )
+    if review_comments and previous_epics:
+        prev_json = json.dumps(
+            [
+                {
+                    "title": e.title,
+                    "description": e.description,
+                    "acceptance_criteria": e.acceptance_criteria,
+                }
+                for e in sorted(previous_epics, key=lambda x: x.ordinal)
+            ],
+            indent=2,
+        )
+        return (
+            "You are REVISING an existing list of EPICS for an AI agent team "
+            "to execute. DO NOT start from scratch — apply the reviewer's "
+            "feedback and keep unaffected epics word-for-word identical.\n\n"
+            "## PRD (reference)\n"
+            f"{prd_content}\n\n"
+            f"{api_spec_block}"
+            "## Current epic list (revise this)\n"
+            "```json\n"
+            f"{prev_json}\n"
+            "```\n\n"
+            "## Reviewer comments to address\n"
+            f"{review_comments}\n\n"
+            "## Output format\n"
+            "Emit a single fenced ```json``` block containing the REVISED "
+            "array of epic objects, with the same keys (title, description, "
+            "acceptance_criteria). Apply the comments precisely; keep "
+            "unaffected epics identical to the input. No prose before or after."
+        )
+    return (
+        "You are decomposing a finalized PRD into a list of EPICS that an "
+        "AI agent team will execute. Each epic is a coherent user-facing "
+        "capability area (e.g. 'Authentication', 'Dashboard', 'Project CRUD') — "
+        "NOT an implementation layer like 'Database access' (that's split "
+        "across many user-facing epics).\n\n"
+        "## PRD\n"
+        f"{prd_content}\n\n"
+        f"{api_spec_block}"
+        "## Output format\n"
+        "Emit a SINGLE fenced ```json``` block containing an ARRAY of "
+        "5-12 epic objects. Each object has exactly these keys:\n\n"
+        "  - title: string, ≤80 chars, no 'Epic N:' prefix (just the theme).\n"
+        "    Examples: 'Authentication', 'Dashboard & Analytics', "
+        "'Project CRUD & Lifecycle'.\n\n"
+        "  - description: string, 1-2 paragraphs. What user-facing value "
+        "this epic delivers; which PRD requirements it covers.\n\n"
+        "  - acceptance_criteria: string, ONE sentence. When is this epic "
+        "'done' from a user's perspective?\n"
+        "    Example: 'Authenticated users can sign in, sign out, reset "
+        "their password, and see their session persists across browser tabs.'\n\n"
+        "## Scale guidance\n"
+        "- 5-12 epics for a typical full-stack app. A trivial CLI tool may "
+        "have 3 epics; a complex SaaS with auth + billing + multi-tenant "
+        "may push toward 12.\n"
+        "- 'Foundation' or 'Project Setup' IS allowed as an epic if the "
+        "project has substantial setup not specific to one user feature.\n"
+        "- Epics are unordered at this level — ordering emerges from "
+        "feature/task-level dependencies in later passes.\n\n"
+        "No prose before or after the fenced block."
+    )
+
+
+def _normalize_epic_dicts(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Defensive coercion + length caps. Drops rows without a title."""
+    out = []
+    for item in raw:
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        out.append({
+            "title": title[:200],
+            "description": str(item.get("description") or "")[:4000],
+            "acceptance_criteria": str(item.get("acceptance_criteria") or "")[:1000],
+        })
+    return out
+
+
+@router.post("/{project_id}/epics/generate", status_code=201)
+async def generate_epics(
+    project_id: str,
+    request: Request,
+    body: dict | None = None,
+    user: dict = Depends(get_current_user),
+):
+    """BPD-11 — Pass 1 of the three-pass build-plan flow. PRD → 5-12 epics.
+
+    Body (all optional):
+      review_comments: str — when set AND a prior draft / archived list
+        exists, the agent REVISES that list rather than generating fresh.
+    """
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    await _require_project(state, project_id)
+
+    prd = await state.get_artifact(project_id, ArtifactKind.PRD)
+    if prd is None or prd.status != ArtifactStatus.FINALIZED:
+        raise HTTPException(
+            status_code=409,
+            detail="Finalize the PRD before generating epics.",
+        )
+    api_spec = await state.get_artifact(project_id, ArtifactKind.API_SPEC)
+    api_spec_content = (
+        api_spec.content
+        if api_spec is not None and api_spec.status == ArtifactStatus.FINALIZED
+        else ""
+    )
+
+    review_comments = ((body or {}).get("review_comments") or "").strip()
+    if len(review_comments) > _REVIEW_COMMENTS_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"review_comments must be ≤ {_REVIEW_COMMENTS_MAX} characters.",
+        )
+
+    # Refuse if a finalized epic list already exists — caller must archive
+    # it first (mirrors the /tasks/generate semantics).
+    existing_final = await state.list_epics_for_project(
+        project_id, list_status=ArtifactStatus.FINALIZED,
+    )
+    if existing_final:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "epic list already finalized",
+                "hint": "Archive the current epic list first, then regenerate.",
+            },
+        )
+
+    # Pull existing draft (revision base when review_comments are given)
+    existing_draft = await state.list_epics_for_project(
+        project_id, list_status=ArtifactStatus.DRAFT,
+    )
+    previous: list[Epic] = list(existing_draft)
+    if existing_draft:
+        await state.delete_epic_list_draft(
+            project_id, existing_draft[0].list_version,
+        )
+
+    # Next version = max(all) + 1
+    all_archived = await state.list_epics_for_project(
+        project_id, list_status=ArtifactStatus.ARCHIVED,
+    )
+    versions = {e.list_version for e in all_archived} | {
+        e.list_version for e in existing_final
+    }
+    next_version = max(versions, default=0) + 1
+
+    executor = getattr(request.app.state, "agent_executor", None)
+    if executor is None:
+        raise HTTPException(status_code=503, detail="Agent executor not configured.")
+
+    prompt = _build_epic_generation_prompt(
+        prd.content, api_spec_content, review_comments, previous if review_comments else None,
+    )
+    try:
+        result = await executor.single_agent_call(
+            agent_id="user_story_author",
+            prompt=prompt,
+            project_artifact_id=None,
+            max_tokens=32_000,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Epic generation failed: {e}")
+
+    text = (result.get("text") or "").strip()
+    parsed, parse_mode = _extract_json_array(text)
+    truncation_hint = _check_truncation(result)
+    if not parsed:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "no_epics_parsed",
+                "parse_mode": parse_mode,
+                "truncation_hint": truncation_hint,
+                "raw_output_first_500": text[:500],
+            },
+        )
+    epics = _normalize_epic_dicts(parsed)
+    if not epics:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "epics_empty_after_normalize"},
+        )
+
+    now = datetime.utcnow()
+    review_input_val = review_comments or None
+    saved = []
+    for i, raw_epic in enumerate(epics):
+        e = Epic(
+            epic_id=f"E-{uuid.uuid4().hex[:8]}",
+            project_id=project_id,
+            list_version=next_version,
+            list_status=ArtifactStatus.DRAFT,
+            ordinal=i + 1,
+            title=raw_epic["title"],
+            description=raw_epic["description"],
+            acceptance_criteria=raw_epic["acceptance_criteria"],
+            review_input=review_input_val,
+            created_at=now,
+        )
+        await state.create_epic(e)
+        saved.append(e)
+    return {
+        "data": [e.model_dump(mode="json") for e in saved],
+        "meta": {
+            "count": len(saved),
+            "list_version": next_version,
+            "parse_mode": parse_mode,
+            "truncated": truncation_hint is not None,
+            "truncation_hint": truncation_hint,
+        },
+        "error": None,
+    }
+
+
+# ── Pass 2 — Epic → Features ─────────────────────────────────────────────
+
+
+def _build_feature_generation_prompt(
+    epic: Epic,
+    sibling_epic_titles: list[str],
+    prd_excerpt: str,
+    review_comments: str,
+    previous_features: list[Feature] | None,
+) -> str:
+    """BPD-12. One epic → 1-8 features. Includes sibling-epic titles so
+    the agent doesn't duplicate work that belongs to a different epic."""
+    siblings_block = (
+        "## Sibling epics in this project (DO NOT duplicate their work)\n"
+        + "\n".join(f"- {t}" for t in sibling_epic_titles if t != epic.title)
+        + "\n\n"
+    ) if sibling_epic_titles else ""
+    prd_block = (
+        f"## PRD reference (in case the epic description elided detail)\n{prd_excerpt}\n\n"
+        if prd_excerpt else ""
+    )
+    if review_comments and previous_features:
+        prev_json = json.dumps(
+            [
+                {
+                    "title": f.title,
+                    "description": f.description,
+                    "acceptance_criteria": f.acceptance_criteria,
+                    "depends_on_features": f.depends_on,
+                }
+                for f in sorted(previous_features, key=lambda x: x.ordinal)
+            ],
+            indent=2,
+        )
+        return (
+            "You are REVISING the list of FEATURES under this epic. Apply the "
+            "reviewer's feedback; keep unaffected features word-for-word identical.\n\n"
+            f"## Epic: {epic.title}\n{epic.description}\n\n"
+            f"Acceptance: {epic.acceptance_criteria}\n\n"
+            f"{siblings_block}"
+            f"{prd_block}"
+            "## Current feature list (revise this)\n"
+            "```json\n"
+            f"{prev_json}\n"
+            "```\n\n"
+            "## Reviewer comments\n"
+            f"{review_comments}\n\n"
+            "Emit a SINGLE fenced ```json``` block containing the revised array. "
+            "No prose."
+        )
+    return (
+        "You are decomposing one EPIC into the FEATURES needed to ship it. "
+        "Each feature is a deliverable capability that's independently testable "
+        "(you could demo it in isolation).\n\n"
+        f"## Epic: {epic.title}\n\n"
+        f"{epic.description}\n\n"
+        f"Acceptance criterion: {epic.acceptance_criteria}\n\n"
+        f"{siblings_block}"
+        f"{prd_block}"
+        "## Output format\n"
+        "Emit a SINGLE fenced ```json``` block containing an ARRAY of "
+        "1-8 feature objects. Each object has exactly these keys:\n\n"
+        "  - title: string, ≤80 chars, imperative form. Examples: "
+        "'Login flow', 'Password reset', 'Session management'.\n\n"
+        "  - description: string, 1 paragraph. What user-facing behavior "
+        "this feature enables.\n\n"
+        "  - acceptance_criteria: string, ONE sentence — 'feature done when X'.\n\n"
+        "  - depends_on_features: array of strings (other feature TITLES "
+        "in this project that must ship first). Empty array if no deps. "
+        "Cross-epic deps allowed but rare. Use feature TITLE strings, not "
+        "indices — the system maps them to IDs on persist.\n\n"
+        "## Constraints\n"
+        "- 1-feature epics are valid; don't force a split.\n"
+        "- Feature-level deps are RARE — most deps live at the task level. "
+        "Only declare a feature-level dep when 'all of Feature A must ship "
+        "before any of Feature B starts' is genuinely true.\n"
+        "- Titles MUST be unique within the project.\n\n"
+        "No prose before or after the fenced block."
+    )
+
+
+def _normalize_feature_dicts(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = []
+    for item in raw:
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        deps_raw = item.get("depends_on_features") or item.get("depends_on") or []
+        deps = [str(d).strip() for d in deps_raw if isinstance(d, str)]
+        out.append({
+            "title": title[:200],
+            "description": str(item.get("description") or "")[:4000],
+            "acceptance_criteria": str(item.get("acceptance_criteria") or "")[:1000],
+            "depends_on_feature_titles": deps,
+        })
+    return out
+
+
+@router.post("/{project_id}/epics/{epic_id}/features/generate", status_code=201)
+async def generate_features(
+    project_id: str,
+    epic_id: str,
+    request: Request,
+    body: dict | None = None,
+    user: dict = Depends(get_current_user),
+):
+    """BPD-13 — Pass 2. One epic → 1-8 features."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    await _require_project(state, project_id)
+    epic = await state.get_epic(epic_id)
+    if epic is None or epic.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Epic not found in this project.")
+
+    review_comments = ((body or {}).get("review_comments") or "").strip()
+    if len(review_comments) > _REVIEW_COMMENTS_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"review_comments must be ≤ {_REVIEW_COMMENTS_MAX} chars.",
+        )
+
+    # Sibling-epic titles for prompt context
+    all_epics = await state.list_epics_for_project(project_id)
+    sibling_titles = [e.title for e in all_epics if e.epic_id != epic_id]
+
+    # PRD reference (truncated to fit token budget on a multi-pass run)
+    prd = await state.get_artifact(project_id, ArtifactKind.PRD)
+    prd_excerpt = (prd.content[:6000] + "\n…[truncated]"
+                   if prd and len(prd.content) > 6000
+                   else (prd.content if prd else ""))
+
+    # Pull existing features under this epic for revision flow
+    existing = await state.list_features_for_epic(
+        epic_id, list_status=ArtifactStatus.DRAFT,
+    )
+    previous: list[Feature] = list(existing)
+    for f in existing:
+        await state.delete_feature(f.feature_id)
+
+    next_version = epic.list_version
+
+    executor = getattr(request.app.state, "agent_executor", None)
+    if executor is None:
+        raise HTTPException(status_code=503, detail="Agent executor not configured.")
+
+    prompt = _build_feature_generation_prompt(
+        epic, sibling_titles, prd_excerpt,
+        review_comments, previous if review_comments else None,
+    )
+    try:
+        result = await executor.single_agent_call(
+            agent_id="user_story_author",
+            prompt=prompt,
+            project_artifact_id=None,
+            max_tokens=32_000,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Feature generation failed: {e}")
+
+    text = (result.get("text") or "").strip()
+    parsed, parse_mode = _extract_json_array(text)
+    truncation_hint = _check_truncation(result)
+    if not parsed:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "no_features_parsed",
+                "parse_mode": parse_mode,
+                "truncation_hint": truncation_hint,
+                "raw_output_first_500": text[:500],
+            },
+        )
+    features = _normalize_feature_dicts(parsed)
+    if not features:
+        raise HTTPException(
+            status_code=502, detail={"error": "features_empty_after_normalize"},
+        )
+
+    # Build title → feature_id map for cross-feature dep resolution.
+    # New features in this batch resolve to their own emitted feature_id;
+    # existing features in the same project (different epic) also count.
+    title_to_id: dict[str, str] = {}
+    for other_epic in all_epics:
+        other_features = await state.list_features_for_epic(other_epic.epic_id)
+        for of in other_features:
+            title_to_id[of.title] = of.feature_id
+
+    now = datetime.utcnow()
+    review_input_val = review_comments or None
+    saved: list[Feature] = []
+    # First pass: create rows with empty depends_on so we can map titles
+    for i, raw_f in enumerate(features):
+        fid = f"F-{uuid.uuid4().hex[:8]}"
+        title_to_id[raw_f["title"]] = fid
+        f = Feature(
+            feature_id=fid,
+            epic_id=epic_id,
+            project_id=project_id,
+            list_version=next_version,
+            list_status=ArtifactStatus.DRAFT,
+            ordinal=i + 1,
+            title=raw_f["title"],
+            description=raw_f["description"],
+            acceptance_criteria=raw_f["acceptance_criteria"],
+            depends_on=[],
+            review_input=review_input_val,
+            created_at=now,
+        )
+        await state.create_feature(f)
+        saved.append(f)
+    # Second pass: resolve depends_on_feature_titles → feature_ids
+    unresolved: list[dict[str, Any]] = []
+    for f, raw_f in zip(saved, features):
+        if not raw_f.get("depends_on_feature_titles"):
+            continue
+        resolved_ids: list[str] = []
+        for title in raw_f["depends_on_feature_titles"]:
+            fid = title_to_id.get(title)
+            if fid:
+                resolved_ids.append(fid)
+            else:
+                unresolved.append({"feature_id": f.feature_id, "missing_title": title})
+        if resolved_ids:
+            await state.update_feature(f.feature_id, {"depends_on": resolved_ids})
+
+    return {
+        "data": [f.model_dump(mode="json") for f in saved],
+        "meta": {
+            "count": len(saved),
+            "epic_id": epic_id,
+            "parse_mode": parse_mode,
+            "truncated": truncation_hint is not None,
+            "truncation_hint": truncation_hint,
+            "unresolved_deps": unresolved or None,
+        },
+        "error": None,
+    }
+
+
+# ── Pass 3 — Feature → Atomic Tasks ──────────────────────────────────────
+
+
+def _build_task_generation_prompt(
+    feature: Feature,
+    epic: Epic,
+    sibling_feature_titles: list[str],
+    review_comments: str,
+    previous_tasks: list[ProjectTask] | None,
+) -> str:
+    """BPD-14. One feature → 3-15 atomic tasks. Enforces atomic contract
+    (one primary_file, 50-300 LOC, single acceptance_test)."""
+    siblings = "\n".join(f"- {t}" for t in sibling_feature_titles if t != feature.title)
+    siblings_block = (
+        f"## Sibling features under epic '{epic.title}'\n{siblings}\n\n"
+        if siblings else ""
+    )
+    if review_comments and previous_tasks:
+        prev_json = json.dumps(
+            [
+                {
+                    "title": t.title,
+                    "description": t.description,
+                    "primary_file": t.primary_file,
+                    "expected_loc": t.expected_loc,
+                    "acceptance_test": t.acceptance_test,
+                    "depends_on_indices": [],  # not round-tripped at this scale
+                    "task_type": t.task_type,
+                    "priority": t.priority,
+                    "estimated_agent": t.estimated_agent,
+                }
+                for t in sorted(previous_tasks, key=lambda x: x.ordinal)
+            ],
+            indent=2,
+        )
+        return (
+            f"You are REVISING the atomic tasks under feature '{feature.title}'. "
+            "Apply the reviewer's feedback; keep unaffected tasks identical.\n\n"
+            f"## Feature: {feature.title}\n{feature.description}\n\n"
+            f"Acceptance: {feature.acceptance_criteria}\n\n"
+            "## Current tasks (revise this)\n"
+            "```json\n"
+            f"{prev_json}\n"
+            "```\n\n"
+            "## Reviewer comments\n"
+            f"{review_comments}\n\n"
+            "Emit a SINGLE fenced ```json``` block containing the revised array."
+        )
+    return (
+        "You are decomposing one FEATURE into the ATOMIC TASKS an AI agent "
+        "team will execute. Each task is BOUNDED:\n"
+        "  - exactly ONE primary file (path stated explicitly)\n"
+        "  - ≤ 2 additional files touched\n"
+        "  - 50-300 expected lines of code\n"
+        "  - ONE acceptance criterion (one test, one curl, one render)\n"
+        "  - buildable in 2-3 minutes by a backend/frontend specialist agent\n\n"
+        f"## Epic: {epic.title}\n{epic.description}\n\n"
+        f"## Feature: {feature.title}\n{feature.description}\n\n"
+        f"Acceptance criterion: {feature.acceptance_criteria}\n\n"
+        f"{siblings_block}"
+        "## Output format\n"
+        "Emit a SINGLE fenced ```json``` block containing an ARRAY of "
+        "3-15 atomic task objects. Each object has exactly these keys:\n\n"
+        "  - title: imperative, ≤80 chars. Examples: 'Create POST /auth/login "
+        "endpoint', 'Add LoginForm component', 'Add login flow integration test'.\n\n"
+        "  - description: ≤4 lines — the prompt-equivalent of what a junior "
+        "developer would read before opening the file.\n\n"
+        "  - primary_file: ONE file path, e.g. 'backend/app/api/v1/auth.py'.\n\n"
+        "  - expected_loc: integer, typical 50-300. Reject yourself if it's "
+        "<30 (over-decomposition) or >500 (under-decomposition).\n\n"
+        "  - acceptance_test: ONE sentence. Examples: 'POST /auth/login with "
+        "valid creds returns 200 with token; invalid creds returns 401'.\n\n"
+        "  - depends_on_indices: array of integer INDICES into THIS array "
+        "(0-based). Empty = no deps. References to other features use "
+        "the special form 'feature:<feature_title>' as a string instead "
+        "of an integer.\n\n"
+        "  - task_type: one of feature_request, bug_report, doc_request, "
+        "demo_request, research_request, content_request.\n\n"
+        "  - priority: one of low, medium, high.\n\n"
+        "  - estimated_agent: one of backend_specialist, frontend_specialist, "
+        "tester_specialist, code_reviewer, devops_specialist, content_creator, "
+        "research_specialist. Pick the best fit; null if cross-cutting.\n\n"
+        "## Style\n"
+        "- Be SPECIFIC. Reference concrete file paths, function names, "
+        "endpoints, SQL tables.\n"
+        "- The LAST task in most features is a TEST task targeting "
+        "tests/<path>/test_<X>.py.\n"
+        "- Order tasks so internal deps form a clean DAG (no cycles).\n\n"
+        "No prose before or after the fenced block."
+    )
+
+
+def _normalize_task_emission_dicts(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Atomic-task normalization: primary_file required; bounds on
+    expected_loc; emit_warnings list per-row when sus."""
+    out = []
+    for item in raw:
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        primary_file = str(item.get("primary_file") or "").strip() or None
+        loc_raw = item.get("expected_loc")
+        try:
+            loc = int(loc_raw) if loc_raw is not None else None
+        except (TypeError, ValueError):
+            loc = None
+        tt = str(item.get("task_type") or "feature_request").strip()
+        if tt not in _VALID_TASK_TYPES:
+            tt = "feature_request"
+        pr = str(item.get("priority") or "medium").lower().strip()
+        if pr not in _VALID_PRIORITIES:
+            pr = "medium"
+        agent = item.get("estimated_agent")
+        if agent is not None:
+            agent = str(agent)
+        deps = item.get("depends_on_indices") or item.get("depends_on") or []
+        if not isinstance(deps, list):
+            deps = []
+        warnings = []
+        if not primary_file:
+            warnings.append("missing primary_file")
+        if loc is not None and loc < 30:
+            warnings.append(f"expected_loc={loc} suspiciously small")
+        if loc is not None and loc > 500:
+            warnings.append(f"expected_loc={loc} suspiciously large")
+        out.append({
+            "title": title[:200],
+            "description": str(item.get("description") or "")[:2000],
+            "primary_file": primary_file,
+            "expected_loc": loc,
+            "acceptance_test": str(item.get("acceptance_test") or "")[:600] or None,
+            "depends_on_raw": deps,
+            "task_type": tt,
+            "priority": pr,
+            "estimated_agent": agent,
+            "_warnings": warnings,
+        })
+    return out
+
+
+@router.post("/{project_id}/features/{feature_id}/tasks/generate", status_code=201)
+async def generate_tasks_for_feature(
+    project_id: str,
+    feature_id: str,
+    request: Request,
+    body: dict | None = None,
+    user: dict = Depends(get_current_user),
+):
+    """BPD-15 — Pass 3. One feature → 3-15 atomic tasks with
+    primary_file + acceptance_test + depends_on. Persists tasks ONLY
+    if the resulting graph has no cycles (BPD-005)."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    await _require_project(state, project_id)
+    feature = await state.get_feature(feature_id)
+    if feature is None or feature.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Feature not found in this project.")
+    epic = await state.get_epic(feature.epic_id)
+    if epic is None:
+        raise HTTPException(status_code=404, detail="Parent epic missing.")
+
+    review_comments = ((body or {}).get("review_comments") or "").strip()
+    if len(review_comments) > _REVIEW_COMMENTS_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"review_comments must be ≤ {_REVIEW_COMMENTS_MAX} chars.",
+        )
+
+    # Sibling features under same epic for prompt context
+    siblings = await state.list_features_for_epic(feature.epic_id)
+    sibling_titles = [f.title for f in siblings if f.feature_id != feature_id]
+
+    # Existing draft tasks under this feature for revision flow.
+    all_tasks = await state.list_tasks_for_project(project_id)
+    existing_tasks = [t for t in all_tasks if t.feature_id == feature_id]
+    previous = list(existing_tasks)
+    # Delete existing draft tasks under this feature (similar to PRD/task list flow)
+    for t in existing_tasks:
+        if t.list_status == ArtifactStatus.DRAFT:
+            await state.delete_task(t.task_id)
+
+    next_version = max(
+        (t.list_version for t in all_tasks if t.list_status != ArtifactStatus.ARCHIVED),
+        default=0,
+    ) + 1 if not any(t.list_status == ArtifactStatus.DRAFT for t in all_tasks if t.feature_id != feature_id) else max(
+        (t.list_version for t in all_tasks if t.list_status == ArtifactStatus.DRAFT),
+        default=1,
+    )
+
+    executor = getattr(request.app.state, "agent_executor", None)
+    if executor is None:
+        raise HTTPException(status_code=503, detail="Agent executor not configured.")
+
+    prompt = _build_task_generation_prompt(
+        feature, epic, sibling_titles,
+        review_comments, previous if review_comments else None,
+    )
+    try:
+        result = await executor.single_agent_call(
+            agent_id="user_story_author",
+            prompt=prompt,
+            project_artifact_id=None,
+            max_tokens=32_000,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Task generation failed: {e}")
+
+    text = (result.get("text") or "").strip()
+    parsed, parse_mode = _extract_json_array(text)
+    truncation_hint = _check_truncation(result)
+    if not parsed:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "no_tasks_parsed",
+                "parse_mode": parse_mode,
+                "truncation_hint": truncation_hint,
+                "raw_output_first_500": text[:500],
+            },
+        )
+    tasks = _normalize_task_emission_dicts(parsed)
+    if not tasks:
+        raise HTTPException(
+            status_code=502, detail={"error": "tasks_empty_after_normalize"},
+        )
+
+    # Assign task_ids in advance so depends_on_indices can resolve.
+    assigned_ids = [f"T-{uuid.uuid4().hex[:8]}" for _ in tasks]
+
+    # Resolve depends_on. Index → task_id (within this batch). String
+    # "feature:<feature_title>" → look up that feature's tasks (use the
+    # LAST task in that feature as the conservative "feature complete"
+    # signal — v1; v2 may add finer-grained targeting).
+    feature_title_to_last_task_id: dict[str, str] = {}
+    for other_f in siblings + [feature]:
+        f_tasks = [t for t in all_tasks if t.feature_id == other_f.feature_id]
+        if f_tasks:
+            feature_title_to_last_task_id[other_f.title] = f_tasks[-1].task_id
+
+    now = datetime.utcnow()
+    review_input_val = review_comments or None
+    to_insert: list[ProjectTask] = []
+    unresolved_deps: list[dict[str, Any]] = []
+    all_warnings: list[dict[str, Any]] = []
+    for i, (raw_t, tid) in enumerate(zip(tasks, assigned_ids)):
+        resolved_deps: list[str] = []
+        for d in raw_t["depends_on_raw"]:
+            if isinstance(d, int):
+                if 0 <= d < len(assigned_ids) and d != i:
+                    resolved_deps.append(assigned_ids[d])
+                else:
+                    unresolved_deps.append({"task_index": i, "bad_dep": d, "reason": "out_of_range_or_self"})
+            elif isinstance(d, str) and d.startswith("feature:"):
+                target_title = d[len("feature:"):]
+                resolved_id = feature_title_to_last_task_id.get(target_title)
+                if resolved_id:
+                    resolved_deps.append(resolved_id)
+                else:
+                    unresolved_deps.append({"task_index": i, "bad_dep": d, "reason": "feature_not_found"})
+        t = ProjectTask(
+            task_id=tid,
+            project_id=project_id,
+            list_version=next_version,
+            list_status=ArtifactStatus.DRAFT,
+            ordinal=i + 1,
+            title=raw_t["title"],
+            description=raw_t["description"],
+            task_type=raw_t["task_type"],
+            priority=raw_t["priority"],
+            estimated_agent=raw_t["estimated_agent"],
+            task_status=TaskStatus.BACKLOG,
+            feature_id=feature_id,
+            depends_on=resolved_deps,
+            primary_file=raw_t["primary_file"],
+            expected_loc=raw_t["expected_loc"],
+            acceptance_test=raw_t["acceptance_test"],
+            review_input=review_input_val,
+            created_at=now,
+        )
+        to_insert.append(t)
+        if raw_t["_warnings"]:
+            all_warnings.append({"task_id": tid, "warnings": raw_t["_warnings"]})
+
+    # Insert all rows first, then run cycle detection across the
+    # whole project's draft graph. If a cycle is found, ROLL BACK
+    # this batch's inserts (BPD-005).
+    for t in to_insert:
+        await state.create_task(t)
+    has_cycle, cycle_path = await state.has_task_cycle(project_id, next_version)
+    if has_cycle:
+        for t in to_insert:
+            await state.delete_task(t.task_id)
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "dag_cycle_detected",
+                "cycle_path": cycle_path,
+                "hint": "The generated tasks form a dependency cycle. "
+                        "Regenerate this feature (the agent will produce "
+                        "a different ordering).",
+            },
+        )
+
+    return {
+        "data": [t.model_dump(mode="json") for t in to_insert],
+        "meta": {
+            "count": len(to_insert),
+            "feature_id": feature_id,
+            "epic_id": feature.epic_id,
+            "parse_mode": parse_mode,
+            "truncated": truncation_hint is not None,
+            "truncation_hint": truncation_hint,
+            "unresolved_deps": unresolved_deps or None,
+            "row_warnings": all_warnings or None,
+        },
+        "error": None,
+    }
+
+
+# ── BPD-17 — Build-plan orchestrator (runs all three passes) ─────────────
+
+
+@router.post("/{project_id}/build-plan/generate", status_code=202)
+async def generate_build_plan(
+    project_id: str,
+    request: Request,
+    body: dict | None = None,
+    user: dict = Depends(get_current_user),
+):
+    """BPD-17. Convenience: run Pass 1 → finalize → Pass 2 (per epic) →
+    finalize → Pass 3 (per feature) → finalize. Returns a summary of
+    the cascade. Intended for the 'I trust the agent, just give me a
+    plan' flow.
+
+    SECURITY: this CAN spend significant LLM cost (1 + N_epics +
+    N_features calls). Caller is the gate."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    await _require_project(state, project_id)
+
+    # Pass 1 — epics
+    pass1 = await generate_epics(project_id, request, body, user)
+    epic_dicts = pass1["data"]
+    list_version = pass1["meta"]["list_version"]
+    await state.finalize_epic_list(project_id, list_version)
+
+    # Pass 2 — features per epic
+    feature_counts: dict[str, int] = {}
+    for ed in epic_dicts:
+        eid = ed["epic_id"]
+        try:
+            pass2 = await generate_features(project_id, eid, request, None, user)
+        except HTTPException as e:
+            raise HTTPException(
+                status_code=502,
+                detail={"phase": "features", "epic_id": eid, "inner": e.detail},
+            )
+        feature_counts[eid] = pass2["meta"]["count"]
+
+    # Pass 3 — tasks per feature
+    task_counts: dict[str, int] = {}
+    all_features = await state.list_features_for_project(project_id)
+    for f in all_features:
+        if f.list_version != list_version:
+            continue
+        try:
+            pass3 = await generate_tasks_for_feature(
+                project_id, f.feature_id, request, None, user,
+            )
+        except HTTPException as e:
+            raise HTTPException(
+                status_code=502,
+                detail={"phase": "tasks", "feature_id": f.feature_id, "inner": e.detail},
+            )
+        task_counts[f.feature_id] = pass3["meta"]["count"]
+
+    return {
+        "data": {
+            "list_version": list_version,
+            "epic_count": len(epic_dicts),
+            "feature_counts_by_epic": feature_counts,
+            "task_counts_by_feature": task_counts,
+        },
+        "meta": None,
+        "error": None,
+    }
+
+
+# ── BPD-16 — Batch generators (per-level convenience) ────────────────────
+
+
+@router.post("/{project_id}/epics/{epic_id}/features/generate-all")
+async def generate_features_for_all_epics(
+    project_id: str,
+    epic_id: str,  # path placeholder kept for URL parallelism; unused
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """BPD-16a — run Pass 2 for EVERY epic in the project (sequential).
+    The :epic_id path segment is ignored — kept to match URL shape
+    with BPD-13. Use this when you've approved an epic list and want
+    features generated for all of them without per-epic clicks."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    await _require_project(state, project_id)
+    epics = await state.list_epics_for_project(project_id)
+    if not epics:
+        raise HTTPException(status_code=404, detail="No epics for this project.")
+    counts: dict[str, int] = {}
+    for e in epics:
+        try:
+            res = await generate_features(project_id, e.epic_id, request, None, user)
+            counts[e.epic_id] = res["meta"]["count"]
+        except HTTPException as he:
+            # Surface partial progress + the failing epic
+            return {
+                "data": {"feature_counts": counts},
+                "meta": {"failed_at_epic": e.epic_id, "inner": he.detail},
+                "error": "partial",
+            }
+    return {"data": {"feature_counts": counts}, "meta": None, "error": None}
+
+
+@router.post("/{project_id}/features/{feature_id}/tasks/generate-all")
+async def generate_tasks_for_all_features(
+    project_id: str,
+    feature_id: str,  # ignored, see above
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """BPD-16b — run Pass 3 for EVERY feature in the project."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    await _require_project(state, project_id)
+    features = await state.list_features_for_project(project_id)
+    if not features:
+        raise HTTPException(status_code=404, detail="No features for this project.")
+    counts: dict[str, int] = {}
+    for f in features:
+        try:
+            res = await generate_tasks_for_feature(
+                project_id, f.feature_id, request, None, user,
+            )
+            counts[f.feature_id] = res["meta"]["count"]
+        except HTTPException as he:
+            return {
+                "data": {"task_counts": counts},
+                "meta": {"failed_at_feature": f.feature_id, "inner": he.detail},
+                "error": "partial",
+            }
+    return {"data": {"task_counts": counts}, "meta": None, "error": None}

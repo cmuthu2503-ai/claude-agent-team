@@ -265,6 +265,11 @@ class BaseAgent(ABC):
             "input_tokens": response.get("input_tokens", 0),
             "output_tokens": response.get("output_tokens", 0),
             "model": self.model,
+            # Surfaced so callers can detect truncation (stop_reason ==
+            # "max_tokens" means the response was cut off — used by BPD
+            # generation endpoints to show a "split this epic" hint per
+            # BPD-18 instead of silently returning a malformed JSON).
+            "stop_reason": response.get("stop_reason"),
         }
 
     def _build_result(

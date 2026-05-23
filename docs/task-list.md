@@ -1113,16 +1113,16 @@ whose `depends_on` isn't fully `deployed`.
 
 | ID | Task | Effort | Depends On | Status |
 |----|------|--------|-----------|--------|
-| BPD-10 | Pass-1 generator prompt (PRD → epics). Output JSON array of `{title, description, acceptance_criteria}` × 5-12. Streaming + 32K max_tokens (BPD-107) | M | — | `[ ]` |
-| BPD-11 | `POST /projects/{id}/epics/generate` endpoint with review-comments flow (BPD-101, BPD-108) | M | BPD-06, BPD-10 | `[ ]` |
-| BPD-12 | Pass-2 generator prompt (epic → features). Parent context + sibling-epic titles | M | — | `[ ]` |
-| BPD-13 | `POST /projects/{id}/epics/{epic_id}/features/generate` endpoint (BPD-102) | M | BPD-07, BPD-12 | `[ ]` |
-| BPD-14 | Pass-3 generator prompt (feature → atomic tasks). Each task: `primary_file`, `acceptance_test`, `depends_on` indices, `expected_loc`. Enforces 50-300 LOC per task (BPD-106) | L | — | `[ ]` |
-| BPD-15 | `POST /projects/{id}/features/{feature_id}/tasks/generate` endpoint. Maps `depends_on` indices → task_ids on persist; rejects cycles via BPD-08 (BPD-103, BPD-005) | M | BPD-04, BPD-14 | `[ ]` |
-| BPD-16 | Batch generators: `POST /epics/{id}/features/generate-all` + `POST /features/tasks/generate-all` (BPD-104). Streams progress events | M | BPD-13, BPD-15 | `[ ]` |
-| BPD-17 | Orchestrator generator: `POST /projects/{id}/build-plan/generate` (BPD-105) — sequential cascade, auto-finalize between passes | M | BPD-11, BPD-13, BPD-15 | `[ ]` |
-| BPD-18 | Generation soft-failure path: `stop_reason="max_tokens"` surfaces user-actionable "split this epic" hint (BPD-107) | S | BPD-11, BPD-13, BPD-15 | `[ ]` |
-| BPD-19 | Tests: parse-mode roundtrip for each pass; cycle rejection; cross-feature dep validation; per-level review-comments isolation | L | BPD-15, BPD-16, BPD-17 | `[ ]` |
+| BPD-10 | Pass-1 generator prompt (PRD → epics). Output JSON array of `{title, description, acceptance_criteria}` × 5-12. Streaming + 32K max_tokens (BPD-107) | M | — | `[x]` |
+| BPD-11 | `POST /projects/{id}/epics/generate` endpoint with review-comments flow (BPD-101, BPD-108) | M | BPD-06, BPD-10 | `[x]` |
+| BPD-12 | Pass-2 generator prompt (epic → features). Parent context + sibling-epic titles | M | — | `[x]` |
+| BPD-13 | `POST /projects/{id}/epics/{epic_id}/features/generate` endpoint (BPD-102) | M | BPD-07, BPD-12 | `[x]` |
+| BPD-14 | Pass-3 generator prompt (feature → atomic tasks). Each task: `primary_file`, `acceptance_test`, `depends_on` indices, `expected_loc`. Enforces 50-300 LOC per task (BPD-106) | L | — | `[x]` |
+| BPD-15 | `POST /projects/{id}/features/{feature_id}/tasks/generate` endpoint. Maps `depends_on` indices → task_ids on persist; rejects cycles via BPD-08 (BPD-103, BPD-005) | M | BPD-04, BPD-14 | `[x]` |
+| BPD-16 | Batch generators: `POST /epics/{id}/features/generate-all` + `POST /features/tasks/generate-all` (BPD-104). Streams progress events | M | BPD-13, BPD-15 | `[x]` |
+| BPD-17 | Orchestrator generator: `POST /projects/{id}/build-plan/generate` (BPD-105) — sequential cascade, auto-finalize between passes | M | BPD-11, BPD-13, BPD-15 | `[x]` |
+| BPD-18 | Generation soft-failure path: `stop_reason="max_tokens"` surfaces user-actionable "split this epic" hint (BPD-107) | S | BPD-11, BPD-13, BPD-15 | `[x]` |
+| BPD-19 | Tests: parse-mode roundtrip for each pass; cycle rejection; cross-feature dep validation; per-level review-comments isolation | L | BPD-15, BPD-16, BPD-17 | `[x]` |
 
 ### Phase C: Dispatch engine + auto-dispatch (~2 hours)
 
@@ -1170,11 +1170,11 @@ whose `depends_on` isn't fully `deployed`.
 | Phase | Tasks | Done | In Progress | Deferred | Not Started |
 |-------|-------|------|-------------|----------|-------------|
 | Phase A: Design + schema foundation | 9 | 9 | 0 | 0 | 0 |
-| Phase B: Three-pass generation | 10 | 0 | 0 | 0 | 10 |
+| Phase B: Three-pass generation | 10 | 10 | 0 | 0 | 0 |
 | Phase C: Dispatch engine + auto-dispatch | 9 | 0 | 0 | 0 | 9 |
 | Phase D: UI rework | 9 | 0 | 0 | 0 | 9 |
 | Phase E: Migration + polish + verification | 8 | 0 | 0 | 0 | 8 |
-| **Total** | **45** | **9** | **0** | **0** | **36** |
+| **Total** | **45** | **19** | **0** | **0** | **26** |
 
 ### Open questions to resolve in BPD-01 before Phase B starts
 
