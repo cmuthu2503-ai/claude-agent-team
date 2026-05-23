@@ -120,6 +120,19 @@ export function BuildPlanView({ projectId }: Props) {
   )
   const hasLegacy = legacyTasks.length > 0
 
+  // Pre-compute task_id → Task lookup map so the popup-detail
+  // renderer (below the early return) can resolve depends_on chips
+  // without a fresh scan per chip. Declared BEFORE the early return
+  // to satisfy the Rules of Hooks — moving it after the conditional
+  // null-return caused "Rendered more hooks than during the previous
+  // render" the first time the project transitioned from empty to
+  // having data.
+  const tasksById = useMemo(() => {
+    const m = new Map<string, Task>()
+    for (const t of tasks) m.set(t.task_id, t)
+    return m
+  }, [tasks])
+
   // No epics AND no legacy → nothing to render here; the legacy flat
   // editor is the primary view for this project.
   if (epics.length === 0 && !hasLegacy) return null
@@ -183,14 +196,10 @@ export function BuildPlanView({ projectId }: Props) {
   const selectedTask = popupTaskId
     ? tasks.find((t) => t.task_id === popupTaskId) ?? null
     : null
-  // Resolve depends_on task_ids → {task_id, title, status} for the
-  // popup's BPD chip section. Dangling refs (deleted blockers) get a
+  // tasksById is declared above the early-return so the hook count
+  // is stable across renders. The depends_on chip resolution below
+  // reads it directly. Dangling refs (deleted blockers) get a
   // synthetic "(missing)" entry so the user sees the broken edge.
-  const tasksById = useMemo(() => {
-    const m = new Map<string, Task>()
-    for (const t of tasks) m.set(t.task_id, t)
-    return m
-  }, [tasks])
   let selectedFeature: Feature | null = null
   let selectedEpic: Epic | null = null
   if (selectedTask && selectedTask.feature_id) {
