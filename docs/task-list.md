@@ -1081,3 +1081,114 @@ foundation + UI + docs in the same change; per-phase split optional.
 - CrewAITeam project (`proj-89cd2b66`) — repo backfilled to `cmuthu2503-ai/crewaiteam` via WS-16 button path.
 - End-to-end smoke (request `REQ-WSE2E1`): research artifacts written to `project-workspaces/crewaiteam/docs/research/REQ-WSE2E1-…/` locally, committed to the CrewAI Team repo at commit `ec9cdfa3`. Files appear at the natural `docs/research/REQ-WSE2E1-…/` path inside the repo.
 - GitHub-side smoke repos `ws-smoke-1779224190` + `ws-smoke-distinct-name-1779224190` created during validation. Linger on GitHub — `GITHUB_TOKEN` lacks `delete_repo` scope by design; delete manually if not needed.
+
+---
+
+## Build Plan Decomposition (BPD) — Detailed Task Breakdown
+
+Reference PRD: [`docs/prd.md`](prd.md) §6.8.
+
+Replaces today's flat task list with **Epic → Feature → Task** plus a
+task-level dependency DAG. Closes the four failure modes observed
+during CrewAI's build (token truncation, drop-guard loops, parallel
+dispatch without deps, no review checkpoints). Three-pass generation
+with a review gate at every level; dispatch engine refuses tasks
+whose `depends_on` isn't fully `deployed`.
+
+### Phase A: Design + schema foundation (~2 hours)
+
+| ID | Task | Effort | Depends On | Status |
+|----|------|--------|-----------|--------|
+| BPD-01 | Author `docs/prd-build-plan-decomposition.md` (rationale + open-question resolutions + schema rationale + worked example mapping CrewAI's current tasks into the new hierarchy) | M | — | `[ ]` |
+| BPD-02 | Schema migration: `epics` table per BPD-001 | S | BPD-01 | `[ ]` |
+| BPD-03 | Schema migration: `features` table per BPD-002 | S | BPD-01 | `[ ]` |
+| BPD-04 | Schema migration: ALTER `project_tasks` add `feature_id` / `depends_on` / `primary_file` / `expected_loc` / `acceptance_test` (BPD-003); legacy rows default to `feature_id=NULL, depends_on='[]'` (BPD-401) | S | BPD-01 | `[ ]` |
+| BPD-05 | Pydantic models: `Epic`, `Feature`, extend `ProjectTask` | S | BPD-02, BPD-03, BPD-04 | `[ ]` |
+| BPD-06 | StateStore CRUD: epics (list/get/create/update/finalize/archive/delete) | M | BPD-05 | `[ ]` |
+| BPD-07 | StateStore CRUD: features (same shape, scoped to epic) | M | BPD-05 | `[ ]` |
+| BPD-08 | StateStore CRUD: dependency graph helpers — `get_blockers(task_id)`, `get_dispatchable_tasks(project_id)`, `has_cycle(project_id, list_version)` (BPD-005) | M | BPD-04 | `[ ]` |
+| BPD-09 | Unit tests: epics + features + dependency-graph helpers (cycle detection, cross-feature dep validation per BPD-006) | M | BPD-06, BPD-07, BPD-08 | `[ ]` |
+
+### Phase B: Three-pass generation (~3 hours)
+
+| ID | Task | Effort | Depends On | Status |
+|----|------|--------|-----------|--------|
+| BPD-10 | Pass-1 generator prompt (PRD → epics). Output JSON array of `{title, description, acceptance_criteria}` × 5-12. Streaming + 32K max_tokens (BPD-107) | M | — | `[ ]` |
+| BPD-11 | `POST /projects/{id}/epics/generate` endpoint with review-comments flow (BPD-101, BPD-108) | M | BPD-06, BPD-10 | `[ ]` |
+| BPD-12 | Pass-2 generator prompt (epic → features). Parent context + sibling-epic titles | M | — | `[ ]` |
+| BPD-13 | `POST /projects/{id}/epics/{epic_id}/features/generate` endpoint (BPD-102) | M | BPD-07, BPD-12 | `[ ]` |
+| BPD-14 | Pass-3 generator prompt (feature → atomic tasks). Each task: `primary_file`, `acceptance_test`, `depends_on` indices, `expected_loc`. Enforces 50-300 LOC per task (BPD-106) | L | — | `[ ]` |
+| BPD-15 | `POST /projects/{id}/features/{feature_id}/tasks/generate` endpoint. Maps `depends_on` indices → task_ids on persist; rejects cycles via BPD-08 (BPD-103, BPD-005) | M | BPD-04, BPD-14 | `[ ]` |
+| BPD-16 | Batch generators: `POST /epics/{id}/features/generate-all` + `POST /features/tasks/generate-all` (BPD-104). Streams progress events | M | BPD-13, BPD-15 | `[ ]` |
+| BPD-17 | Orchestrator generator: `POST /projects/{id}/build-plan/generate` (BPD-105) — sequential cascade, auto-finalize between passes | M | BPD-11, BPD-13, BPD-15 | `[ ]` |
+| BPD-18 | Generation soft-failure path: `stop_reason="max_tokens"` surfaces user-actionable "split this epic" hint (BPD-107) | S | BPD-11, BPD-13, BPD-15 | `[ ]` |
+| BPD-19 | Tests: parse-mode roundtrip for each pass; cycle rejection; cross-feature dep validation; per-level review-comments isolation | L | BPD-15, BPD-16, BPD-17 | `[ ]` |
+
+### Phase C: Dispatch engine + auto-dispatch (~2 hours)
+
+| ID | Task | Effort | Depends On | Status |
+|----|------|--------|-----------|--------|
+| BPD-20 | Update `POST /projects/{id}/build/dispatch` to enforce `depends_on`; return 409 with blocker list on unmet deps (BPD-201) | M | BPD-08, BPD-04 | `[ ]` |
+| BPD-21 | New endpoint `POST /projects/{id}/build/dispatch-feature/{feature_id}` (BPD-202) | M | BPD-20 | `[ ]` |
+| BPD-22 | New endpoint `POST /projects/{id}/build/dispatch-epic/{epic_id}` (BPD-203) | M | BPD-20 | `[ ]` |
+| BPD-23 | New endpoint `POST /projects/{id}/build/dispatch-all-ready` (BPD-204) | M | BPD-20 | `[ ]` |
+| BPD-24 | EventEmitter handler: on `request.deployed`, recompute dispatchable set; auto-fire if `auto_dispatch_on_deploy` is on (BPD-205) | M | BPD-23 | `[ ]` |
+| BPD-25 | Add `auto_dispatch_on_deploy: bool` column to `projects`; PATCH endpoint accepts it (BPD-206) | S | BPD-24 | `[ ]` |
+| BPD-26 | Emit `project.tasks.auto_dispatched` WS event with fired task_ids; per-project audit-log row | S | BPD-24 | `[ ]` |
+| BPD-27 | Feature/epic completion rollup: `get_feature_status()`, `get_epic_status()` derived from child statuses (BPD-207) | S | BPD-06, BPD-07 | `[ ]` |
+| BPD-28 | Tests: dispatch refusal on unmet deps; auto-dispatch cascade across a small DAG; feature-complete + epic-complete rollups | L | BPD-23, BPD-24, BPD-27 | `[ ]` |
+
+### Phase D: UI rework (~3 hours)
+
+| ID | Task | Effort | Depends On | Status |
+|----|------|--------|-----------|--------|
+| BPD-29 | Task List page: rebuild as three collapsible levels (epic → feature → task) with status rollups in headers (BPD-301) | L | BPD-27 | `[ ]` |
+| BPD-30 | Per-level toolbar actions: Generate Features (epic), Generate Tasks (feature), Dispatch / Edit / Delete (task). Mirror today's editor affordances (BPD-302) | M | BPD-29, BPD-13, BPD-15 | `[ ]` |
+| BPD-31 | TaskDrillIn popup: add `primary_file`, `acceptance_test`, `depends_on` chip section + `Epic › Feature › Task` breadcrumb (BPD-303) | M | BPD-29 | `[ ]` |
+| BPD-32 | Build Board: epic + feature filter dropdowns; cards show parent chips; blocked cards stay in Backlog with chain icon + tooltip (BPD-304) | L | BPD-27, BPD-29 | `[ ]` |
+| BPD-33 | Epic-detail popup (parallel to task popup) with feature list + rollup stats (cost / wall time / commits) (BPD-305) | M | BPD-27 | `[ ]` |
+| BPD-34 | Project header stat chip: `N/M epics done · X/Y tasks · Z blocked` (BPD-306) | S | BPD-27 | `[ ]` |
+| BPD-35 | Generation flow UI: three sequential approval gates + opt-in "Approve all and dispatch" mega-button (BPD-307) | M | BPD-17, BPD-29 | `[ ]` |
+| BPD-36 | Dependency validation inline error chips in Task List editor — bad `depends_on` surfaces a "Fix" hint (BPD-308) | M | BPD-29 | `[ ]` |
+| BPD-37 | Build Chat update: `project_orchestrator` gets new tools for `dispatch_epic` / `dispatch_feature` / `dispatch_all_ready` so chat-driven workflows compose with the new dispatch endpoints | M | BPD-21, BPD-22, BPD-23 | `[ ]` |
+
+### Phase E: Migration + polish + verification (~1.5 hours)
+
+| ID | Task | Effort | Depends On | Status |
+|----|------|--------|-----------|--------|
+| BPD-38 | Frontend renders legacy tasks (feature_id IS NULL) under a synthetic "Legacy" epic at the top of the Task List page (BPD-402) | S | BPD-29 | `[ ]` |
+| BPD-39 | Optional migration tool: `POST /projects/{id}/build-plan/decompose-legacy` — runs three-pass generation against the existing PRD and shows a diff view ("here's how your existing tasks would map"). User reviews + accepts (BPD-403) | L | BPD-17, BPD-29 | `[ ]` |
+| BPD-40 | Per-epic deploy batching (opt-in): supervisor defers per-task deploys until the parent feature is fully landed (BPD-208) | M | BPD-27 | `[ ]` |
+| BPD-41 | Smoke test: end-to-end on a fresh project — generate epics → review → generate features → review → generate tasks → review → dispatch one feature → verify deps enforce → enable auto-dispatch → verify cascade | L | BPD-35, BPD-24 | `[ ]` |
+| BPD-42 | Smoke test: legacy compatibility — verify CrewAI's existing task list dispatches identically to before (no `depends_on` = no blockers) (BPD-404) | S | BPD-20 | `[ ]` |
+| BPD-43 | PRD revision history bump: docs/prd.md v3.12 → v3.13 (this PRD update) | S | BPD-41 | `[ ]` |
+| BPD-44 | task-list.md Post-Release Changes row: "Build Plan Decomposition (shipped YYYY-MM-DD)" | S | BPD-43 | `[ ]` |
+| BPD-45 | Agent lessons doc update: new L19 explaining the agent's smaller per-task scope (you get a single `primary_file` + `acceptance_test`; no longer 4-8 sub-task bullets) | S | BPD-41 | `[ ]` |
+
+### Progress Summary
+
+| Phase | Tasks | Done | In Progress | Deferred | Not Started |
+|-------|-------|------|-------------|----------|-------------|
+| Phase A: Design + schema foundation | 9 | 0 | 0 | 0 | 9 |
+| Phase B: Three-pass generation | 10 | 0 | 0 | 0 | 10 |
+| Phase C: Dispatch engine + auto-dispatch | 9 | 0 | 0 | 0 | 9 |
+| Phase D: UI rework | 9 | 0 | 0 | 0 | 9 |
+| Phase E: Migration + polish + verification | 8 | 0 | 0 | 0 | 8 |
+| **Total** | **45** | **0** | **0** | **0** | **45** |
+
+### Open questions to resolve in BPD-01 before Phase B starts
+
+1. **Three approval gates default vs single mega-approval?** PRD says
+   step-by-step default; confirm before implementation.
+2. **Cross-epic dependencies allowed?** PRD says yes with UI warning;
+   confirm.
+3. **Auto-dispatch on by default?** PRD says off, opt-in per project.
+4. **Greenfield-only or legacy migration tool included in v1?** PRD
+   ships legacy compat (BPD-401/402/404) in v1; migration tool
+   (BPD-39) is Medium priority — could ship in a Phase F.
+
+### Estimated total effort
+
+~11.5 hours of focused work split across the 5 phases. Backend
+foundation (Phases A+B) is the critical path; UI (Phase D) is the
+biggest single chunk. Phase E is mostly verification + docs.
