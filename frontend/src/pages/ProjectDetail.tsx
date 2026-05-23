@@ -109,6 +109,11 @@ export function ProjectDetailPage() {
   // simultaneous clicks don't disable unrelated rows.
   const [deletingRequestId, setDeletingRequestId] = useState<string | null>(null)
   const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null)
+  // Bulk-delete state. Selection is keyed on request_id (NOT index)
+  // so reordering / refetch doesn't desync the checkmarks. Pruned
+  // automatically when the data refreshes (see effect below).
+  const [selectedRequestIds, setSelectedRequestIds] = useState<Set<string>>(new Set())
+  const [bulkDeleting, setBulkDeleting] = useState(false)
 
   /** DELETE /requests/:id — only allowed in terminal state. */
   const handleDeleteRequest = async (
@@ -130,6 +135,45 @@ export function ProjectDetailPage() {
       alert(`Delete failed: ${parseDetailMessage(e?.message) || e?.message || "unknown error"}`)
     } finally {
       setDeletingRequestId(null)
+    }
+  }
+
+  /** Bulk-delete selected requests via POST /requests/bulk_delete.
+   * Surfaces partial-success counts (some rows skipped because the
+   * backend deemed them non-terminal or forbidden). */
+  const handleBulkDeleteRequests = async () => {
+    const ids = Array.from(selectedRequestIds)
+    if (ids.length === 0) return
+    if (!window.confirm(
+      `Permanently delete ${ids.length} selected request${ids.length === 1 ? "" : "s"}?\n\n` +
+      "Each one's subtasks, stories, documents, and cost rows go with it. " +
+      "Rows that aren't in a terminal state (completed/failed/cancelled) " +
+      "will be skipped server-side.\n\nThis cannot be undone.",
+    )) return
+    setBulkDeleting(true)
+    try {
+      const res = await api.post("/requests/bulk_delete", { request_ids: ids })
+      const meta = res?.meta || {}
+      const skipped = res?.data?.skipped || []
+      // If the popup was open on a deleted row, close it.
+      if (popupRequestId && (res?.data?.deleted || []).includes(popupRequestId)) {
+        setPopupRequestId(null)
+      }
+      setSelectedRequestIds(new Set())
+      await load()
+      if (meta.skipped_count > 0) {
+        const reasons = skipped
+          .map((s: any) => `${s.request_id} (${s.reason}${s.status ? `: ${s.status}` : ""})`)
+          .join("\n  • ")
+        window.alert(
+          `Deleted ${meta.deleted_count} of ${meta.requested}.\n` +
+          `Skipped:\n  • ${reasons}`,
+        )
+      }
+    } catch (e: any) {
+      window.alert(`Bulk delete failed: ${parseDetailMessage(e?.message) || e?.message || "unknown error"}`)
+    } finally {
+      setBulkDeleting(false)
     }
   }
 
@@ -169,6 +213,24 @@ export function ProjectDetailPage() {
     return () => window.clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
+
+  // Prune the bulk-select set after each data refresh — drop IDs that
+  // no longer exist (just deleted) or that flipped to a non-terminal
+  // state (someone re-dispatched between checks). Keeps the
+  // "Delete Selected (N)" counter honest.
+  useEffect(() => {
+    if (!data) return
+    const terminal = new Set(
+      data.requests
+        .filter((r) => ["completed", "failed", "cancelled"].includes(r.status))
+        .map((r) => r.request_id),
+    )
+    setSelectedRequestIds((prev) => {
+      const next = new Set<string>()
+      for (const id of prev) if (terminal.has(id)) next.add(id)
+      return next.size === prev.size ? prev : next
+    })
+  }, [data])
 
   // Map checklist items → "filed" status by description-prefix match against
   // this project's requests. Approximate (no canonical template-instance
@@ -427,9 +489,79 @@ export function ProjectDetailPage() {
         background: "var(--bg-card)", border: "1px solid var(--border)",
         borderRadius: "var(--radius)", padding: 18,
       }}>
-        <h3 style={{ margin: "0 0 12px 0", fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>
-          Requests in this project ({data.requests.length})
-        </h3>
+        {/* Header row: title on the left, bulk-action toolbar on the
+            right (appears only when at least one row is selected).
+            Mirrors the TaskListEditor's bulk-delete pattern so the
+            UX feels consistent across "manage many rows" surfaces. */}
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          gap: 8, marginBottom: 12, flexWrap: "wrap",
+        }}>
+          <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>
+            Requests in this project ({data.requests.length})
+            {selectedRequestIds.size > 0 && (
+              <span style={{
+                marginLeft: 8, fontSize: 11, color: "var(--text-muted)",
+                fontFamily: "var(--font-mono)", fontWeight: 400,
+              }}>
+                · {selectedRequestIds.size} selected
+              </span>
+            )}
+          </h3>
+          {selectedRequestIds.size > 0 && (() => {
+            // Compute select-all checkbox state from the terminal-eligible
+            // rows so the user can toggle the whole batch in one click.
+            const terminalRows = data.requests.filter(
+              (r) => ["completed", "failed", "cancelled"].includes(r.status),
+            )
+            const allSelected = terminalRows.length > 0 &&
+              terminalRows.every((r) => selectedRequestIds.has(r.request_id))
+            return (
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (allSelected) {
+                      setSelectedRequestIds(new Set())
+                    } else {
+                      setSelectedRequestIds(new Set(terminalRows.map((r) => r.request_id)))
+                    }
+                  }}
+                  style={{
+                    padding: "4px 10px", fontSize: 11,
+                    background: "transparent", color: "var(--text-secondary)",
+                    border: "1px solid var(--border)", borderRadius: "var(--radius)",
+                    cursor: "pointer", fontFamily: "var(--font)",
+                  }}
+                >
+                  {allSelected ? "Clear selection" : `Select all (${terminalRows.length})`}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBulkDeleteRequests}
+                  disabled={bulkDeleting}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    padding: "4px 12px", fontSize: 12, fontWeight: 600,
+                    background: bulkDeleting
+                      ? "var(--bg-hover)"
+                      : "color-mix(in srgb, var(--danger) 12%, transparent)",
+                    color: bulkDeleting ? "var(--text-muted)" : "var(--danger)",
+                    border: "1px solid var(--danger)",
+                    borderRadius: "var(--radius)",
+                    cursor: bulkDeleting ? "wait" : "pointer",
+                    fontFamily: "var(--font)",
+                  }}
+                >
+                  {bulkDeleting ? <Loader2 size={12} className="spin" /> : <Trash2 size={12} />}
+                  {bulkDeleting
+                    ? "Deleting…"
+                    : `Delete Selected (${selectedRequestIds.size})`}
+                </button>
+              </div>
+            )
+          })()}
+        </div>
         {data.requests.length === 0 ? (
           <div style={{ color: "var(--text-muted)", fontSize: 13 }}>None yet.</div>
         ) : (
@@ -437,15 +569,53 @@ export function ProjectDetailPage() {
             {data.requests.map((r) => {
               const terminal = ["completed", "failed", "cancelled"].includes(r.status)
               const busy = deletingRequestId === r.request_id
+              const selected = selectedRequestIds.has(r.request_id)
+              const toggleSelect = (checked: boolean) => {
+                setSelectedRequestIds((prev) => {
+                  const next = new Set(prev)
+                  if (checked) next.add(r.request_id)
+                  else next.delete(r.request_id)
+                  return next
+                })
+              }
               return (
                 <div
                   key={r.request_id}
                   style={{
                     display: "flex", alignItems: "stretch", gap: 0,
-                    background: "var(--bg-hover)", border: "1px solid var(--border)",
+                    background: selected
+                      ? "color-mix(in srgb, var(--accent) 8%, var(--bg-hover))"
+                      : "var(--bg-hover)",
+                    border: `1px solid ${selected ? "var(--accent)" : "var(--border)"}`,
                     borderRadius: "var(--radius)", overflow: "hidden",
+                    transition: "background 0.15s, border-color 0.15s",
                   }}
                 >
+                  {/* Bulk-select checkbox. Disabled for non-terminal rows
+                      so the user can't queue a delete that the server
+                      will reject anyway — matches the TaskListEditor's
+                      "checkbox disabled when in-flight" pattern. */}
+                  <label
+                    title={terminal
+                      ? "Select for bulk delete"
+                      : `Request is ${r.status} — cancel it first to enable bulk delete`}
+                    style={{
+                      display: "inline-flex", alignItems: "center", justifyContent: "center",
+                      width: 36, paddingLeft: 4,
+                      borderRight: "1px solid var(--border)",
+                      cursor: terminal ? "pointer" : "not-allowed",
+                      opacity: terminal ? 1 : 0.35,
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      disabled={!terminal}
+                      onChange={(e) => toggleSelect(e.target.checked)}
+                      style={{ cursor: terminal ? "pointer" : "not-allowed" }}
+                    />
+                  </label>
                   <button
                     type="button"
                     onClick={() => setPopupRequestId(r.request_id)}

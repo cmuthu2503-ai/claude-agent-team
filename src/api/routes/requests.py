@@ -463,6 +463,83 @@ async def delete_request(
     return _envelope({"request_id": request_id, "deleted": True})
 
 
+class BulkDeleteRequestsBody(BaseModel):
+    request_ids: list[str]
+
+
+@router.post("/bulk_delete")
+async def bulk_delete_requests(
+    body: BulkDeleteRequestsBody,
+    request: Request,
+    user: dict = Depends(require_role("developer", "admin")),
+):
+    """Hard-delete multiple requests + their cascaded rows in one call.
+
+    Per-row pre-check mirrors the single DELETE: skip rows that don't
+    exist, aren't owned by the caller (when not admin), or aren't in
+    a terminal state. Partial success is surfaced in the response so
+    the UI can show what was deleted vs. skipped.
+
+    Returns:
+        {data: {deleted: [request_id, …], skipped: [{request_id, reason}, …]},
+         meta: {requested, deleted_count, skipped_count}, error: None}
+    """
+    if not body.request_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="request_ids must contain at least one entry.",
+        )
+    # Cap the batch so a runaway call can't lock the DB for minutes.
+    if len(body.request_ids) > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="request_ids may contain at most 100 entries per call.",
+        )
+
+    state = request.app.state.state_store
+    deleted: list[str] = []
+    skipped: list[dict[str, str]] = []
+    # Deduplicate while preserving caller order (so partial-success
+    # responses are predictable to read).
+    seen: set[str] = set()
+    for rid in body.request_ids:
+        if rid in seen:
+            continue
+        seen.add(rid)
+        req = await state.get_request(rid)
+        if req is None:
+            skipped.append({"request_id": rid, "reason": "not_found"})
+            continue
+        # RBAC mirror of the single-DELETE — admin can delete anything;
+        # developer can only delete their own.
+        if user.get("role") != "admin":
+            owner = getattr(req, "created_by", None)
+            if owner and owner != user.get("username") and owner != user.get("user_id"):
+                skipped.append({"request_id": rid, "reason": "forbidden"})
+                continue
+        if req.status not in ("completed", "failed", "cancelled"):
+            skipped.append({
+                "request_id": rid,
+                "reason": "not_terminal",
+                "status": req.status,
+            })
+            continue
+        try:
+            await state.delete_request(rid)
+            deleted.append(rid)
+        except Exception as e:  # noqa: BLE001
+            skipped.append({"request_id": rid, "reason": f"delete_failed: {e!s}"[:200]})
+
+    return _envelope(
+        {"deleted": deleted, "skipped": skipped},
+        meta={
+            "requested": len(body.request_ids),
+            "deleted_count": len(deleted),
+            "skipped_count": len(skipped),
+        },
+    )
+
+
 @router.get("/{request_id}/stories")
 async def get_stories(
     request_id: str,
