@@ -109,9 +109,20 @@ export function BuildPlanView({ projectId }: Props) {
     return m
   }, [features])
 
-  // No epics → nothing to render here; the legacy flat editor is the
-  // primary view for this project.
-  if (epics.length === 0) return null
+  // Legacy tasks = tasks with feature_id IS NULL (BPD-402). Render
+  // them under a synthetic "Legacy" pseudo-epic at the bottom of the
+  // tree so the user can see at a glance "these N tasks predate the
+  // BPD decomposition." No actions on the legacy group itself — its
+  // tasks are still dispatched via the existing TaskListEditor.
+  const legacyTasks = useMemo(
+    () => tasks.filter((t) => !t.feature_id),
+    [tasks],
+  )
+  const hasLegacy = legacyTasks.length > 0
+
+  // No epics AND no legacy → nothing to render here; the legacy flat
+  // editor is the primary view for this project.
+  if (epics.length === 0 && !hasLegacy) return null
 
   const toggleEpic = (id: string) => {
     setExpandedEpics((prev) => {
@@ -407,6 +418,54 @@ export function BuildPlanView({ projectId }: Props) {
             </div>
           )
         })}
+
+        {/* BPD-38 — Legacy pseudo-epic. Renders any tasks that were
+            created BEFORE the BPD decomposition shipped (feature_id IS
+            NULL). They appear at the bottom of the tree with a muted
+            border so it's visually clear they're not part of the new
+            hierarchy. No per-row action buttons here — these tasks
+            are still managed via the legacy flat TaskListEditor below. */}
+        {hasLegacy && (
+          <div style={{
+            background: "var(--bg-hover)",
+            border: "1px solid var(--border)",
+            borderLeft: "3px solid var(--text-muted)",
+            borderRadius: 3, overflow: "hidden", opacity: 0.85,
+            marginTop: 4,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px" }}>
+              <span style={{ width: 12 }} />
+              <span style={{
+                padding: "1px 6px", borderRadius: 2,
+                fontSize: 10, fontFamily: "var(--font-mono)",
+                background: "var(--bg-card)", color: "var(--text-muted)",
+                border: "1px solid var(--border)",
+                textTransform: "uppercase", letterSpacing: 0.5,
+              }}>
+                Legacy
+              </span>
+              <span style={{ fontWeight: 600, fontSize: 13, color: "var(--text-secondary)" }}>
+                Tasks predating the Build Plan Decomposition
+              </span>
+              <span style={{ marginLeft: "auto", fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
+                {legacyTasks.length} task{legacyTasks.length === 1 ? "" : "s"} · feature_id=NULL
+              </span>
+            </div>
+            <div style={{
+              padding: "0 10px 8px 28px", display: "flex", flexDirection: "column", gap: 4,
+            }}>
+              {legacyTasks.slice(0, 20).map((t) => (
+                <TaskRow key={t.task_id} task={t} onClick={() => setPopupTaskId(t.task_id)} />
+              ))}
+              {legacyTasks.length > 20 && (
+                <div style={{ fontSize: 10, color: "var(--text-muted)", padding: "4px 0" }}>
+                  …and {legacyTasks.length - 20} more. Use the flat
+                  Task List editor below for full editing.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {selectedCard && (

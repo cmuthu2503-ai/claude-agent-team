@@ -3619,6 +3619,106 @@ async def list_features(
 # ── BPD-34 — project-level rollup chip data ──────────────────────────────
 
 
+# ── BPD-39 — Legacy decomposition (optional migration tool) ──────────────
+
+
+@router.post("/{project_id}/build-plan/decompose-legacy", status_code=202)
+async def decompose_legacy_tasks(
+    project_id: str,
+    request: Request,
+    body: dict | None = None,
+    user: dict = Depends(get_current_user),
+):
+    """BPD-39 — optional migration tool. Runs the three-pass generation
+    against the project's existing PRD and surfaces the proposed
+    hierarchy alongside the legacy task count. Does NOT delete legacy
+    tasks — they continue to live under the synthetic "Legacy" epic
+    until the user explicitly archives them.
+
+    Request body (optional): `{dry_run: bool=true}` — when `dry_run`
+    is True (default), only Pass 1 runs and the projected feature/task
+    counts are estimated rather than generated. When False, the full
+    three-pass cascade runs (BPD-17 orchestrator) and the legacy task
+    count is annotated on the response so the UI can show a diff.
+
+    Returns:
+        {data: {epics_generated, features_generated, tasks_generated,
+                legacy_task_count, list_version}, meta: None, error: None}
+    """
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    await _require_project(state, project_id)
+
+    # Refuse if epics already exist for this project — caller must
+    # archive the existing epic list first OR use the regular Pass 1
+    # endpoint with review_comments.
+    existing = await state.list_epics_for_project(project_id)
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "epics_already_exist",
+                "hint": (
+                    "This project already has an epic list. Archive it first "
+                    "or use /epics/generate with review_comments to amend it. "
+                    "decompose-legacy is for projects that ONLY have legacy "
+                    "(pre-BPD) tasks."
+                ),
+            },
+        )
+
+    all_tasks = await state.list_tasks_for_project(project_id)
+    legacy_count = sum(1 for t in all_tasks if not t.feature_id)
+    dry_run = bool((body or {}).get("dry_run", True))
+
+    if dry_run:
+        # Run only Pass 1 so the user can review epics before
+        # committing the full cascade. The response shape signals
+        # which mode ran via `features_generated`/`tasks_generated=0`.
+        pass1 = await generate_epics(project_id, request, None, user)
+        return {
+            "data": {
+                "epics_generated": pass1["meta"]["count"],
+                "features_generated": 0,
+                "tasks_generated": 0,
+                "legacy_task_count": legacy_count,
+                "list_version": pass1["meta"]["list_version"],
+                "next_step": (
+                    "Review the epics in the Build Plan view. Approve by "
+                    "clicking 'Generate Features' on each (or 'Approve "
+                    "All & Run All Three Passes' for the full cascade)."
+                ),
+            },
+            "meta": {"dry_run": True},
+            "error": None,
+        }
+
+    # Full cascade via the orchestrator endpoint
+    result = await generate_build_plan(project_id, request, None, user)
+    epics_n = result["data"]["epic_count"]
+    features_n = sum(result["data"]["feature_counts_by_epic"].values())
+    tasks_n = sum(result["data"]["task_counts_by_feature"].values())
+    return {
+        "data": {
+            "epics_generated": epics_n,
+            "features_generated": features_n,
+            "tasks_generated": tasks_n,
+            "legacy_task_count": legacy_count,
+            "list_version": result["data"]["list_version"],
+            "next_step": (
+                "Review the generated hierarchy in the Build Plan view. "
+                "Legacy tasks render under a synthetic 'Legacy' epic at "
+                "the bottom; archive them explicitly when you're ready."
+            ),
+        },
+        "meta": {"dry_run": False},
+        "error": None,
+    }
+
+
 @router.get("/{project_id}/build-plan/rollup")
 async def get_build_plan_rollup(
     project_id: str,

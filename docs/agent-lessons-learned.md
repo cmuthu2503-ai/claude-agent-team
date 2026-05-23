@@ -777,6 +777,66 @@ inserts don't grow the table, per-row failure isolation).
 
 ---
 
+## L19 — Atomic-task contract (one file, one acceptance test, 50-300 LOC)
+
+**Signature:** Tasks dispatched after Build Plan Decomposition (BPD
+§6.8) shipped on 2026-05-23 carry a different shape than legacy tasks.
+Their input includes:
+
+```
+primary_file: backend/app/api/v1/dashboard.py
+acceptance_test: GET /dashboard/summary returns 200 with {kpis, recent_projects}
+expected_loc: ~120
+depends_on: [T-x42 (deployed), T-x44 (deployed)]
+```
+
+The contract is intentionally narrow — one primary file, one
+sentence acceptance test, ~50-300 LOC of expected output, all
+dependencies satisfied before dispatch.
+
+**What this means for the agent's emission:**
+
+1. **Focus on the primary_file.** ≤ 2 additional files touched (e.g.
+   the test for it). Don't emit a whole subsystem — emit one cohesive
+   unit. If the task feels too big to do in one response, that's a
+   signal the decomposition was too coarse; surface a one-line note
+   in your response and the user can split it.
+
+2. **The acceptance_test IS the contract.** Read it literally before
+   designing. If the test says "GET /X returns Y", don't add unrelated
+   side effects; if the test says "the modal renders", don't also
+   wire up the form submission (that's a sibling task).
+
+3. **Trust the dependency chain.** If a task is dispatched, every
+   row in its `depends_on` is `deployed`. The files / endpoints /
+   schemas your inputs reference ARE in the working tree. Don't
+   re-emit them defensively.
+
+4. **Cross-feature deps look like `T-XXX` task_ids in your inputs.**
+   The depends_on list may reference tasks in OTHER features /
+   epics. Treat them the same — if a row is in your depends_on, it's
+   deployed.
+
+**Defensive checks (still required):**
+
+- L05 still applies: emit `### File:` blocks for any file you create
+  or modify. The system materializes them to disk before review.
+- L17 still applies: don't emit byte-identical shrunken content if
+  you got a drop-guard rejection on the previous cycle.
+- L18 still applies: emit deterministic TC-XXX test IDs.
+
+**Legacy tasks (created BEFORE BPD shipped) have no BPD fields.**
+Their input looks unchanged from prior cycles. Treat them as before —
+the contract above only applies when `primary_file` / `acceptance_test`
+are present in the input.
+
+**Observed: BPD shipped 2026-05-23 across phases A-E
+(commits c01265f → ac5bb2e). 34 of 45 BPD tasks done; remaining 3
+in-progress UI polish surfaces and 8 not-started phase-E
+verification tasks ship in a follow-up.**
+
+---
+
 ## How to add a new lesson
 
 When a new failure pattern is observed in production:
@@ -869,3 +929,9 @@ When a new failure pattern is observed in production:
   Two fixes: (a) SQL is now UPSERT on test_id; (b) orchestrator
   parse loop isolates per-row failures. Test:
   `test_test_case_upsert.py` (4 pinned behaviors).
+- **2026-05-23 (BPD shipped)** — Added L19 (atomic-task contract).
+  Build Plan Decomposition (PRD §6.8) shipped across phases A-E
+  on 2026-05-23. Tasks emitted under Pass 3 carry `primary_file`,
+  `acceptance_test`, `expected_loc`, and `depends_on`. Legacy tasks
+  (no BPD fields) continue to function unchanged. The lesson tells
+  agents how to read and act on the new fields.
