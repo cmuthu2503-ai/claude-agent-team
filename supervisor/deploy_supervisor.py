@@ -19,7 +19,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Force UTF-8 stdout/stderr on Windows (default cp1252 can't render the emoji
@@ -252,7 +252,7 @@ def mark_project_commit_skipped(db: sqlite3.Connection, deployment_id: str) -> N
     history.append({
         "step": "supervisor_skipped",
         "status": "skipped",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "detail": (
             "Per-project commit — supervisor does not deploy these. "
             "Use the project's Deploy button to start the project's stack."
@@ -261,7 +261,7 @@ def mark_project_commit_skipped(db: sqlite3.Connection, deployment_id: str) -> N
     db.execute(
         "UPDATE deployment_states SET current_step = ?, step_history = ?, "
         "completed_at = ? WHERE deployment_id = ?",
-        ("skipped", json.dumps(history), datetime.utcnow().isoformat(), deployment_id),
+        ("skipped", json.dumps(history), datetime.now(timezone.utc).replace(tzinfo=None).isoformat(), deployment_id),
     )
     db.commit()
 
@@ -322,12 +322,12 @@ def update_step(db: sqlite3.Connection, deployment_id: str, step: str, detail: s
     history.append({
         "step": step,
         "status": "error" if error else "done",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "detail": detail,
     })
 
     # Update
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
     if error:
         db.execute(
             """UPDATE deployment_states SET current_step=?, step_history=?,
@@ -462,6 +462,75 @@ def rollback(
             run_cmd("git stash pop", timeout=30)
 
 
+def _trigger_ops_monitor_async(request_id: str, deployment_id: str) -> None:
+    """POST to /api/v1/ops/monitor so the backend spawns the ops_heal_agent.
+
+    Called after a successful deployment. Fire-and-forget — any HTTP error is
+    logged but does not affect the deployment outcome. The ops_heal_agent runs
+    inside the backend container and emits ops.* WebSocket events independently.
+
+    Uses OPS_SECRET env var if set; omits the field otherwise (dev default).
+    """
+    import json as _json
+
+    secret = os.getenv("OPS_SECRET", "").strip()
+    host = os.getenv("HEALTHCHECK_HOST", "localhost")
+    url = f"http://{host}:8000/api/v1/ops/monitor"
+    payload = _json.dumps({
+        "request_id": request_id,
+        "deployment_id": deployment_id,
+        "secret": secret,
+    }).encode("utf-8")
+    try:
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = resp.read(256).decode("utf-8", errors="replace")
+            log(f"  🔬 ops_heal_agent triggered: {body[:80]}")
+    except Exception as exc:
+        # Non-fatal — ops monitoring is best-effort
+        log(f"  ⚠  ops_monitor trigger failed (non-fatal): {exc}")
+
+
+def _get_quality_risk(db: sqlite3.Connection, request_id: str) -> str:
+    """Read the Quality Guardian's risk rating from the documents table.
+
+    The quality_guardian emits `Risk: low`, `Risk: medium`, or `Risk: high`
+    in its report, stored with doc_type='quality_report'. This rating is
+    passed to the deploy-judge LLM so it can calibrate deploy strategy:
+    high → prefer deploy_staging_only; low → can lower overall risk estimate.
+
+    Returns "low", "medium", or "high". Defaults to "unknown" if the
+    quality_report doesn't exist (e.g. docs-only request where quality_guardian
+    was not part of the workflow).
+    """
+    try:
+        cursor = db.execute(
+            "SELECT content FROM documents "
+            "WHERE request_id = ? AND doc_type = 'quality_report' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (request_id,),
+        )
+        row = cursor.fetchone()
+        if not row or not row["content"]:
+            return "unknown"
+        # Parse the "Risk: low/medium/high" line the quality_guardian always emits
+        for line in row["content"].splitlines():
+            stripped = line.strip().lower()
+            if stripped.startswith("risk:"):
+                val = stripped[5:].strip()
+                if val in ("low", "medium", "high"):
+                    return val
+        return "unknown"
+    except Exception as e:
+        log(f"  ⚠  _get_quality_risk failed: {e} — defaulting to unknown")
+        return "unknown"
+
+
 def _persist_judge_result(
     db: sqlite3.Connection, deployment_id: str, result,
 ) -> None:
@@ -536,11 +605,14 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
         result = None
     else:
         update_step(db, dep_id, "judging", "Asking deployment judge for strategy")
+        quality_risk = _get_quality_risk(db, req_id)
+        log(f"  🛡️  quality_guardian risk: {quality_risk}")
         result = evaluate_deployment(
             commit_sha=commit_sha,
             request_id=req_id,
             files_committed=files_committed,
             rollback_sha=rollback_sha,
+            quality_risk=quality_risk,
         )
         _persist_judge_result(db, dep_id, result)
         log(
@@ -639,6 +711,10 @@ def deploy(db: sqlite3.Connection, deployment: dict) -> None:
             "Staging validated + torn down; dev rebuilt and healthy on :8000.",
         )
         log(f"✅ Deployment {dep_id} COMPLETED (dev live)")
+        # Trigger the ops_heal_agent to verify the running stack is healthy.
+        # Fire-and-forget — POST to the backend which spawns the agent as a
+        # background task. Uses OPS_SECRET if set (see .env / src/api/routes/ops.py).
+        _trigger_ops_monitor_async(req_id, dep_id)
     else:
         update_step(
             db, dep_id, "failed",
@@ -787,7 +863,7 @@ def update_project_deploy_status(
     if clear_pending_action:
         sets.append("deploy_pending_action = NULL")
     sets.append("updated_at = ?")
-    params.append(datetime.utcnow().isoformat())
+    params.append(datetime.now(timezone.utc).replace(tzinfo=None).isoformat())
     params.append(project_id)
     db.execute(
         f"UPDATE projects SET {', '.join(sets)} WHERE project_id = ?",

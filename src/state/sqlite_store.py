@@ -173,6 +173,12 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 
 -- Token Usage & Cost
+-- NOTE: project_id + project_artifact_id columns are added by the migrations
+-- block in `initialize()` for legacy DBs. They appear here in the CREATE TABLE
+-- for fresh installs only. The matching index also lives in the migrations
+-- block — it can't go here because SCHEMA_SQL runs BEFORE the ALTER TABLEs
+-- on an existing DB, so the column wouldn't exist yet when CREATE INDEX
+-- evaluates.
 CREATE TABLE IF NOT EXISTS token_usage (
     usage_id TEXT PRIMARY KEY,
     request_id TEXT NOT NULL,
@@ -182,7 +188,9 @@ CREATE TABLE IF NOT EXISTS token_usage (
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,
     cost_usd REAL NOT NULL,
-    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    project_id TEXT,
+    project_artifact_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS budget_config (
@@ -665,6 +673,26 @@ class SQLiteStateStore(StateStore):
             # cascading dispatches when the BPD feature ships. Stored as
             # INTEGER (SQLite has no native BOOLEAN) — 0 / 1.
             "ALTER TABLE projects ADD COLUMN auto_dispatch_on_deploy INTEGER NOT NULL DEFAULT 0",
+            # Direct project_id linkage on every token_usage row.
+            # Previously cost rows from BPD single_agent_call (epics /
+            # features / tasks generators) wrote request_id='' AND
+            # project_artifact_id=NULL — pure orphans. The cost dashboard
+            # could see them in the All Projects total but couldn't
+            # attribute them to a project, and project-data wipes
+            # (clear tasks/epics) left them stranded in the DB forever.
+            # The new column is populated directly by single_agent_call
+            # and indexed so the dashboard's per-project filter is one
+            # WHERE clause instead of an OR-of-subqueries.
+            "ALTER TABLE token_usage ADD COLUMN project_id TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_token_usage_project "
+            "  ON token_usage(project_id)",
+            # Backfill: populate project_id for any pre-existing rows
+            # whose request_id IS resolvable. Rows from single_agent_call
+            # have request_id='' so they stay NULL and remain orphans;
+            # nothing we can do retroactively for those.
+            "UPDATE token_usage SET project_id = ("
+            "  SELECT project_id FROM requests WHERE requests.request_id = token_usage.request_id"
+            ") WHERE project_id IS NULL AND request_id != ''",
         ]
         for stmt in migrations:
             try:
@@ -1566,12 +1594,30 @@ class SQLiteStateStore(StateStore):
 
     async def record_token_usage(self, usage: TokenUsage) -> None:
         db = await self._get_db()
+        # Derive project_id from the request when the caller didn't set
+        # it explicitly. Keeps existing callers (workflow runner via
+        # TokenTracker) attributing correctly without code changes —
+        # they always have a request_id but don't bother to look up the
+        # project. Single_agent_call passes project_id directly so this
+        # fallback is a no-op for that path.
+        project_id = usage.project_id
+        if project_id is None and usage.request_id:
+            try:
+                async with db.execute(
+                    "SELECT project_id FROM requests WHERE request_id=?",
+                    (usage.request_id,),
+                ) as cur:
+                    row = await cur.fetchone()
+                    if row and row["project_id"]:
+                        project_id = row["project_id"]
+            except Exception:
+                pass
         await db.execute(
             """INSERT INTO token_usage
                (usage_id, request_id, subtask_id, agent_id, model,
                 input_tokens, output_tokens, cost_usd, recorded_at,
-                project_artifact_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                project_artifact_id, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 usage.usage_id,
                 usage.request_id,
@@ -1583,6 +1629,7 @@ class SQLiteStateStore(StateStore):
                 usage.cost_usd,
                 usage.recorded_at.isoformat(),
                 usage.project_artifact_id,
+                project_id,
             ),
         )
         await db.commit()
@@ -2885,7 +2932,10 @@ class SQLiteStateStore(StateStore):
         self, project_id: str, list_version: int
     ) -> None:
         db = await self._get_db()
-        # Cascade-delete features under each epic, then the epics.
+        # Cascade-delete features under each draft epic, then the epics.
+        # Same cleanup semantics as delete_epic: unstarted backlog tasks
+        # are hard-deleted (they're regenerable draft rows); dispatched
+        # tasks are preserved with NULL feature_id (history survives).
         async with db.execute(
             "SELECT epic_id FROM epics WHERE project_id = ? "
             "AND list_version = ? AND list_status = ?",
@@ -2893,9 +2943,15 @@ class SQLiteStateStore(StateStore):
         ) as cursor:
             epic_ids = [r["epic_id"] for r in await cursor.fetchall()]
         for eid in epic_ids:
-            # NULL the task back-link before deleting features, so
-            # tasks survive (they may have been written under a
-            # previously-finalized feature that got archived).
+            # 1. Hard-delete unstarted backlog tasks under this epic.
+            await db.execute(
+                "DELETE FROM project_tasks "
+                "WHERE feature_id IN (SELECT feature_id FROM features WHERE epic_id = ?) "
+                "AND task_status = 'backlog' "
+                "AND (request_id IS NULL OR request_id = '')",
+                (eid,),
+            )
+            # 2. NULL feature_id on surviving (started / completed) tasks.
             await db.execute(
                 "UPDATE project_tasks SET feature_id = NULL "
                 "WHERE feature_id IN (SELECT feature_id FROM features WHERE epic_id = ?)",
@@ -2912,16 +2968,44 @@ class SQLiteStateStore(StateStore):
         await db.commit()
 
     async def delete_epic(self, epic_id: str) -> None:
+        """Delete an epic and its full sub-tree.
+
+        Cascade semantics (revised for BPD generation hygiene):
+          1. **Unstarted backlog tasks** under this epic's features are
+             HARD-DELETED. These are just draft rows from a generation
+             cycle — leaving them around with feature_id=NULL produces
+             a graveyard of orphans that inflate the rollup counters
+             and the user can never see in the tree (only the synthetic
+             "Legacy" pseudo-epic at the bottom). Every BPD re-run made
+             the pile grow.
+          2. **Dispatched / in-flight / completed tasks** keep their
+             rows but lose the feature_id back-link. We preserve those
+             because the user already spent compute on them and the
+             history (request_id, commit, deploy state) is real.
+          3. Features under the epic are then deleted.
+          4. The epic row is deleted.
+        """
         db = await self._get_db()
-        # NULL task back-links, then delete features, then the epic.
+        # 1. Hard-delete unstarted backlog tasks under this epic's features.
+        await db.execute(
+            "DELETE FROM project_tasks "
+            "WHERE feature_id IN (SELECT feature_id FROM features WHERE epic_id = ?) "
+            "AND task_status = 'backlog' "
+            "AND (request_id IS NULL OR request_id = '')",
+            (epic_id,),
+        )
+        # 2. NULL feature_id on the remaining tasks (started / completed /
+        #    failed) so they survive but lose the FK link.
         await db.execute(
             "UPDATE project_tasks SET feature_id = NULL "
             "WHERE feature_id IN (SELECT feature_id FROM features WHERE epic_id = ?)",
             (epic_id,),
         )
+        # 3. Delete features under this epic.
         await db.execute(
             "DELETE FROM features WHERE epic_id = ?", (epic_id,),
         )
+        # 4. Delete the epic row itself.
         await db.execute(
             "DELETE FROM epics WHERE epic_id = ?", (epic_id,),
         )
@@ -3054,10 +3138,23 @@ class SQLiteStateStore(StateStore):
         return updated
 
     async def delete_feature(self, feature_id: str) -> None:
+        """Delete a feature row.
+
+        Cascade semantics (matches delete_epic):
+          - Unstarted backlog tasks under this feature are hard-deleted
+            (regenerable draft rows that would otherwise become orphans
+            and pile up across re-generations).
+          - Dispatched / completed tasks survive but lose feature_id
+            (preserves history; user still sees them in "Legacy" pseudo-epic).
+        """
         db = await self._get_db()
-        # Tasks under this feature lose their back-link (NULL'd) but
-        # survive — agent's emission shouldn't disappear on a feature
-        # rename / consolidation.
+        await db.execute(
+            "DELETE FROM project_tasks "
+            "WHERE feature_id = ? "
+            "AND task_status = 'backlog' "
+            "AND (request_id IS NULL OR request_id = '')",
+            (feature_id,),
+        )
         await db.execute(
             "UPDATE project_tasks SET feature_id = NULL WHERE feature_id = ?",
             (feature_id,),
@@ -3329,6 +3426,27 @@ class SQLiteStateStore(StateStore):
         if not row:
             return None
         return self._row_to_deployment_state(row)
+
+    async def get_latest_deployment(self) -> dict | None:
+        """Return the most recent deployment_states row (any step) as a plain dict.
+
+        Used by the ops /latest endpoint to show the SystemHealthPill a
+        persistent health status badge without needing a live WebSocket. Returns
+        None when no deployments exist yet.
+        """
+        db = await self._get_db()
+        async with db.execute(
+            """SELECT ds.deployment_id, ds.request_id, ds.current_step,
+                      ds.strategy, ds.risk, ds.error_message, ds.completed_at
+               FROM deployment_states ds
+               LEFT JOIN requests r ON r.request_id = ds.request_id
+               WHERE r.project_id IS NULL
+               ORDER BY ds.started_at DESC LIMIT 1"""
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        return dict(row)
 
     async def get_pending_deployments(self) -> list[DeploymentState]:
         """Get deployments waiting for the sidecar to pick up."""

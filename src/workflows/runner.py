@@ -225,6 +225,46 @@ class WorkflowRunner:
                         artifacts["code_commit_error"] = commit_error
                         return artifacts
 
+                # Security gate: runs after SECURITY stage
+                if stage_id == "security":
+                    sec_result = self._check_security_gate(artifacts, request_id)
+                    if not sec_result["passed"]:
+                        rework_count = self._rework_count.get(request_id, 0)
+                        if rework_count < MAX_REWORK_CYCLES:
+                            self._rework_count[request_id] = rework_count + 1
+                            logger.warning(
+                                "security_gate_failed_reworking",
+                                request_id=request_id,
+                                cycle=rework_count + 1,
+                            )
+                            artifacts["rework_instructions"] = (
+                                f"REWORK REQUIRED (cycle {rework_count + 1}/{MAX_REWORK_CYCLES}). "
+                                f"Fix ALL security issues below before resubmitting:\n\n"
+                                f"{sec_result['reason']}"
+                            )
+                            artifacts["rework_cycle"] = rework_count + 1
+                            # Jump back to development/fix stage
+                            for rework_target in ("development", "fix"):
+                                try:
+                                    i = execution_order.index(rework_target)
+                                    break
+                                except ValueError:
+                                    continue
+                            else:
+                                logger.error("rework_target_stage_not_found", request_id=request_id)
+                            continue
+                        else:
+                            logger.warning(
+                                "security_gate_max_rework_reached",
+                                request_id=request_id, cycles=rework_count,
+                            )
+                            artifacts["escalation_reason"] = (
+                                f"Pipeline failed after {rework_count} rework cycles. "
+                                f"Security gate could not pass.\n\n"
+                                f"Last issues:\n{sec_result['reason'][:500]}"
+                            )
+                            return artifacts
+
                 # Combined gate: runs after TESTING stage (checks both review + test)
                 if stage_id == "testing":
                     gate_result = self._check_combined_gate(artifacts, request_id)
@@ -284,16 +324,34 @@ class WorkflowRunner:
         return artifacts
 
     def _check_combined_gate(self, artifacts: dict[str, Any], request_id: str) -> dict[str, Any]:
-        """Check BOTH Code Reviewer verdict AND Tester results.
+        """Check Code Reviewer, Architecture Reviewer, Quality Guardian, AND Tester results.
 
-        Pass = Review APPROVED + zero test FAILs.
-        Fail = either has issues → aggregate feedback.
+        Pass = Review APPROVED + Arch APPROVED (no CRITICAL) + Quality APPROVED + zero test FAILs.
+        Fail = any has issues → aggregate feedback for targeted rework.
+
+        Note: quality_report is produced during the review stage (parallel with code_reviewer
+        and architecture_reviewer), so it is always available by the time this gate runs
+        (after the testing stage).
         """
         review_text = artifacts.get("review_report", "")
         if not review_text:
             for key, val in artifacts.items():
                 if isinstance(val, str) and "code_reviewer" in key:
                     review_text = val
+                    break
+
+        arch_text = artifacts.get("arch_review_report", "")
+        if not arch_text:
+            for key, val in artifacts.items():
+                if isinstance(val, str) and "architecture_reviewer" in key:
+                    arch_text = val
+                    break
+
+        quality_text = artifacts.get("quality_report", "")
+        if not quality_text:
+            for key, val in artifacts.items():
+                if isinstance(val, str) and "quality_guardian" in key:
+                    quality_text = val
                     break
 
         tester_text = artifacts.get("tester_specialist_output", "")
@@ -304,17 +362,38 @@ class WorkflowRunner:
                     break
 
         review_passed = self._check_review_passed(review_text)
+        arch_passed = self._check_arch_review_passed(arch_text)
+        quality_passed = self._check_quality_guardian_passed(quality_text)
         test_passed = self._check_tests_passed(tester_text)
 
-        if review_passed and test_passed:
+        if review_passed and arch_passed and quality_passed and test_passed:
             logger.info("combined_gate_passed", request_id=request_id)
-            return {"passed": True, "reason": "Both code review and testing passed"}
+            return {
+                "passed": True,
+                "reason": "Code review, architecture review, quality guardian, and testing all passed",
+            }
 
         # Aggregate feedback
         feedback_parts = []
         if not review_passed:
             findings = self._extract_review_findings(review_text)
             feedback_parts.append(f"=== CODE REVIEW ISSUES ===\n{findings}")
+        if not arch_passed:
+            feedback_parts.append(
+                f"=== ARCHITECTURE VIOLATIONS ===\n"
+                f"The architecture_reviewer found CRITICAL violations that must be fixed "
+                f"before this code can be committed. See the Architecture Review Report:\n\n"
+                f"{arch_text[:2000] if arch_text else 'No arch review output found.'}"
+            )
+        if not quality_passed:
+            feedback_parts.append(
+                f"=== QUALITY GUARDIAN ESCALATION ===\n"
+                f"The quality_guardian found CRITICAL cross-cutting issues (API contract "
+                f"mismatches, missing test traceability, or known failure patterns) that "
+                f"must be fixed before this code can be committed. "
+                f"See the Quality Guardian Report:\n\n"
+                f"{quality_text[:2000] if quality_text else 'No quality guardian report found.'}"
+            )
         if not test_passed:
             failures = self._extract_test_failures(tester_text)
             feedback_parts.append(f"=== TEST FAILURES ===\n{failures}")
@@ -322,9 +401,132 @@ class WorkflowRunner:
         combined = "\n\n".join(feedback_parts)
         logger.info(
             "combined_gate_failed", request_id=request_id,
-            review_passed=review_passed, test_passed=test_passed,
+            review_passed=review_passed, arch_passed=arch_passed,
+            quality_passed=quality_passed, test_passed=test_passed,
         )
         return {"passed": False, "reason": combined}
+
+    def _check_arch_review_passed(self, text: str) -> bool:
+        """Parse architecture_reviewer verdict.
+
+        APPROVED  → pass (even if HIGH findings exist — those are warnings not blockers).
+        ARCH_VIOLATION → fail (CRITICAL structural issues must be fixed before commit).
+        No output → pass by default (agent may not have run yet).
+        """
+        if not text:
+            return True  # No arch review output = pass by default
+        upper = text.upper()
+        if "ARCH_VIOLATION" in upper:
+            return False
+        if "**APPROVED**" in upper or "VERDICT**\n**APPROVED" in upper:
+            return True
+        # Secondary check: CRITICAL findings in the report = fail even without explicit verdict
+        critical_count = upper.count("[CRITICAL]") + upper.count("**[CRITICAL]**")
+        if critical_count > 0:
+            return False
+        return True  # No clear failure signal = pass
+
+    def _check_quality_guardian_passed(self, text: str) -> bool:
+        """Parse quality_guardian verdict for the quality_guardian_approval gate.
+
+        APPROVED  → pass (risk low/medium + no CRITICAL findings).
+        ESCALATED → fail (CRITICAL findings found).
+        No output → pass by default (agent may not have run yet).
+        """
+        if not text:
+            return True
+        upper = text.upper()
+        if "VERDICT: ESCALATED" in upper:
+            return False
+        if "VERDICT: APPROVED" in upper:
+            return True
+        # Secondary: any CRITICAL finding in the report → fail
+        if "[CRITICAL]" in upper or "**[CRITICAL]**" in upper:
+            return False
+        return True  # No clear failure signal = pass
+
+    def _check_security_gate(self, artifacts: dict[str, Any], request_id: str) -> dict[str, Any]:
+        """Evaluate the security stage output against no_critical_vulnerabilities
+        and no_secrets_detected gates.
+
+        Pass = security_specialist emitted "Verdict: ✅ PASS" (or no report yet).
+        Fail = "Verdict: ❌ FAIL" or explicit CRITICAL/HIGH findings present.
+        """
+        sec_text = artifacts.get("security_report", "")
+        if not sec_text:
+            for key, val in artifacts.items():
+                if isinstance(val, str) and "security" in key:
+                    sec_text = val
+                    break
+
+        vuln_passed = self._check_no_critical_vulnerabilities(sec_text)
+        secrets_passed = self._check_no_secrets_detected(sec_text)
+
+        if vuln_passed and secrets_passed:
+            logger.info("security_gate_passed", request_id=request_id)
+            return {"passed": True, "reason": "Security scan passed — no critical vulnerabilities or secrets detected"}
+
+        feedback_parts = []
+        if not vuln_passed:
+            feedback_parts.append(
+                "=== SECURITY VULNERABILITIES ===\n"
+                "The security_specialist found CRITICAL or HIGH vulnerabilities that must be "
+                "remediated before this code can be committed. See the Security Report:\n\n"
+                f"{sec_text[:2000] if sec_text else 'No security report found.'}"
+            )
+        if not secrets_passed:
+            feedback_parts.append(
+                "=== SECRETS DETECTED ===\n"
+                "Hard-coded credentials or secrets were found in the generated code. "
+                "Remove all secrets and replace with environment variable references.\n\n"
+                f"{sec_text[:1000] if sec_text else 'No security report found.'}"
+            )
+
+        logger.info(
+            "security_gate_failed", request_id=request_id,
+            vuln_passed=vuln_passed, secrets_passed=secrets_passed,
+        )
+        return {"passed": False, "reason": "\n\n".join(feedback_parts)}
+
+    def _check_no_critical_vulnerabilities(self, text: str) -> bool:
+        """Parse security_specialist verdict for the no_critical_vulnerabilities gate.
+
+        PASS marker  → "Verdict: ✅ PASS"
+        FAIL marker  → "Verdict: ❌ FAIL"
+        No output    → pass by default (scanner may not have run)
+        """
+        if not text:
+            return True
+        upper = text.upper()
+        if "VERDICT: ✅ PASS" in upper or "VERDICT:**  ✅ PASS" in upper or "VERDICT: ✅ PASS" in text:
+            return True
+        if "VERDICT: ❌ FAIL" in text or "VERDICT: ❌ FAIL" in upper:
+            return False
+        # Secondary: explicit CRITICAL/HIGH keyword in findings table
+        if "[CRITICAL]" in upper or "**[CRITICAL]**" in upper:
+            return False
+        # Check for explicit FAIL line without emoji (safety fallback)
+        if "VERDICT: FAIL" in upper:
+            return False
+        return True  # No clear failure signal
+
+    def _check_no_secrets_detected(self, text: str) -> bool:
+        """Parse security_specialist verdict for the no_secrets_detected gate.
+
+        Fails only when the report explicitly mentions secrets found.
+        """
+        if not text:
+            return True
+        upper = text.upper()
+        # Explicit FAIL from the whole scan (with or without bold markdown)
+        if "❌ FAIL" in text or "VERDICT: FAIL" in upper:
+            return False
+        # Detect-secrets specific patterns
+        if "SECRETS DETECTED" in upper and "0 SECRETS" not in upper:
+            return False
+        if "SECRETS_FOUND" in upper and "SECRETS_FOUND: 0" not in upper:
+            return False
+        return True
 
     def _check_review_passed(self, text: str) -> bool:
         if not text:

@@ -342,6 +342,8 @@ class BaseAgent(ABC):
         "code_reviewer",
         "tester_specialist",
         "devops_specialist",
+        "architecture_reviewer",
+        "security_specialist",
     })
 
     # Default max_tokens budget for the tool-use loop's LLM calls.

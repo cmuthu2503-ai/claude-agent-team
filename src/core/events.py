@@ -1,4 +1,11 @@
-"""WebSocket event emitter — broadcasts real-time events to connected clients."""
+"""WebSocket event emitter — broadcasts real-time events to connected clients.
+
+Event type constants
+--------------------
+Use the ``OPS_*`` constants below when emitting ops_heal_agent events so
+string literals don't drift between the orchestrator, the WebSocket handler,
+and the SystemHealthPill UI component.
+"""
 
 import asyncio
 import json
@@ -9,6 +16,23 @@ from typing import Any
 import structlog
 
 logger = structlog.get_logger()
+
+# ── ops_heal_agent event type constants ─────────────────────────────────────
+# Emitted by orchestrator._trigger_ops_monitor() after each deployment.
+# Consumed by the SystemHealthPill component (CommandCenter) and any WebSocket
+# subscribers that want to react to post-deploy health verdicts.
+
+#: Stack is healthy — all checks passed (HTTP 200, disk/mem OK, logs clean).
+OPS_HEALTHY = "ops.healthy"
+
+#: At least one check degraded or error-log issues found; may be self-healing.
+OPS_ISSUE_DETECTED = "ops.issue_detected"
+
+#: ops_heal_agent monitoring cycle started (emitted before the LLM runs).
+OPS_MONITORING_STARTED = "ops.monitoring_started"
+
+#: ops_heal_agent raised an internal exception (agent-level error, not infra).
+OPS_ERROR = "ops.error"
 
 # Server-side async handler: receives (event_type, data) and may perform
 # side effects (e.g. PDB-25 mapping request status → task status). Errors

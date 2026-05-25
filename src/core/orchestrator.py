@@ -472,6 +472,8 @@ class Orchestrator(AgentExecutor):
                     "escalation_reason": result["escalation_reason"][:300],
                 })
                 logger.warning("request_escalated_failed", request_id=request_id, cycles=rework_cycles)
+                # Fire self-learning analysis silently in the background — never awaited
+                asyncio.create_task(self._trigger_self_learning(request_id))
             else:
                 # Check if any subtasks had errors
                 subtasks = await self.state.get_subtasks_for_request(request_id)
@@ -486,6 +488,8 @@ class Orchestrator(AgentExecutor):
                         "request_id": request_id,
                         "error": f"Agent failures: {', '.join(failed_agents)}",
                     })
+                    # Fire self-learning analysis silently in the background
+                    asyncio.create_task(self._trigger_self_learning(request_id))
                 else:
                     fresh_request.status = RequestStatus.COMPLETED
                     fresh_request.completed_at = datetime.utcnow()
@@ -502,6 +506,142 @@ class Orchestrator(AgentExecutor):
             await self.events.emit("request.failed", {
                 "request_id": request_id, "error": str(e),
             })
+            # Fire self-learning analysis silently in the background
+            asyncio.create_task(self._trigger_self_learning(request_id))
+
+    async def _trigger_self_learning(self, request_id: str) -> None:
+        """Fire the self_learning_agent asynchronously after a request failure.
+
+        This method is always called via ``asyncio.create_task(...)`` so it
+        never blocks the caller.  Any exception is caught and logged — the
+        self-learning analysis must never raise to the event loop's exception
+        handler (which would appear as an uncaught background-task error in
+        the frontend).
+
+        Emits one of two events after the agent completes:
+        - ``lessons.added``          — a new lesson was appended to the doc
+        - ``lessons.no_new_pattern`` — no new failure pattern was identified
+        """
+        try:
+            logger.info("self_learning_triggered", request_id=request_id)
+            inputs = {
+                "request_id": request_id,
+                "trigger": "request_failure",
+                "description": (
+                    f"Analyse the failure of request {request_id} and "
+                    "append a new lesson to docs/agent-lessons-learned.md if a "
+                    "new failure pattern is found."
+                ),
+            }
+            result = await self.execute_agent("self_learning_agent", request_id, inputs)
+            output_text: str = result.get(f"self_learning_agent_output", "") or ""
+
+            # Parse outcome from the agent's output text to emit the right event.
+            upper = output_text.upper()
+            if "LESSON L" in upper and "APPENDED" in upper:
+                # Extract lesson ID if present (e.g. "Lesson L23 appended")
+                import re as _re
+                match = _re.search(r"LESSON (L\d+)", upper)
+                lesson_id = match.group(1).upper() if match else "L?"
+                await self.events.emit("lessons.added", {
+                    "request_id": request_id,
+                    "lesson_id": lesson_id,
+                })
+                logger.info("self_learning_lesson_added", request_id=request_id, lesson_id=lesson_id)
+            else:
+                await self.events.emit("lessons.no_new_pattern", {
+                    "request_id": request_id,
+                })
+                logger.info("self_learning_no_new_pattern", request_id=request_id)
+
+            logger.info("self_learning_completed", request_id=request_id)
+        except Exception as exc:  # noqa: BLE001
+            # Deliberately broad: the self-learning hook must never crash the
+            # platform, even if the agent config is missing or the lessons file
+            # is unwritable.
+            logger.warning(
+                "self_learning_failed",
+                request_id=request_id,
+                error=str(exc),
+            )
+
+    async def trigger_ops_monitor(self, request_id: str, deployment_id: str) -> None:
+        """Fire the ops_heal_agent asynchronously after a deployment completes.
+
+        Called by the ``POST /api/v1/ops/monitor`` endpoint, which the supervisor
+        hits at the end of a successful deploy. Runs as a background task so the
+        HTTP response returns immediately while the agent does its health checks.
+
+        Emits one of:
+        - ``ops.healthy``         — all checks passed
+        - ``ops.issue_detected``  — at least one check degraded/failed
+        - ``ops.error``           — agent-level exception (never surfaces to the UI as a crash)
+        """
+        from src.core.events import OPS_ERROR, OPS_HEALTHY, OPS_ISSUE_DETECTED, OPS_MONITORING_STARTED
+
+        try:
+            logger.info("ops_monitor_triggered", request_id=request_id, deployment_id=deployment_id)
+            await self.events.emit(OPS_MONITORING_STARTED, {
+                "request_id": request_id,
+                "deployment_id": deployment_id,
+            })
+
+            inputs = {
+                "request_id": request_id,
+                "deployment_id": deployment_id,
+                "trigger": "post_deploy",
+                "description": (
+                    f"Verify that the deployment for request {request_id} "
+                    f"(deployment {deployment_id}) has left the stack healthy. "
+                    "Run ops_check action='full_check' and report findings."
+                ),
+            }
+            result = await self.execute_agent("ops_heal_agent", request_id, inputs)
+            output_text: str = result.get("ops_heal_agent_output", "") or ""
+
+            # Parse verdict from the agent's output
+            upper = output_text.upper()
+            if "OVERALL: ✅ HEALTHY" in upper or "OVERALL:** ✅ HEALTHY" in upper or "VERDICT** HEALTHY" in upper:
+                verdict = "HEALTHY"
+                event_type = OPS_HEALTHY
+            elif "OVERALL: ❌ UNHEALTHY" in upper or "VERDICT: ❌ UNHEALTHY" in upper or "UNHEALTHY" in upper:
+                verdict = "UNHEALTHY"
+                event_type = OPS_ISSUE_DETECTED
+            elif "DEGRADED" in upper:
+                verdict = "DEGRADED"
+                event_type = OPS_ISSUE_DETECTED
+            else:
+                # Default: if no explicit verdict found, treat as healthy (avoid false alarms)
+                verdict = "HEALTHY"
+                event_type = OPS_HEALTHY
+
+            await self.events.emit(event_type, {
+                "request_id": request_id,
+                "deployment_id": deployment_id,
+                "verdict": verdict,
+                "summary": output_text[:500],
+            })
+            logger.info(
+                "ops_monitor_completed",
+                request_id=request_id,
+                deployment_id=deployment_id,
+                verdict=verdict,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "ops_monitor_failed",
+                request_id=request_id,
+                deployment_id=deployment_id,
+                error=str(exc),
+            )
+            try:
+                await self.events.emit(OPS_ERROR, {
+                    "request_id": request_id,
+                    "deployment_id": deployment_id,
+                    "error": str(exc),
+                })
+            except Exception:  # noqa: BLE001
+                pass  # event emission failure must not cascade
 
     async def execute_agent(
         self, agent_id: str, request_id: str, inputs: dict[str, Any]
@@ -993,8 +1133,12 @@ class Orchestrator(AgentExecutor):
         "backend_specialist": "backend_code",
         "frontend_specialist": "frontend_code",
         "code_reviewer": "code_review",
+        "architecture_reviewer": "arch_review_report",
+        "security_specialist": "security_report",
+        "quality_guardian": "quality_report",
         "tester_specialist": "test_report",
         "devops_specialist": "deploy_report",
+        "ops_heal_agent": "ops_health_report",
         "research_specialist": "research_report",
         "content_creator": "content_artifact",
     }

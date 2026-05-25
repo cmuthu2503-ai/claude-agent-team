@@ -66,7 +66,7 @@ Given a commit's metadata, return EXACTLY one valid JSON object matching this sc
 
 Strategy meanings:
   - "deploy_full":
-      build → staging → healthcheck → prod → healthcheck → rebuild dev. Normal path.
+      build → staging → healthcheck → rebuild dev. Normal path.
   - "deploy_staging_only":
       build → staging → healthcheck → STOP. Use for risky changes needing manual
       validation before prod.
@@ -85,6 +85,23 @@ Risk meanings:
   - "high":   large blast radius (auth, payment, schema migrations, infra),
               insufficient tests, or unfamiliar areas.
 
+QUALITY GUARDIAN RISK SIGNAL (`quality_risk` in the user message):
+The quality_risk field is the Quality Guardian's cross-cutting pre-deploy
+assessment of the change (API contract correctness, test traceability,
+known failure-pattern compliance). Use it to calibrate your decision:
+
+  - "high"  → Quality Guardian ESCALATED (CRITICAL findings: API mismatch,
+              missing traceability, or known repeat patterns).
+              Prefer "deploy_staging_only". Only use "hold" if files_committed
+              also touch auth / schema migrations / infra.
+  - "medium" → Quality Guardian APPROVED with HIGH warnings.
+              Normal risk; "deploy_full" is appropriate.
+  - "low"   → Quality Guardian fully APPROVED — no findings above MEDIUM.
+              You may lower your risk rating one level below your file-shape
+              assessment (e.g. a multi-file change you'd call medium → low).
+  - "unknown" → quality_guardian did not run (e.g. docs-only request).
+              Ignore this field and judge on file shape alone.
+
 Output ONLY the JSON object. No preamble, no markdown fences, no explanation outside the JSON.
 """
 
@@ -95,6 +112,7 @@ _USER_TEMPLATE = """Commit to evaluate:
 - request_id:       {request_id}
 - files_committed:  {files_list}
 - rollback_sha:     {rollback_sha}
+- quality_risk:     {quality_risk}  (Quality Guardian rating: low / medium / high / unknown)
 
 Reason about the change shape and return the JSON decision."""
 
@@ -107,9 +125,16 @@ def evaluate_deployment(
     request_id: str,
     files_committed: list[str],
     rollback_sha: str = "",
+    quality_risk: str = "unknown",
     model: str = "claude-opus-4-7",
 ) -> JudgeResult:
     """Ask the judge LLM what to do with this commit.
+
+    quality_risk: the Quality Guardian's rating ("low" | "medium" | "high" |
+        "unknown"). "unknown" is used when the quality guardian did not run
+        (e.g. docs-only requests). Injected into the user prompt so the judge
+        can calibrate strategy — "high" biases toward deploy_staging_only,
+        "low" biases toward lowering the overall risk rating.
 
     Always returns a JudgeResult — never raises. On any failure (no creds,
     API error, malformed response), returns a safe-default result with
@@ -135,11 +160,15 @@ def evaluate_deployment(
         return _safe_default("Anthropic SDK unavailable in supervisor image.")
 
     files_list = ", ".join(files_committed) if files_committed else "(none reported)"
+    # Validate/normalise quality_risk so the prompt always gets a clean value
+    _valid_qr = {"low", "medium", "high", "unknown"}
+    quality_risk_clean = quality_risk.strip().lower() if quality_risk.strip().lower() in _valid_qr else "unknown"
     user_msg = _USER_TEMPLATE.format(
         commit_sha=commit_sha or "(none)",
         request_id=request_id or "(unknown)",
         files_list=files_list,
         rollback_sha=rollback_sha or "(none)",
+        quality_risk=quality_risk_clean,
     )
 
     try:

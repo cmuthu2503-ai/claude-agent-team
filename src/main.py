@@ -14,6 +14,7 @@ from src.api.routes import (
     cost,
     documents,
     notifications,
+    ops,
     projects,
     prompts,
     releases,
@@ -177,6 +178,7 @@ app.include_router(documents.router)
 app.include_router(projects.router)
 app.include_router(cost.router)
 app.include_router(prompts.router)
+app.include_router(ops.router)
 app.include_router(ws_router)
 
 

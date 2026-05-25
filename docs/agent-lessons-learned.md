@@ -837,6 +837,147 @@ verification tasks ship in a follow-up.**
 
 ---
 
+## L20 — Verify the wire format, not just the DB and not just the component logic
+
+**Signature:** A UI list / tree shows empty. You check the DB and the
+data is there. You check the component render path and the logic looks
+right. You restart, you refresh, you blame caching — and the symptom
+persists across multiple debug sessions. The actual gap is the API
+serializer in the middle: it never put the field on the wire.
+
+**Concrete instance (2026-05-23, BuildPlanView "0 BPD tasks" bug):**
+
+| Layer | What it said | What I assumed |
+|---|---|---|
+| **DB** | `SELECT COUNT(*) FROM project_tasks WHERE feature_id IS NOT NULL` → 348/348 | "Data is fine, must be a frontend bug" |
+| **Component** | `BuildPlanView.tasksByFeature` groups by `t.feature_id`, skips falsy. Code reads correctly. | "Must be auto-refresh not firing" |
+| **Restart + refresh + hard-cache-bust** | Same symptom every time | "Vite HMR on Windows bind mount is flaky again" |
+| **The actual culprit** | `_task_to_dict` in `src/api/routes/projects.py` returned 16 fields. None of them were `feature_id`, `depends_on`, `primary_file`, `expected_loc`, `acceptance_test`. The 5 BPD fields were silently absent from every `/projects/{pid}/tasks` response since BPD shipped. | (only found by curling the live endpoint and counting keys) |
+
+The DB had the data. The component would have grouped it correctly.
+The serializer in the middle dropped it on the floor. Every "auto-
+refresh failing", "cascade NULLing feature_id", and "stale Vite
+bundle" diagnosis was looking at the right rooms but the wrong floor.
+
+**The fix took 5 minutes once located.** Three days of intermittent
+debugging targeted the wrong layer because no one looked at the wire.
+
+**What to do when you see this symptom pattern:**
+
+1. **First debug cycle, before assuming anything**: curl (or hit via
+   the in-container Python httpx client) the actual API endpoint the
+   component fetches. Count the keys in `response.data[0]`. Compare
+   against the component's TypeScript interface. **If a field the
+   component reads isn't on the wire, that IS the bug** — skip the
+   rest of the analysis.
+
+2. **When adding a new column to a Pydantic model** (e.g. the 5 BPD
+   fields on `ProjectTask`), there are THREE places that need updating
+   in this codebase:
+   - The model itself (`src/models/base.py`)
+   - The SQL CREATE TABLE + INSERT in `src/state/sqlite_store.py`
+   - **Every `_X_to_dict()` serializer** in `src/api/routes/*.py`
+     that hands the row to the frontend
+   The third is the one that gets forgotten because there are usually
+   multiple serializers per model (one per endpoint shape) and adding
+   a column doesn't make any of them fail loudly.
+
+3. **Component-side defence**: when you write a grouping/filtering
+   useMemo like `tasksByFeature`, add a one-line dev-mode warning
+   when N input rows produce 0 grouped rows. The presence of input
+   rows + absence of output rows is the canary that the input rows
+   are missing the grouping key.
+
+**Examples of the warning pattern:**
+
+```tsx
+const tasksByFeature = useMemo(() => {
+  const m = new Map<string, Task[]>()
+  for (const t of tasks) {
+    if (!t.feature_id) continue
+    if (!m.has(t.feature_id)) m.set(t.feature_id, [])
+    m.get(t.feature_id)!.push(t)
+  }
+  if (process.env.NODE_ENV !== "production" && tasks.length > 0 && m.size === 0) {
+    console.warn(
+      "[tasksByFeature] received", tasks.length, "tasks but grouped 0 —",
+      "first task keys:", Object.keys(tasks[0] || {}),
+    )
+  }
+  return m
+}, [tasks])
+```
+
+This converts a 3-session debugging spiral into a 5-second console
+glance: "the response has no feature_id key, fix the serializer".
+
+**Related lessons:**
+
+- L05 (emit `### File:` blocks) — same family: silent serialization
+  gap between what the agent emitted and what the materializer saw.
+- L11 (whole-file scan) — same family: checked one layer (lint output)
+  not the layer where the symptom actually was (the source file).
+
+**Observed: 2026-05-23. The BuildPlanView tree had been silently
+broken for everyone since the BPD shipped on 2026-05-23 itself.
+The bug surfaced as "tasks list empty" three times across two days
+before the wire-format check finally located it.**
+
+---
+
+## L21 — Direct database import in a route file
+
+**Signature:** `import aiosqlite` or `import sqlite3` (or any other DB driver import) appears inside any file under `src/api/routes/`.
+
+**Cause:** Agent generated route-handler logic that accesses the database directly, bypassing the `StateStore` abstraction layer in `src/state/base.py`. This breaks the layered architecture: routes → state store → DB.
+
+**Fix:** Replace the direct DB call with the appropriate `StateStore` method (e.g., `await state_store.get_request(id)`, `await state_store.save_document(...)`). The `state_store` instance lives on `request.app.state.state_store`. **Never import a database driver in a route file.**
+
+```python
+# ❌ Wrong — route bypasses StateStore
+import aiosqlite
+
+@router.get("/items")
+async def get_items():
+    async with aiosqlite.connect("data/agent_team.db") as db:
+        rows = await db.execute("SELECT * FROM items")
+
+# ✅ Correct — access through StateStore
+from fastapi import Request
+
+@router.get("/items")
+async def get_items(request: Request):
+    state_store = request.app.state.state_store
+    return await state_store.get_items()
+```
+
+**Quick check:** `grep -r "import aiosqlite\|import sqlite3" src/api/routes/` should return nothing. Any hit is a violation.
+
+**Observed in:** Phase AE-5 architectural analysis (2026-05-25).
+
+---
+
+## L22 — New FastAPI route handler not registered in main.py
+
+**Signature:** A new `@router.get/post/put/delete` handler exists in `src/api/routes/<module>.py` but the endpoint returns `404 Not Found` at runtime despite the server running cleanly.
+
+**Cause:** Agent created the route file (or added a new `router = APIRouter()` to an existing file) but did not add the matching `app.include_router(new_router, prefix="/api/v1/...")` call in `src/main.py`. FastAPI only serves routes that are explicitly registered — creating the file is not enough.
+
+**Fix:** After adding any new route file or a new router object, immediately open `src/main.py` and add the `include_router` call alongside the existing registrations. **Both the handler file AND the registration in `main.py` are required.** One without the other = unreachable endpoint.
+
+```python
+# After creating src/api/routes/widgets.py with router = APIRouter():
+# src/main.py — add this line:
+from src.api.routes import widgets
+app.include_router(widgets.router, prefix="/api/v1/widgets", tags=["widgets"])
+```
+
+**Quick check after every backend change:** Count `grep -c "include_router" src/main.py` and compare against the number of non-`__init__` files in `src/api/routes/`. A mismatch means a registration is missing.
+
+**Observed in:** Phase AE-5 architectural analysis (2026-05-25).
+
+---
+
 ## How to add a new lesson
 
 When a new failure pattern is observed in production:
@@ -935,3 +1076,23 @@ When a new failure pattern is observed in production:
   `acceptance_test`, `expected_loc`, and `depends_on`. Legacy tasks
   (no BPD fields) continue to function unchanged. The lesson tells
   agents how to read and act on the new fields.
+- **2026-05-25 (Phase AE-5 arch pre-seed)** — Added L21 (direct DB
+  import in route file) and L22 (new FastAPI route not registered in
+  `main.py`). Both patterns were identified during the Phase AE-5
+  architectural analysis. Pre-seeded so all 10 existing agents benefit
+  immediately — before the `architecture_reviewer` agent is live.
+- **2026-05-23 (wire-format gap)** — Added L20 (verify wire format,
+  not just DB / not just component). The "BuildPlanView shows 0 BPD
+  tasks despite 348 tasks in the DB" bug surfaced three times across
+  two days. Each time it was diagnosed as something else (auto-
+  refresh, cascade NULLing, Vite HMR cache) until someone finally
+  hit the live endpoint and counted the keys: `_task_to_dict` had
+  never serialized the 5 BPD fields (`feature_id`, `depends_on`,
+  `primary_file`, `expected_loc`, `acceptance_test`) — the columns
+  existed in the DB, were correctly read into the Pydantic model,
+  but the dict serializer at the API boundary dropped them. Fix
+  (one-line addition to the dict) took 5 minutes once located. The
+  lesson teaches: when DB is fine + component is fine + UI is empty,
+  the third option is the API serializer in the middle. Also includes
+  a useMemo dev-warning pattern that converts the future occurrence
+  of this class into a single console line.

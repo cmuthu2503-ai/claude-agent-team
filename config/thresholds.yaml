@@ -18,6 +18,26 @@ thresholds:
     enforcement: block_merge
     description: "At least one approval required before merge"
 
+  arch_review_approval:
+    value: true
+    enforcement: block_merge
+    description: "Architecture review must find no CRITICAL violations before merge"
+
+  no_critical_vulnerabilities:
+    value: true
+    enforcement: block_merge
+    description: "Security scan must find no CRITICAL or HIGH vulnerabilities before merge"
+
+  no_secrets_detected:
+    value: true
+    enforcement: block_merge
+    description: "No hard-coded secrets or credentials may be present in committed code"
+
+  quality_guardian_approval:
+    value: true
+    enforcement: block_merge
+    description: "Quality Guardian must not ESCALATE (API contract mismatch, missing traceability, or known failure patterns are CRITICAL blockers)"
+
   max_review_cycles:
     value: 3
     enforcement: escalate

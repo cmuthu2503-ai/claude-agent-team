@@ -65,10 +65,19 @@ def test_sequential_stage_parsed(workflow_loader):
 def test_quality_gates_parsed(workflow_loader):
     wf = workflow_loader.get_workflow("feature_development")
     review_stage = wf.stages["review"]
-    assert isinstance(review_stage, StageDefinition)
-    assert len(review_stage.quality_gates) == 2
+    # review is now a parallel stage (code_review + arch_review + quality_check run in parallel)
+    assert isinstance(review_stage, ParallelStage)
+    assert len(review_stage.quality_gates) == 4
     gate_names = [g.gate for g in review_stage.quality_gates]
     assert "coverage_check" in gate_names
+    assert "review_approval" in gate_names
+    assert "arch_review_approval" in gate_names
+    assert "quality_guardian_approval" in gate_names
+    # verify all three parallel groups are present
+    group_ids = [g.group_id for g in review_stage.groups]
+    assert "code_review" in group_ids
+    assert "arch_review" in group_ids
+    assert "quality_check" in group_ids
 
 
 def test_on_fail_routing(workflow_loader):

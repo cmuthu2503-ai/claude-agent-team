@@ -32,13 +32,27 @@ workflows:
         next: [review]
 
       review:
-        agents: [code_reviewer]
-        inputs: [backend_code, frontend_code, backend_tests, frontend_tests]
-        outputs: [review_report]
+        parallel:
+          code_review:
+            agents: [code_reviewer]
+            inputs: [backend_code, frontend_code, backend_tests, frontend_tests]
+            outputs: [review_report]
+          arch_review:
+            agents: [architecture_reviewer]
+            inputs: [backend_code, frontend_code]
+            outputs: [arch_review_report]
+          quality_check:
+            agents: [quality_guardian]
+            inputs: [prd_document, user_stories, backend_code, frontend_code, test_report, security_report]
+            outputs: [quality_report]
         quality_gates:
           - gate: coverage_check
             threshold: code_coverage_minimum
           - gate: review_approval
+            required: true
+          - gate: arch_review_approval
+            required: true
+          - gate: quality_guardian_approval
             required: true
         on_fail: development
         next: [testing]
@@ -53,11 +67,23 @@ workflows:
           - gate: regression_clear
             required: true
         on_fail: development
+        next: [security]
+
+      security:
+        agents: [security_specialist]
+        inputs: [backend_code, frontend_code, test_report]
+        outputs: [security_report]
+        quality_gates:
+          - gate: no_critical_vulnerabilities
+            required: true
+          - gate: no_secrets_detected
+            required: true
+        on_fail: development
         next: [code_commit]
 
       code_commit:
         agents: []
-        inputs: [backend_code, frontend_code, test_report, review_report]
+        inputs: [backend_code, frontend_code, test_report, review_report, security_report]
         outputs: [commit_sha, files_committed]
         next: [deployment]
 
@@ -102,6 +128,18 @@ workflows:
             agents: [tester_specialist]
             inputs: [fix_code, fix_tests]
             outputs: [test_report]
+        next: [security]
+
+      security:
+        agents: [security_specialist]
+        inputs: [fix_code, fix_tests, test_report]
+        outputs: [security_report]
+        quality_gates:
+          - gate: no_critical_vulnerabilities
+            required: true
+          - gate: no_secrets_detected
+            required: true
+        on_fail: fix
         next: [code_commit]
 
       # System stage (agents: []) — runner detects by name and calls
