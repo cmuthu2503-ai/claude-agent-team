@@ -135,3 +135,9 @@ tools:
     category: infrastructure
     available_to:
       - ops_heal_agent
+
+  policy_check:
+    description: "Evaluate the declarative quality rule catalog (config/quality-rules.yaml) against a batch of agent emissions. Each emission is {target_path, content, agent_id, tool_name, rework_cycle}. Returns {verdict, violations[], summary{}}. verdict='BLOCK' when any enforce-severity rule fires (workflow halts at quality_guardian_approval gate); 'PASS_WITH_WARNINGS' when only warn-severity rules fire (workflow advances with annotated quality_report); 'PASS' when nothing fires. Each violation carries rule_id, rationale, fix_hint, and a snippet of the matched content so the next rework cycle has actionable guidance."
+    category: quality
+    available_to:
+      - quality_guardian

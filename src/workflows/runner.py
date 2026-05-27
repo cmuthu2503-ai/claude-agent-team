@@ -73,10 +73,21 @@ class WorkflowRunner:
         code_commit_handler: Any = None,
         publish_handler: Any = None,
         materialize_handler: Any = None,
+        # AET-06 — quality_guardian_approval gate enforcement.
+        # Both optional for backward compat with existing tests that
+        # construct WorkflowRunner without the AE plumbing. When either
+        # is missing, _check_combined_gate falls back to the legacy
+        # text-parse behavior (agent prose verdict only) and skips the
+        # quality.gate.* event emission. Loud-fallback: structlog logs
+        # `policy_check_unavailable` so the operator can spot the gap.
+        get_policy_check_tool: Callable[[], Any] | None = None,
+        events: Any = None,
     ) -> None:
         self.executor = executor
         self._code_commit_handler = code_commit_handler
         self._publish_handler = publish_handler
+        self._get_policy_check_tool = get_policy_check_tool
+        self._events = events
         # Fix A: invoked RIGHT AFTER the development stage completes
         # (before review/testing). Writes the agent's ``### Full Source:``
         # blocks to disk + runs lint/test so the reviewer's file_read at
@@ -267,7 +278,7 @@ class WorkflowRunner:
 
                 # Combined gate: runs after TESTING stage (checks both review + test)
                 if stage_id == "testing":
-                    gate_result = self._check_combined_gate(artifacts, request_id)
+                    gate_result = await self._check_combined_gate(artifacts, request_id)
 
                     if not gate_result["passed"]:
                         rework_count = self._rework_count.get(request_id, 0)
@@ -323,15 +334,26 @@ class WorkflowRunner:
 
         return artifacts
 
-    def _check_combined_gate(self, artifacts: dict[str, Any], request_id: str) -> dict[str, Any]:
+    async def _check_combined_gate(self, artifacts: dict[str, Any], request_id: str) -> dict[str, Any]:
         """Check Code Reviewer, Architecture Reviewer, Quality Guardian, AND Tester results.
 
-        Pass = Review APPROVED + Arch APPROVED (no CRITICAL) + Quality APPROVED + zero test FAILs.
+        Pass = Review APPROVED + Arch APPROVED (no CRITICAL) + Quality APPROVED
+               (both the agent's prose verdict AND the structured policy_check
+               verdict per AET-06) + zero test FAILs.
         Fail = any has issues → aggregate feedback for targeted rework.
 
         Note: quality_report is produced during the review stage (parallel with code_reviewer
         and architecture_reviewer), so it is always available by the time this gate runs
         (after the testing stage).
+
+        AET-06 addition: the structured policy_check tool now runs against
+        the agent emissions in parallel with the agent's prose verdict.
+        Either signal can fail the gate — gives us defense in depth (the
+        agent's prose check catches cross-cutting issues like API contract
+        drift; policy_check catches deterministic patterns from L11-L21
+        without relying on the LLM's judgment). Emits the
+        quality.gate.failed / quality.gate.passed events (AET-05) so the
+        UI can surface the blocked state.
         """
         review_text = artifacts.get("review_report", "")
         if not review_text:
@@ -366,11 +388,24 @@ class WorkflowRunner:
         quality_passed = self._check_quality_guardian_passed(quality_text)
         test_passed = self._check_tests_passed(tester_text)
 
-        if review_passed and arch_passed and quality_passed and test_passed:
-            logger.info("combined_gate_passed", request_id=request_id)
+        # AET-06 — structured policy_check evaluation. The tool reads
+        # config/quality-rules.yaml (13 rules derived from L11-L21) and
+        # returns a structured verdict that the gate enforces in
+        # addition to the agent's text verdict.
+        policy_result = await self._evaluate_policy_check_for_gate(
+            artifacts, request_id,
+        )
+        policy_passed = policy_result["passed"]
+        policy_feedback = policy_result.get("reason", "")
+
+        if review_passed and arch_passed and quality_passed and test_passed and policy_passed:
+            logger.info(
+                "combined_gate_passed", request_id=request_id,
+                policy_check_verdict=policy_result.get("verdict"),
+            )
             return {
                 "passed": True,
-                "reason": "Code review, architecture review, quality guardian, and testing all passed",
+                "reason": "Code review, architecture review, quality guardian, policy_check, and testing all passed",
             }
 
         # Aggregate feedback
@@ -397,14 +432,192 @@ class WorkflowRunner:
         if not test_passed:
             failures = self._extract_test_failures(tester_text)
             feedback_parts.append(f"=== TEST FAILURES ===\n{failures}")
+        if not policy_passed and policy_feedback:
+            feedback_parts.append(policy_feedback)
 
         combined = "\n\n".join(feedback_parts)
         logger.info(
             "combined_gate_failed", request_id=request_id,
             review_passed=review_passed, arch_passed=arch_passed,
             quality_passed=quality_passed, test_passed=test_passed,
+            policy_passed=policy_passed,
+            policy_check_verdict=policy_result.get("verdict"),
         )
         return {"passed": False, "reason": combined}
+
+    async def _evaluate_policy_check_for_gate(
+        self, artifacts: dict[str, Any], request_id: str,
+    ) -> dict[str, Any]:
+        """Run policy_check against the agent emissions in this batch,
+        emit the quality.gate.* event, return {passed, verdict, reason}.
+
+        Returns ``passed=True`` (i.e. don't block on policy) when policy_check
+        is unavailable — keeps the gate functional if the tool failed to
+        register (e.g., a broken quality-rules.yaml). Loud-fallback: the
+        ``policy_check_unavailable`` log line tells the operator the
+        structured gate isn't running.
+        """
+        get_tool = self._get_policy_check_tool
+        tool = get_tool() if get_tool is not None else None
+        if tool is None:
+            logger.info(
+                "policy_check_unavailable",
+                request_id=request_id,
+                hint=(
+                    "WorkflowRunner has no policy_check tool — gate falls "
+                    "back to text-parse-only behavior. Check executor "
+                    "boot logs for policy_check_registration_failed."
+                ),
+            )
+            return {"passed": True, "verdict": "SKIPPED", "reason": ""}
+
+        # Extract emissions from backend_code + frontend_code artifacts.
+        # Reuse the same `### \`path\`` block regex the code_writer uses
+        # to materialize files — that way the gate sees exactly the
+        # files that will land on disk.
+        emissions = self._extract_emissions_from_artifacts(artifacts)
+        if not emissions:
+            # No files emitted (e.g., research workflow); policy_check has
+            # nothing to evaluate. Don't block.
+            logger.debug(
+                "policy_check_no_emissions",
+                request_id=request_id,
+                artifact_keys=list(artifacts.keys()),
+            )
+            return {"passed": True, "verdict": "PASS", "reason": ""}
+
+        try:
+            result = await tool.execute({"emissions": emissions})
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "policy_check_eval_failed",
+                request_id=request_id, error=str(e),
+            )
+            # Don't block the workflow on a policy_check failure — same
+            # rationale as the boot-time fallback. Loud log + advance.
+            return {"passed": True, "verdict": "ERROR", "reason": ""}
+
+        verdict = result.get("verdict", "PASS")
+        violations = result.get("violations", [])
+        summary = result.get("summary", {})
+
+        # AET-05 — emit the quality.gate.* event so the UI (AET-07)
+        # and audit log can surface the gate decision. Soft-fails so
+        # an EventEmitter hiccup can't break the gate evaluation.
+        if self._events is not None:
+            try:
+                from src.core.quality_gate import emit_quality_gate_event
+                await emit_quality_gate_event(
+                    self._events,
+                    request_id=request_id,
+                    verdict=verdict,
+                    violations=violations,
+                    summary=summary,
+                    stage="code_review.quality_check",
+                    rework_cycle=self._rework_count.get(request_id, 0),
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "quality_gate_event_emit_failed",
+                    request_id=request_id, error=str(e),
+                )
+
+        if verdict != "BLOCK":
+            # PASS or PASS_WITH_WARNINGS — both let the workflow advance.
+            return {"passed": True, "verdict": verdict, "reason": ""}
+
+        # BLOCK — build a rework-feedback block from the enforce-severity
+        # violations. Each entry carries the rule_id, file, snippet, and
+        # the rule's own fix_hint so the next iteration of the agent
+        # has actionable, line-by-line guidance.
+        enforce_violations = [v for v in violations if v.get("severity") == "enforce"]
+        warn_violations = [v for v in violations if v.get("severity") == "warn"]
+
+        feedback_lines = [
+            "=== POLICY CHECK BLOCKED ===",
+            f"policy_check (the declarative rule catalog in config/quality-rules.yaml) "
+            f"found {len(enforce_violations)} enforce-severity violation(s) and "
+            f"{len(warn_violations)} warning(s). Enforce violations BLOCK the workflow — "
+            f"the listed code must be fixed before this commit can advance.",
+            "",
+            "Violations to fix:",
+        ]
+        for i, v in enumerate(enforce_violations, start=1):
+            rule_id = v.get("rule_id", "?")
+            rule_name = v.get("rule_name", "")
+            target = v.get("target_path", "?")
+            snippet = (v.get("snippet") or "").strip()
+            fix_hint = (v.get("fix_hint") or "").strip()
+            lesson_ref = v.get("lesson_ref")
+            lesson_str = f" (lesson {lesson_ref})" if lesson_ref else ""
+            feedback_lines.append(
+                f"\n{i}. [{rule_id}] {rule_name}{lesson_str}\n"
+                f"   File: {target}\n"
+                f"   Match: {snippet[:200]}\n"
+                f"   Fix: {fix_hint}"
+            )
+        if warn_violations:
+            feedback_lines.append(
+                f"\n(plus {len(warn_violations)} warning(s) — not blocking, "
+                f"but address them in this cycle if possible.)"
+            )
+
+        return {
+            "passed": False,
+            "verdict": "BLOCK",
+            "reason": "\n".join(feedback_lines),
+        }
+
+    # File-block regex matches the materializer's parser exactly
+    # (src/core/code_writer.py::_parse_and_write_files), so the gate
+    # sees the same set of files that will land on disk if approved.
+    _FILE_BLOCK_RE = re.compile(
+        r'###\s+(?:Full Source:\s*)?`([^`]+)`\s*(?:\([^)]*\))?\s*\n```\w*\n([\s\S]*?)```'
+    )
+
+    # Which artifact keys hold code emissions from which agents. Order
+    # matters only for logging — every key is scanned regardless.
+    _CODE_ARTIFACT_KEYS = (
+        ("backend_code", "backend_specialist"),
+        ("frontend_code", "frontend_specialist"),
+        ("backend_tests", "tester_specialist"),
+        ("frontend_tests", "tester_specialist"),
+    )
+
+    def _extract_emissions_from_artifacts(
+        self, artifacts: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Pull (target_path, content, agent_id, tool_name) emissions
+        from the code-bearing artifact text blobs.
+
+        Mirrors the materializer's file-block parser so the gate sees
+        exactly the files that would land on disk at the commit stage.
+        Skipping path-traversal patterns (`..`, leading `/`) matches the
+        materializer's security guard.
+        """
+        emissions: list[dict[str, Any]] = []
+        for key, agent_id in self._CODE_ARTIFACT_KEYS:
+            text = artifacts.get(key, "")
+            if not isinstance(text, str) or not text:
+                continue
+            for path, content in self._FILE_BLOCK_RE.findall(text):
+                path = path.strip()
+                content = content.strip()
+                if not path or not content:
+                    continue
+                # Path-traversal guard mirroring the materializer.
+                if ".." in path or path.startswith("/"):
+                    continue
+                emissions.append({
+                    "target_path": path,
+                    "content": content,
+                    "agent_id": agent_id,
+                    "tool_name": "file_write",
+                    "rework_cycle": self._rework_count.get(
+                        artifacts.get("request_id", ""), 0,
+                    ),
+                })
+        return emissions
 
     def _check_arch_review_passed(self, text: str) -> bool:
         """Parse architecture_reviewer verdict.

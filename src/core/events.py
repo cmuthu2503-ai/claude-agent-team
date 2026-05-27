@@ -34,6 +34,24 @@ OPS_MONITORING_STARTED = "ops.monitoring_started"
 #: ops_heal_agent raised an internal exception (agent-level error, not infra).
 OPS_ERROR = "ops.error"
 
+# ── Phase AE-3 quality_guardian event type constants ────────────────────────
+# Emitted by the workflow runner's quality_guardian_approval gate (AET-06)
+# after evaluating policy_check's structured verdict (AET-03). Consumed by:
+#   - the WebSocket clients (AET-07 UI surfaces the blocked-by-quality-gate
+#     chip on the Request detail page when QUALITY_GATE_FAILED fires)
+#   - structlog audit pipeline (every emit logs the rule_ids that fired)
+# Payload contract: src/core/quality_gate.py::build_quality_gate_payload
+
+#: policy_check returned verdict='BLOCK' — at least one enforce-severity
+#: rule violated. The workflow halts at the gate; the next rework cycle
+#: receives the violations + fix_hints as input.
+QUALITY_GATE_FAILED = "quality.gate.failed"
+
+#: policy_check returned verdict='PASS' (clean) or 'PASS_WITH_WARNINGS'
+#: (warn-severity rules fired but enforce did not). Workflow advances;
+#: the inner `verdict` field on the payload tells subscribers which flavor.
+QUALITY_GATE_PASSED = "quality.gate.passed"
+
 # Server-side async handler: receives (event_type, data) and may perform
 # side effects (e.g. PDB-25 mapping request status → task status). Errors
 # are logged and swallowed so a failing handler can't break event delivery.

@@ -222,6 +222,18 @@ class Orchestrator(AgentExecutor):
             code_commit_handler=self._handle_code_commit,
             publish_handler=self._handle_publish,
             materialize_handler=self._handle_materialize,
+            # AET-06 — give the runner access to the policy_check tool
+            # and the events emitter so the quality_guardian_approval
+            # gate can run the structured rule catalog AND emit
+            # quality.gate.failed / quality.gate.passed events. Lazy
+            # callable because `self._agent_executor` is set later
+            # (Phase 3 init order). Returns None until then —
+            # _evaluate_policy_check_for_gate falls back gracefully.
+            get_policy_check_tool=lambda: (
+                self._agent_executor.tool_registry.get_implementation("policy_check")
+                if self._agent_executor is not None else None
+            ),
+            events=self.events,
         )
         self._agent_executor: Any = None  # Set by agent system in Phase 3
         # Background tasks keyed by request_id so cancel() can find and kill a

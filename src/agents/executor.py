@@ -147,6 +147,7 @@ class AgentSystemExecutor:
         from src.tools.lessons_writer import LessonsWriterTool
         from src.tools.security_scan import SecurityScanTool
         from src.tools.ops_check import OpsCheckTool
+        from src.tools.policy_check import PolicyCheckTool
 
         self.tool_registry.register_implementation("file_read", FileReadTool())
         self.tool_registry.register_implementation("file_write", FileWriteTool())
@@ -180,6 +181,28 @@ class AgentSystemExecutor:
         # Checks HTTP health endpoints, disk/memory pressure, and recent error
         # log patterns after each deployment.
         self.tool_registry.register_implementation("ops_check", OpsCheckTool())
+        # policy_check evaluates the declarative rule catalog
+        # (config/quality-rules.yaml) against agent emissions for the
+        # quality_guardian agent. The tool's constructor loads + validates
+        # the YAML eagerly — if rules are malformed it raises here.
+        # Catching the failure rather than letting it crash backend boot:
+        # a bad rules file should disable quality_guardian, not the whole
+        # platform. Operator sees the WARNING in logs, fixes the YAML,
+        # restarts. quality_guardian will fail at request-time with
+        # "tool not registered" until then — also loud, but scoped.
+        try:
+            self.tool_registry.register_implementation("policy_check", PolicyCheckTool())
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "policy_check_registration_failed",
+                error=str(e),
+                hint=(
+                    "config/quality-rules.yaml failed to load or validate. "
+                    "quality_guardian will be unable to call policy_check until "
+                    "the YAML is fixed and the backend restarted. See "
+                    "docs/quality-rules-schema.md for the expected schema."
+                ),
+            )
 
         # ── Create agents ────────────────────────────
         factory = AgentFactory(config)
