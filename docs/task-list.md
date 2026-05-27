@@ -1229,8 +1229,8 @@ cross-cutting.
 | AET-04 | Wire `policy_check` to `quality_guardian` in `config/tools.yaml` (`available_to: [quality_guardian]`) and reference it in the agent's system prompt with explicit instructions to call it before approving. | S | AET-03 | `[x]` |
 | AET-05 | New event types `quality.gate.failed` + `quality.gate.passed`. Emit from workflow runner when `quality_guardian_approval` gate evaluates `policy_check` output. Payload: `{request_id, violations: [{rule_id, severity, snippet, rationale}]}`. | S | AET-03 | `[x]` |
 | AET-06 | Workflow runner — `quality_guardian_approval` gate (already declared in `config/workflows.yaml`) now ACTUALLY blocks on critical `policy_check` violations instead of approving on bare presence of a `quality_report` output. Routes back to `development` stage with violations in the rework input. | M | AET-04, AET-05 | `[x]` |
-| AET-07 | Frontend — Request detail page surfaces blocked-by-quality-gate state. New chip on the request header (`🛑 BLOCKED: QUALITY GATE · 2 violations`), expandable panel showing each violation's rule_id + snippet + L11-L21 reference. | M | AET-05 | `[ ]` |
-| AET-08 | Smoke test: write a deliberate L11-style violation (a `print()` call) into a generated file, dispatch a Request that touches it, verify the workflow halts at `quality_guardian_approval` with `QR-XXX no_print_in_prod` surfaced in the UI. Pytest case lives at `tests/test_quality_guardian_smoke.py`. | M | AET-06, AET-07 | `[ ]` |
+| AET-07 | Frontend — Request detail page surfaces blocked-by-quality-gate state. New chip on the request header (`🛑 BLOCKED: QUALITY GATE · 2 violations`), expandable panel showing each violation's rule_id + snippet + L11-L21 reference. | M | AET-05 | `[x]` |
+| AET-08 | Smoke test: write a deliberate L11-style violation (a `print()` call) into a generated file, dispatch a Request that touches it, verify the workflow halts at `quality_guardian_approval` with `QR-XXX no_print_in_prod` surfaced in the UI. Pytest case lives at `tests/test_quality_guardian_smoke.py`. | M | AET-06, AET-07 | `[x]` |
 
 **AE-2 — `self_learning_agent` auto-trigger (compound leverage)**
 
@@ -1291,13 +1291,13 @@ cross-cutting.
 | Phase D: UI rework | 9 | 6 | 3 | 0 | 0 |
 | Phase E: Migration + polish + verification | 8 | 7 | 0 | 1 | 0 |
 | Phase F: Generation hardening | 8 | 8 | 0 | 0 | 0 |
-| Phase AE: Agentic Engineering — quality_guardian (AE-3) | 8 | 6 | 0 | 0 | 2 |
+| Phase AE: Agentic Engineering — quality_guardian (AE-3) | 8 | 8 | 0 | 0 | 0 |
 | Phase AE: Agentic Engineering — self_learning_agent (AE-2) | 6 | 0 | 0 | 0 | 6 |
 | Phase AE: Agentic Engineering — security_specialist (AE-4) | 8 | 0 | 0 | 0 | 8 |
 | Phase AE: Agentic Engineering — ops_heal_agent (AE-1) | 10 | 0 | 0 | 0 | 10 |
 | Phase AE: Agentic Engineering — architecture_reviewer (AE-5) | 4 | 0 | 0 | 0 | 4 |
 | Phase AE: Agentic Engineering — cross-cutting | 6 | 0 | 0 | 0 | 6 |
-| **Total** | **95** | **55** | **3** | **1** | **36** |
+| **Total** | **95** | **57** | **3** | **1** | **34** |
 
 ### Phase AE execution notes
 

@@ -1,10 +1,40 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useParams, Link } from "react-router-dom"
 import { api } from "../lib/api"
 import { StatusBadge } from "../components/ui/StatusBadge"
-import { ArrowLeft, ChevronDown, ChevronRight, FileText, ExternalLink, Github, FileType, Presentation, FileImage, Code } from "lucide-react"
+import { ArrowLeft, ChevronDown, ChevronRight, FileText, ExternalLink, Github, FileType, Presentation, FileImage, Code, ShieldAlert, ShieldCheck } from "lucide-react"
 import { MarkdownRenderer } from "../components/ui/MarkdownRenderer"
 import { ProjectChip } from "../components/projects/ProjectChip"
+
+// AET-07 — shape of the latest quality.gate.* event the backend emits
+// when the workflow runner evaluates the quality_guardian_approval
+// gate via policy_check. Mirrors the contract in src/core/quality_gate.py.
+interface QualityGateViolation {
+  rule_id: string
+  rule_name: string
+  severity: "enforce" | "warn" | "info"
+  target_path: string | null
+  agent_id: string | null
+  snippet: string
+  rationale: string
+  fix_hint: string | null
+  lesson_ref: string | null
+}
+interface QualityGateState {
+  verdict: "BLOCK" | "PASS_WITH_WARNINGS" | "PASS"
+  violations: QualityGateViolation[]
+  summary: {
+    enforce_count?: number
+    warn_count?: number
+    info_count?: number
+    total_emissions_checked?: number
+  }
+  stage?: string
+  rework_cycle?: number
+  /** ISO timestamp populated when we receive the event. Used to age out
+   *  stale blocks if the request transitions to completed/failed. */
+  received_at: string
+}
 
 // Map filename extension → icon component
 function fileIcon(path: string) {
@@ -40,6 +70,16 @@ export function RequestDetailPage() {
   const [data, setData] = useState<any>(null)
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set())
   const [polling, setPolling] = useState(true)
+  // AET-07 — latest quality.gate.* state for this request, captured via
+  // the WebSocket activity stream. v1 limitation: state is session-only
+  // (not persisted in the request row). On page refresh the chip starts
+  // empty until the next gate event fires; for an in-flight request
+  // currently in rework, that's usually within a few minutes. A future
+  // refinement could persist the latest gate decision on the requests
+  // table so reloads recover the chip immediately.
+  const [qualityGate, setQualityGate] = useState<QualityGateState | null>(null)
+  const [gateExpanded, setGateExpanded] = useState(false)
+  const wsRef = useRef<WebSocket | null>(null)
 
   const loadData = async () => {
     if (!requestId) return
@@ -59,6 +99,60 @@ export function RequestDetailPage() {
     }, 3000)
     return () => clearInterval(interval)
   }, [requestId, polling])
+
+  // AET-07 — subscribe to the global activity WebSocket to catch
+  // quality.gate.* events as they fire on the workflow runner. The
+  // event payload's request_id field gates which events we keep.
+  // The backend emits quality.gate.failed when policy_check returns
+  // verdict='BLOCK' and quality.gate.passed for PASS / PASS_WITH_WARNINGS.
+  // Updating the local state replaces the previous gate snapshot —
+  // if a rework cycle's re-evaluation passes, the chip goes green
+  // (or disappears) immediately without needing a manual refresh.
+  useEffect(() => {
+    if (!requestId) return
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/activity`)
+    wsRef.current = ws
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data)
+        if (
+          (msg.type === "quality.gate.failed" || msg.type === "quality.gate.passed") &&
+          msg.data?.request_id === requestId
+        ) {
+          setQualityGate({
+            verdict: msg.data.verdict,
+            violations: msg.data.violations || [],
+            summary: msg.data.summary || {},
+            stage: msg.data.stage,
+            rework_cycle: msg.data.rework_cycle,
+            received_at: msg.timestamp || new Date().toISOString(),
+          })
+        }
+      } catch {
+        // Malformed event; nothing we can do. Other subscribers
+        // (BuildChatPanel, SystemHealthPill) catch the same way.
+      }
+    }
+    ws.onerror = () => { /* visible in browser console */ }
+    return () => {
+      ws.close()
+      wsRef.current = null
+    }
+  }, [requestId])
+
+  // Clear the gate banner when the request reaches a terminal state.
+  // A BLOCK that's no longer relevant (request completed or was
+  // cancelled) shouldn't keep a red chip up forever; the violations
+  // are still in the agent traces below for audit.
+  useEffect(() => {
+    if (!data) return
+    if (["completed", "cancelled"].includes(data.status) && qualityGate?.verdict === "BLOCK") {
+      // Don't auto-clear failed-status: if the request failed AT
+      // the gate, the chip is the diagnostic.
+      if (data.status === "completed") setQualityGate(null)
+    }
+  }, [data?.status])
 
   const toggleAgent = (id: string) => {
     setExpandedAgents((prev) => {
@@ -96,7 +190,21 @@ export function RequestDetailPage() {
             </div>
             <p style={{ marginTop: 8, color: "var(--text-secondary)", fontSize: 14, lineHeight: 1.6 }}>{data.description}</p>
           </div>
-          <StatusBadge status={data.status} size="md" />
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+            <StatusBadge status={data.status} size="md" />
+            {/* AET-07 — Quality gate chip. Renders when the workflow's
+                quality_guardian_approval gate emitted a quality.gate.*
+                event for this request. Red when BLOCK (with violation
+                count); yellow when PASS_WITH_WARNINGS; green when PASS.
+                Click to expand the violations panel below the header. */}
+            {qualityGate && (
+              <QualityGateChip
+                state={qualityGate}
+                expanded={gateExpanded}
+                onClick={() => setGateExpanded(!gateExpanded)}
+              />
+            )}
+          </div>
         </div>
         <div style={{ marginTop: 12, display: "flex", gap: 16, fontSize: 13, color: "var(--text-muted)" }}>
           <span>Type: <span style={{ color: "var(--text-secondary)", textTransform: "capitalize" }}>{data.task_type?.replace("_", " ")}</span></span>
@@ -104,6 +212,12 @@ export function RequestDetailPage() {
           <span>Created: {new Date(data.created_at).toLocaleString()}</span>
           {data.total_cost?.cost_usd > 0 && <span>Cost: ${data.total_cost.cost_usd}</span>}
         </div>
+        {/* Expandable violations panel — only mounted when the chip
+            is in expanded state. Shows each violation's rule_id +
+            severity + file + L11-L21 reference + snippet + fix_hint. */}
+        {qualityGate && gateExpanded && (
+          <QualityGateViolations state={qualityGate} />
+        )}
         {/* Workflow/Story Board link — visible for every request type. The
             Story Board page now renders a workflow-driven pipeline view that
             adapts to whichever workflow the request actually ran (feature,
@@ -398,7 +512,188 @@ export function RequestDetailPage() {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.4; }
         }
+        @keyframes qg-pulse {
+          0%, 100% {
+            box-shadow: 0 0 6px color-mix(in srgb, var(--danger) 30%, transparent);
+          }
+          50% {
+            box-shadow: 0 0 14px color-mix(in srgb, var(--danger) 60%, transparent);
+          }
+        }
       `}</style>
+    </div>
+  )
+}
+
+
+// ── AET-07 — Quality Gate chip + expandable violations panel ──────────────
+
+function QualityGateChip({
+  state, expanded, onClick,
+}: {
+  state: QualityGateState
+  expanded: boolean
+  onClick: () => void
+}) {
+  const isBlock = state.verdict === "BLOCK"
+  const isWarn = state.verdict === "PASS_WITH_WARNINGS"
+  const color = isBlock ? "var(--danger)" : isWarn ? "var(--warning, #d4a017)" : "var(--success)"
+  const bg = isBlock
+    ? "color-mix(in srgb, var(--danger) 14%, transparent)"
+    : isWarn
+      ? "color-mix(in srgb, var(--warning, #d4a017) 14%, transparent)"
+      : "color-mix(in srgb, var(--success) 14%, transparent)"
+  const enforce = state.summary.enforce_count ?? 0
+  const warn = state.summary.warn_count ?? 0
+  const totalShown = isBlock ? enforce : warn
+  const label = isBlock
+    ? `🛑 BLOCKED · QUALITY GATE · ${enforce} violation${enforce === 1 ? "" : "s"}`
+    : isWarn
+      ? `⚠ QUALITY WARNINGS · ${warn}`
+      : `✓ QUALITY GATE PASSED`
+  const Icon = isBlock ? ShieldAlert : ShieldCheck
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={
+        state.stage
+          ? `${state.verdict} at ${state.stage}${state.rework_cycle != null ? ` (rework cycle ${state.rework_cycle})` : ""}`
+          : state.verdict
+      }
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 6,
+        padding: "4px 10px", borderRadius: "var(--radius)",
+        fontSize: 11, fontWeight: 700, fontFamily: "var(--font-mono)",
+        letterSpacing: 0.5,
+        background: bg,
+        color,
+        border: `1px solid ${color}`,
+        cursor: "pointer",
+        textTransform: "uppercase",
+        animation: isBlock ? "qg-pulse 1.6s ease-in-out infinite" : undefined,
+      }}
+    >
+      <Icon size={11} />
+      <span>{label}</span>
+      {totalShown > 0 && (
+        expanded
+          ? <ChevronDown size={11} />
+          : <ChevronRight size={11} />
+      )}
+    </button>
+  )
+}
+
+function QualityGateViolations({ state }: { state: QualityGateState }) {
+  // Sort: enforce > warn > info so the most critical fixes float to top.
+  const order: Record<string, number> = { enforce: 0, warn: 1, info: 2 }
+  const sorted = [...state.violations].sort(
+    (a, b) => (order[a.severity] ?? 9) - (order[b.severity] ?? 9),
+  )
+  if (sorted.length === 0) {
+    return (
+      <div style={{
+        marginTop: 12, padding: "10px 14px",
+        background: "var(--bg-hover)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        fontSize: 12, color: "var(--text-muted)",
+      }}>
+        No violations to show.
+      </div>
+    )
+  }
+  return (
+    <div style={{
+      marginTop: 12, padding: 14,
+      background: "var(--bg-hover)",
+      border: "1px solid var(--border)",
+      borderRadius: "var(--radius)",
+      display: "flex", flexDirection: "column", gap: 10,
+    }}>
+      <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+        policy_check evaluated {state.summary.total_emissions_checked ?? "?"} emission(s) at {state.stage || "quality_guardian_approval"}
+        {state.rework_cycle != null ? ` · rework cycle ${state.rework_cycle}` : ""}
+      </div>
+      {sorted.map((v, i) => {
+        const sevColor =
+          v.severity === "enforce" ? "var(--danger)" :
+          v.severity === "warn" ? "var(--warning, #d4a017)" :
+          "var(--text-muted)"
+        return (
+          <div key={`${v.rule_id}-${i}`} style={{
+            background: "var(--bg-card)",
+            border: `1px solid ${sevColor}`,
+            borderLeft: `3px solid ${sevColor}`,
+            borderRadius: "var(--radius)",
+            padding: "10px 12px",
+            display: "flex", flexDirection: "column", gap: 6,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{
+                fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700,
+                color: sevColor,
+                textTransform: "uppercase", letterSpacing: 0.5,
+              }}>
+                [{v.rule_id}] {v.severity}
+              </span>
+              {v.lesson_ref && (
+                <span style={{
+                  padding: "1px 6px", borderRadius: 2,
+                  background: "var(--bg-hover)",
+                  color: "var(--text-secondary)",
+                  border: "1px solid var(--border)",
+                  fontFamily: "var(--font-mono)", fontSize: 10,
+                }}>
+                  {v.lesson_ref}
+                </span>
+              )}
+              <span style={{ fontSize: 12, color: "var(--text-primary)", fontWeight: 600 }}>
+                {v.rule_name}
+              </span>
+            </div>
+            {v.target_path && (
+              <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                📄 {v.target_path}
+                {v.agent_id && <span style={{ marginLeft: 8, opacity: 0.7 }}>· {v.agent_id}</span>}
+              </div>
+            )}
+            {v.snippet && (
+              <pre style={{
+                margin: 0, padding: "6px 10px",
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--border)",
+                borderRadius: 2,
+                fontSize: 11, fontFamily: "var(--font-mono)",
+                color: "var(--text-secondary)",
+                whiteSpace: "pre-wrap", wordBreak: "break-word",
+                maxHeight: 80, overflow: "auto",
+              }}>
+                {v.snippet}
+              </pre>
+            )}
+            {v.rationale && (
+              <div style={{ fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.4 }}>
+                <strong style={{ color: "var(--text-primary)" }}>Why: </strong>
+                {v.rationale}
+              </div>
+            )}
+            {v.fix_hint && (
+              <div style={{
+                fontSize: 11, color: "var(--text-primary)", lineHeight: 1.4,
+                padding: "6px 10px",
+                background: "color-mix(in srgb, var(--accent) 8%, transparent)",
+                border: "1px solid color-mix(in srgb, var(--accent) 25%, transparent)",
+                borderRadius: 2,
+              }}>
+                <strong style={{ color: "var(--accent)" }}>Fix: </strong>
+                {v.fix_hint}
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }
