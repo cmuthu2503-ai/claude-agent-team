@@ -1,0 +1,8 @@
+{
+  "embed_model": "fake-3 (CI floor; deterministic lexical anchors)",
+  "k": 5,
+  "recall_at_k": 1.0,
+  "mrr": 1.0,
+  "queries": 7,
+  "note": "Recorded by KB-12. The gold set (tests/data/kb_eval_gold.yaml) anchors each query on a distinctive lexical term, so the Postgres FTS arm carries the match deterministically — recall@5 and MRR are a perfect 1.0 even with the non-semantic fake embedder. This is the CI regression floor (gated in tests/test_knowledge_eval.py at recall>=0.95, MRR>=0.80). To record a real-embedder baseline, run `python -m src.knowledge.eval` (local fastembed model + Postgres); it overwrites this file with the live embed_model and metrics."
+}

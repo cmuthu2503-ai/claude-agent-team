@@ -14,12 +14,14 @@ name: agent-team-prod
 #   - `docker compose -f docker-compose.prod.yml pull`  pulls from Docker Hub
 #   - `docker compose -f docker-compose.prod.yml up`    uses the named image (build on miss)
 #
-# Required files BEFORE building (4 secrets — see ./secrets/README.md):
+# Required files BEFORE building (7 secrets — see ./secrets/README.md):
 #   ./secrets/anthropic_aws_api_key.txt
 #   ./secrets/anthropic_aws_workspace_id.txt
 #   ./secrets/github_token.txt
 #   ./secrets/firecrawl_api_key.txt
 #   ./secrets/jwt_secret.txt
+#   ./secrets/kb_pg_password.txt   (KB-01 — Postgres password)
+#   (KB embeddings are local — fastembed ONNX, KB-13a — no embedding key needed)
 
 services:
   backend:
@@ -49,14 +51,26 @@ services:
       # ── GitHub auto-push (research publisher) ────────────────────────────────
       - GITHUB_REPO=${GITHUB_REPO:-cmuthu2503-ai/claude-agent-team}
       - GITHUB_BRANCH=${GITHUB_BRANCH:-main}
+      # ── KB-01 — Knowledge Base datastore (Postgres + pgvector) ───────────────
+      # Postgres password comes from a Docker secret. Embeddings are LOCAL
+      # (fastembed ONNX, KB-13a) — no embedding API key needed.
+      - KB_PG_HOST=${KB_PG_HOST:-postgres}
+      - KB_PG_PORT=${KB_PG_PORT:-5432}
+      - KB_PG_USER=${KB_PG_USER:-agentteam}
+      - KB_PG_DB=${KB_PG_DB:-agentteam_kb}
+      - FASTEMBED_CACHE_PATH=/app/.fastembed_cache
     secrets:
       - anthropic_aws_api_key
       - anthropic_aws_workspace_id
       - github_token
       - firecrawl_api_key
       - jwt_secret
+      - kb_pg_password
     networks:
       - prod-net
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
       interval: 15s
@@ -74,6 +88,35 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+
+  # KB-01 — Knowledge Base datastore (Postgres 16 + pgvector). Reads its
+  # password from the kb_pg_password Docker secret via the *_FILE convention
+  # the official postgres image supports.
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agent-team-prod-postgres
+    environment:
+      - POSTGRES_USER=${KB_PG_USER:-agentteam}
+      - POSTGRES_PASSWORD_FILE=/run/secrets/kb_pg_password
+      - POSTGRES_DB=${KB_PG_DB:-agentteam_kb}
+    secrets:
+      - kb_pg_password
+    volumes:
+      - agent-team-prod-pgdata:/var/lib/postgresql/data
+    networks:
+      - prod-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KB_PG_USER:-agentteam} -d ${KB_PG_DB:-agentteam_kb}"]
+      interval: 15s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
 
   frontend:
     image: cmuthu2503/agent-team-frontend:latest
@@ -111,6 +154,7 @@ volumes:
   agent-team-prod-data:
   agent-team-prod-reports:
   agent-team-prod-backups:
+  agent-team-prod-pgdata:   # KB-01
 
 networks:
   prod-net:
@@ -127,3 +171,5 @@ secrets:
     file: ./secrets/firecrawl_api_key.txt
   jwt_secret:
     file: ./secrets/jwt_secret.txt
+  kb_pg_password:        # KB-01 — Knowledge Base Postgres password
+    file: ./secrets/kb_pg_password.txt
