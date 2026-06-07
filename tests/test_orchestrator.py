@@ -21,6 +21,16 @@ async def setup(tmp_path):
     await state.close()
 
 
+async def _run_to_completion(orchestrator, *requests):
+    """``submit()`` runs the workflow in a background asyncio task and returns
+    immediately. Await those tasks so assertions observe the finished state
+    (subtasks created, status terminal, events emitted) instead of racing it."""
+    for r in requests:
+        task = orchestrator._background_tasks.get(r.request_id)
+        if task is not None:
+            await task
+
+
 async def test_submit_request_creates_in_state(setup):
     orchestrator, state, events = setup
     request = await orchestrator.submit(
@@ -40,6 +50,7 @@ async def test_submit_creates_subtasks(setup):
         task_type="feature_request",
         created_by="testuser",
     )
+    await _run_to_completion(orchestrator, request)
     subtasks = await state.get_subtasks_for_request(request.request_id)
     assert len(subtasks) > 0
     agent_ids = [s.agent_id for s in subtasks]
@@ -53,6 +64,7 @@ async def test_submit_completes_with_mock_executor(setup):
         task_type="doc_request",
         created_by="testuser",
     )
+    await _run_to_completion(orchestrator, request)
     fetched = await state.get_request(request.request_id)
     assert fetched.status == RequestStatus.COMPLETED
 
@@ -65,6 +77,7 @@ async def test_events_emitted(setup):
         task_type="doc_request",
         created_by="testuser",
     )
+    await _run_to_completion(orchestrator, request)
     collected = []
     while not queue.empty():
         collected.append(await queue.get())
@@ -93,6 +106,7 @@ async def test_doc_workflow_agents_called_in_order(setup):
         task_type="doc_request",
         created_by="testuser",
     )
+    await _run_to_completion(orchestrator, request)
     collected = []
     while not queue.empty():
         collected.append(await queue.get())

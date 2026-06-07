@@ -42,13 +42,14 @@ async def test_seed_creates_data(tmp_path):
     assert len(requests) == 5
 
     users = await store.list_users()
-    assert len(users) == 3
+    assert len(users) == 4
 
-    stories = await store.get_stories_for_request("REQ-001")
-    assert len(stories) == 4
+    # The seed attaches its 5 user stories to REQ-042 (the JWT-auth demo request).
+    stories = await store.get_stories_for_request("REQ-042")
+    assert len(stories) == 5
 
     deployments = await store.list_deployments(limit=5)
-    assert len(deployments) == 1
+    assert len(deployments) == 3
 
     await store.close()
 

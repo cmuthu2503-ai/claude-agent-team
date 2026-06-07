@@ -192,7 +192,7 @@ def test_arch_reviewer_passes_on_empty_output(runner):
 # Test 7: Combined gate includes arch review in failure feedback
 # ---------------------------------------------------------------------------
 
-def test_combined_gate_includes_arch_violation_in_feedback(runner):
+async def test_combined_gate_includes_arch_violation_in_feedback(runner):
     """When arch review fails, _check_combined_gate must include the
     ARCHITECTURE VIOLATIONS section in the returned reason string."""
     artifacts = {
@@ -200,8 +200,7 @@ def test_combined_gate_includes_arch_violation_in_feedback(runner):
         "arch_review_report": MISSING_ROUTER_REPORT,
         "tester_specialist_output": "READY FOR DEPLOYMENT",
     }
-    import asyncio
-    result = runner._check_combined_gate(artifacts, request_id="REQ-TEST")
+    result = await runner._check_combined_gate(artifacts, request_id="REQ-TEST")
     assert result["passed"] is False
     assert "ARCHITECTURE VIOLATIONS" in result["reason"]
     assert "CRITICAL" in result["reason"]
@@ -211,12 +210,12 @@ def test_combined_gate_includes_arch_violation_in_feedback(runner):
 # Test 8: Combined gate passes when all three reviewers approve
 # ---------------------------------------------------------------------------
 
-def test_combined_gate_passes_when_all_reviewers_approve(runner):
+async def test_combined_gate_passes_when_all_reviewers_approve(runner):
     """All three sub-gates (review, arch, test) green → combined gate passes."""
     artifacts = {
         "review_report": "## Code Review Report\n**APPROVED** — no issues.",
         "arch_review_report": CLEAN_CODE_REPORT,
         "tester_specialist_output": "READY FOR DEPLOYMENT",
     }
-    result = runner._check_combined_gate(artifacts, request_id="REQ-TEST")
+    result = await runner._check_combined_gate(artifacts, request_id="REQ-TEST")
     assert result["passed"] is True

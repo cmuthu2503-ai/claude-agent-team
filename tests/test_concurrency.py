@@ -109,6 +109,9 @@ def _stub_executor_with_real_resolver(
     ex.client = None
     ex.inference_geo = None
     ex._busy_agents = {}
+    # KB-09: __init__ is bypassed, so set the attribute execute() reads via
+    # _resolve_kb_for_request. None → KB grounding is skipped (no behaviour change).
+    ex.kb_subsystem = None
 
     # Minimal registry that returns a real BaseAgent subclass instance
     # for each agent_id — the agent's process_task does the actual
