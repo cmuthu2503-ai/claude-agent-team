@@ -1,0 +1,450 @@
+# Quality Rules — Phase AE-3 declarative rule catalog
+#
+# Loaded at agent init by the `policy_check` tool (AET-03, not yet shipped).
+# The `quality_guardian` agent calls policy_check against every non-trivial
+# agent output; rules with `severity: enforce` BLOCK the workflow at the
+# `quality_guardian_approval` gate.
+#
+# Schema reference: docs/quality-rules-schema.md (AET-01).
+#
+# Each rule's `lesson_ref` links back to docs/agent-lessons-learned.md so
+# the audit trail "why does this rule exist" stays one click away.
+#
+# Reload semantics: edit this file → `docs compose restart backend`. There
+# is no hot-reload. This matches the rest of config/*.yaml.
+
+version: 1
+
+defaults:
+  enforce_blocks: true       # severity=enforce halts the workflow at quality gate
+  warn_annotates: true       # severity=warn appended to quality_report, no block
+  info_logs_only: true       # severity=info logs to structlog, no UI surface
+
+rules:
+
+  # ── L11 thematic — logging discipline ──────────────────────────────────
+
+  - id: QR-001
+    name: no_print_in_production
+    severity: enforce
+    enabled: true
+    matcher:
+      type: regex
+      pattern: '\bprint\s*\('
+    applies_to:
+      files:
+        - 'src/**/*.py'
+        - 'supervisor/**/*.py'
+      exclude_files:
+        - 'tests/**'
+        - 'scripts/**'
+        - '**/__pycache__/**'
+    rationale: |
+      Production code must use structlog (configured globally) rather
+      than print() so logs are captured in the supervisor pipeline and
+      cost/token observability. print() bypasses the logger and is
+      invisible in production debugging — it also writes to stdout
+      unstructured, which makes Docker log parsing useless.
+    lesson_ref: L11
+    fix_hint: |
+      Replace `print(...)` with `logger.info(...)` (or `logger.warning`
+      / `logger.error` per severity). The structlog logger is set up
+      at module level in every src/ file; if missing, add at the top:
+          import structlog
+          logger = structlog.get_logger()
+      Use structured event names (snake_case verb_object) as the first
+      argument, with details as kwargs:
+          logger.info("user_login_succeeded", user_id=user.id)
+    introduced_in: "2026-05-26"
+
+  - id: QR-002
+    name: no_console_log_in_production
+    severity: enforce
+    enabled: true
+    matcher:
+      type: regex
+      pattern: '\bconsole\.(log|debug|info|warn|error)\s*\('
+    applies_to:
+      files:
+        - 'frontend/src/**/*.ts'
+        - 'frontend/src/**/*.tsx'
+      exclude_files:
+        - 'frontend/src/tests/**'
+        - 'frontend/src/**/*.test.ts'
+        - 'frontend/src/**/*.test.tsx'
+    rationale: |
+      Frontend production code must not call console.* directly. The
+      project uses error boundaries + the cyberpunk overlay's ticker
+      for user-visible signals; dev-only debug noise should be guarded
+      behind `import.meta.env.DEV` per the L20 canary pattern in
+      BuildPlanView.tasksByFeature.
+    fix_hint: |
+      Wrap dev-only logging behind the import.meta.env.DEV guard:
+          if (import.meta.env.DEV) console.warn("[Component] ...")
+      For user-visible errors, set component state or emit a toast
+      through the existing notification system.
+    introduced_in: "2026-05-26"
+
+  # ── L15 — token-truncated emissions on large files ────────────────────
+
+  - id: QR-003
+    name: large_file_requires_search_replace
+    severity: enforce
+    enabled: true
+    matcher:
+      type: composite
+      op: AND
+      children:
+        - type: file_metadata
+          property: line_count
+          operator: '>'
+          threshold: 470
+        - type: emission_metadata
+          field: tool_name
+          operator: equals
+          value: file_write
+    applies_to:
+      agents:
+        - backend_specialist
+        - frontend_specialist
+        - code_reviewer
+        - tester_specialist
+    rationale: |
+      file_write of long content was the root cause of REQ-7F2E07's
+      3-cycle response-length truncation. Files >470 lines must be
+      modified via search_replace (which only sends the surgical diff)
+      to stay under the model's response budget. The 470 threshold
+      came from measuring at which file size the 8k-token response
+      cap started silently truncating mid-file.
+    lesson_ref: L15
+    fix_hint: |
+      Switch from file_write to search_replace. Steps:
+        1. Read the file first (file_read) to confirm the anchor.
+        2. Pick ≥3 contiguous lines that uniquely identify the spot.
+        3. Call search_replace with that anchor + the replacement.
+      For multi-spot edits in the same file, issue multiple
+      search_replace calls rather than reverting to file_write.
+    introduced_in: "2026-05-26"
+
+  # ── L18 — test-case UPSERT requires deterministic IDs ─────────────────
+
+  - id: QR-004
+    name: test_case_ids_deterministic
+    severity: warn
+    enabled: true
+    matcher:
+      type: regex
+      pattern: 'TC-[0-9a-fA-F]{8,}'
+      flags:
+        - multiline
+    applies_to:
+      files:
+        - 'tests/**/test_*.py'
+        - 'tests/**/*_test.py'
+      agents:
+        - tester_specialist
+    rationale: |
+      Test cases need deterministic IDs across rework cycles so the
+      UPSERT path in src/state/sqlite_store.py::create_test_case works
+      correctly. UUID-based IDs (TC- followed by 8+ hex chars) would
+      create new test_case rows on every cycle instead of updating
+      existing ones, breaking coverage stats and triggering the
+      UNIQUE constraint guard that L18 documented.
+    lesson_ref: L18
+    fix_hint: |
+      Use sequential per-request IDs: TC-001, TC-002, ..., TC-NNN.
+      Scope: unique within a single request, NOT globally. The
+      schema's UPSERT on test_id makes deterministic IDs safe.
+      See L18 in docs/agent-lessons-learned.md for the underlying
+      schema fix that made this safe.
+    introduced_in: "2026-05-26"
+
+  # ── L19 — atomic-task contract: primary_file LOC bounds ───────────────
+
+  - id: QR-005
+    name: primary_file_loc_under_decomposed
+    severity: warn
+    enabled: true
+    matcher:
+      type: file_metadata
+      property: line_count
+      operator: '>'
+      threshold: 500
+    applies_to:
+      agents:
+        - backend_specialist
+        - frontend_specialist
+    rationale: |
+      BPD atomic-task contract specifies primary_file should land in
+      50-300 LOC. Output >500 LOC on a single task signals the task
+      decomposition was too coarse — the agent should have refused
+      and asked the user to split the task instead of producing a
+      monolith that's expensive to review and risky to commit.
+    lesson_ref: L19
+    fix_hint: |
+      If you find yourself emitting >500 LOC for a single
+      primary_file, emit a one-line response asking the user to
+      split this task at the BPD Pass-3 level rather than committing
+      the oversized file. The atomic-task contract is intentional —
+      smaller units are review-friendly and rework-friendly.
+    introduced_in: "2026-05-26"
+
+  - id: QR-006
+    name: primary_file_loc_over_decomposed
+    severity: info
+    enabled: true
+    matcher:
+      type: file_metadata
+      property: line_count
+      operator: '<'
+      threshold: 25
+    applies_to:
+      agents:
+        - backend_specialist
+        - frontend_specialist
+      exclude_files:
+        - '**/__init__.py'
+        - '**/index.ts'
+        - '**/types.ts'
+        - 'config/**/*.yaml'
+    rationale: |
+      BPD atomic-task contract sets a lower bound of ~50 LOC per
+      primary_file. Output <25 LOC may indicate over-decomposition
+      at Pass-3 — the task was too small to justify a dedicated row.
+      Info-only because some real tasks (e.g., a config flag toggle,
+      a new dataclass) legitimately produce small files.
+    lesson_ref: L19
+    fix_hint: |
+      No fix required; this is telemetry. If this fires repeatedly
+      under one feature, consider consolidating those tasks at the
+      BPD Pass-3 layer.
+    introduced_in: "2026-05-26"
+
+  # ── Security — secret/key detection ───────────────────────────────────
+
+  - id: QR-007
+    name: no_aws_access_key_hardcoded
+    severity: enforce
+    enabled: true
+    matcher:
+      type: regex
+      pattern: 'AKIA[0-9A-Z]{16}'
+    applies_to:
+      files:
+        - '**/*.py'
+        - '**/*.ts'
+        - '**/*.tsx'
+        - '**/*.js'
+        - '**/*.yaml'
+        - '**/*.yml'
+        - '**/*.json'
+        - '**/*.env*'
+      exclude_files:
+        - '**/test_*.py'
+        - '**/*.test.ts'
+        - 'docs/**/*.md'
+    rationale: |
+      AWS access keys (AKIA-prefixed) committed to the repository
+      are an immediate-revocation-required incident. The pattern is
+      AWS-defined and detectable with high confidence (no false
+      positive risk on a 20-char fixed-format identifier). Tests
+      and docs may legitimately reference example keys; src/ never.
+    fix_hint: |
+      AWS credentials must come from environment variables or AWS
+      Secrets Manager via the existing src/utils/secrets.py
+      read_secret() helper. Never paste credentials into source.
+      If this rule fired on a real key, revoke it in AWS console
+      immediately — committed keys are scraped within minutes.
+    introduced_in: "2026-05-26"
+
+  - id: QR-008
+    name: no_anthropic_aws_workspace_id_hardcoded
+    severity: enforce
+    enabled: true
+    matcher:
+      type: regex
+      pattern: 'wrkspc_[a-zA-Z0-9]{20,}'
+    applies_to:
+      files:
+        - '**/*.py'
+        - '**/*.ts'
+        - '**/*.tsx'
+        - '**/*.yaml'
+      exclude_files:
+        - '**/test_*.py'
+        - 'docs/**/*.md'
+    rationale: |
+      Anthropic AWS workspace IDs (wrkspc_*) identify the specific
+      AWS marketplace tenant and indirectly grant API access when
+      paired with leaked credentials. Codebase-specific check — this
+      project uses Claude Platform on AWS so the pattern is
+      deterministic (per docs/setup-claude-platform-on-aws.md).
+    fix_hint: |
+      Workspace IDs belong in environment variables only. The
+      AnthropicAWS SDK reads ANTHROPIC_AWS_WORKSPACE_ID from env;
+      see src/agents/executor.py for the pattern.
+    introduced_in: "2026-05-26"
+
+  - id: QR-009
+    name: no_hardcoded_password_assignment
+    severity: enforce
+    enabled: true
+    matcher:
+      type: regex
+      # Double-quoted YAML + escaped backslashes to keep the
+      # ["'] character classes readable. Single-quoted YAML treats
+      # \' as a literal two-char sequence, not an escape — first
+      # authoring tried that and tripped the parser.
+      pattern: "(?i)(password|passwd|api_key|api_secret|access_token)\\s*=\\s*[\"'][^\"']{6,}[\"']"
+    applies_to:
+      files:
+        - 'src/**/*.py'
+        - 'supervisor/**/*.py'
+        - 'frontend/src/**/*.ts'
+        - 'frontend/src/**/*.tsx'
+      exclude_files:
+        - 'tests/**'
+        - '**/test_*.py'
+        - '**/*.test.ts'
+        - '**/conftest.py'
+    rationale: |
+      Hardcoded credentials in source land in git history forever
+      even if quickly removed. Tests may legitimately use fixture
+      credentials; production code never should. The 6-char minimum
+      reduces false positives on placeholder values like
+      `password = ""`.
+    fix_hint: |
+      Read credentials from environment variables via os.environ or
+      from secret files via src/utils/secrets.py::read_secret. For
+      testing, use fixtures in conftest.py (excluded from this rule).
+    introduced_in: "2026-05-26"
+
+  # ── Security — code-injection vectors ──────────────────────────────────
+
+  - id: QR-010
+    name: no_sql_fstring_interpolation
+    severity: enforce
+    enabled: true
+    matcher:
+      # f-string after db.execute( is the simplest, highest-confidence
+      # SQL-injection tell. The string-concat variant (`+`) has too
+      # many false positives on legitimate dynamic SQL builders, so
+      # we leave it out of v1 and rely on the f-string check.
+      # Pattern uses double-quoted YAML + escaped backslashes to dodge
+      # the YAML quoting maze that a single-quoted pattern with mixed
+      # ["'] character classes triggered on first authoring.
+      type: regex
+      pattern: "db\\.execute\\s*\\(\\s*f[\"']"
+    applies_to:
+      files:
+        - 'src/**/*.py'
+        - 'supervisor/**/*.py'
+    rationale: |
+      SQL injection via f-string interpolation into db.execute is the
+      most common backend vulnerability class. Every db.execute call
+      in this codebase must use the parameterized form:
+      `db.execute(sql, (param1, param2))` — the `?` placeholders bind
+      safely. f-strings interpolated into the SQL string itself
+      defeat parameterization entirely.
+    fix_hint: |
+      Convert to parameterized form:
+        BAD:  await db.execute(f"SELECT * FROM users WHERE id={uid}")
+        GOOD: await db.execute("SELECT * FROM users WHERE id=?", (uid,))
+      The aiosqlite driver substitutes safely. For dynamic table or
+      column names (rare), validate against a whitelist in code
+      before interpolating, never accept from user input.
+    introduced_in: "2026-05-26"
+
+  - id: QR-011
+    name: no_python_eval_or_exec
+    severity: enforce
+    enabled: true
+    matcher:
+      type: regex
+      pattern: '(?:^|\s|=|\()(?:eval|exec)\s*\('
+    applies_to:
+      files:
+        - 'src/**/*.py'
+        - 'supervisor/**/*.py'
+      exclude_files:
+        - 'tests/**'
+        - 'src/tools/code_exec.py'
+    rationale: |
+      Python eval/exec on agent-generated content is a classic remote
+      code execution vector. The legitimate exception is
+      src/tools/code_exec.py which sandboxes user-supplied code in a
+      controlled environment; everywhere else is forbidden.
+    fix_hint: |
+      If you need to evaluate user-supplied configuration, parse it
+      as YAML or JSON (safe). If you need to dispatch by name, use
+      a lookup dict mapping name → callable instead of eval. If
+      you genuinely need sandboxed code execution, route through
+      src/tools/code_exec.py rather than calling eval/exec inline.
+    introduced_in: "2026-05-26"
+
+  # ── Codebase convention — structured logging ──────────────────────────
+
+  - id: QR-012
+    name: structured_log_event_name
+    severity: warn
+    enabled: true
+    matcher:
+      type: regex
+      # Double-quoted YAML to allow the ["'] character class — single-
+      # quoted YAML doesn't escape \' the way regex syntax wants.
+      pattern: "logger\\.(?:debug|info|warning|warn|error|critical|exception)\\s*\\(\\s*[\"'][A-Z]"
+    applies_to:
+      files:
+        - 'src/**/*.py'
+        - 'supervisor/**/*.py'
+      exclude_files:
+        - 'tests/**'
+    rationale: |
+      Structlog convention in this codebase: the first arg is an
+      event_name in snake_case (e.g., "user_login_succeeded",
+      "deploy_health_probe_failed"). A capitalized first character
+      signals a free-form English sentence, which makes log parsing
+      and grep harder. The L21-doc-companion lesson is that machine-
+      parseable event names beat prose every time.
+    fix_hint: |
+      Convert "Something happened to X" → snake_case event + kwargs:
+        BAD:  logger.info("User logged in successfully", user_id=uid)
+        GOOD: logger.info("user_login_succeeded", user_id=uid)
+      The structlog renderer formats both the same; the snake_case
+      version is grep-friendly and supports automatic dashboarding.
+    introduced_in: "2026-05-26"
+
+  # ── TypeScript quality ────────────────────────────────────────────────
+
+  - id: QR-013
+    name: no_typescript_any_type
+    severity: warn
+    enabled: true
+    matcher:
+      type: regex
+      pattern: ':\s*any\b|<\s*any\s*>|as\s+any\b'
+    applies_to:
+      files:
+        - 'frontend/src/**/*.ts'
+        - 'frontend/src/**/*.tsx'
+      exclude_files:
+        - 'frontend/src/api/schema.d.ts'
+        - 'frontend/src/tests/**'
+        - '**/*.test.ts'
+        - '**/*.test.tsx'
+    rationale: |
+      `: any`, `<any>`, and `as any` defeat TypeScript's checking.
+      The project's API client (frontend/src/lib/api.ts) intentionally
+      uses any for the generic T parameter, but downstream components
+      should declare proper response types — typically pulled from
+      frontend/src/api/schema.d.ts (auto-generated by
+      `npm run generate-types`). Tests are excluded because mocking
+      sometimes requires escape hatches.
+    fix_hint: |
+      Replace `any` with the actual type. If the response shape is
+      known, import from frontend/src/api/schema.d.ts. If the shape
+      is genuinely dynamic, prefer `unknown` (forces type-narrowing
+      before use) over `any`. If you need a temporary escape hatch,
+      use `// eslint-disable-next-line @typescript-eslint/no-explicit-any`
+      with a 1-line rationale comment.
+    introduced_in: "2026-05-26"

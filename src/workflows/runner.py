@@ -73,10 +73,21 @@ class WorkflowRunner:
         code_commit_handler: Any = None,
         publish_handler: Any = None,
         materialize_handler: Any = None,
+        # AET-06 — quality_guardian_approval gate enforcement.
+        # Both optional for backward compat with existing tests that
+        # construct WorkflowRunner without the AE plumbing. When either
+        # is missing, _check_combined_gate falls back to the legacy
+        # text-parse behavior (agent prose verdict only) and skips the
+        # quality.gate.* event emission. Loud-fallback: structlog logs
+        # `policy_check_unavailable` so the operator can spot the gap.
+        get_policy_check_tool: Callable[[], Any] | None = None,
+        events: Any = None,
     ) -> None:
         self.executor = executor
         self._code_commit_handler = code_commit_handler
         self._publish_handler = publish_handler
+        self._get_policy_check_tool = get_policy_check_tool
+        self._events = events
         # Fix A: invoked RIGHT AFTER the development stage completes
         # (before review/testing). Writes the agent's ``### Full Source:``
         # blocks to disk + runs lint/test so the reviewer's file_read at
@@ -225,9 +236,49 @@ class WorkflowRunner:
                         artifacts["code_commit_error"] = commit_error
                         return artifacts
 
+                # Security gate: runs after SECURITY stage
+                if stage_id == "security":
+                    sec_result = self._check_security_gate(artifacts, request_id)
+                    if not sec_result["passed"]:
+                        rework_count = self._rework_count.get(request_id, 0)
+                        if rework_count < MAX_REWORK_CYCLES:
+                            self._rework_count[request_id] = rework_count + 1
+                            logger.warning(
+                                "security_gate_failed_reworking",
+                                request_id=request_id,
+                                cycle=rework_count + 1,
+                            )
+                            artifacts["rework_instructions"] = (
+                                f"REWORK REQUIRED (cycle {rework_count + 1}/{MAX_REWORK_CYCLES}). "
+                                f"Fix ALL security issues below before resubmitting:\n\n"
+                                f"{sec_result['reason']}"
+                            )
+                            artifacts["rework_cycle"] = rework_count + 1
+                            # Jump back to development/fix stage
+                            for rework_target in ("development", "fix"):
+                                try:
+                                    i = execution_order.index(rework_target)
+                                    break
+                                except ValueError:
+                                    continue
+                            else:
+                                logger.error("rework_target_stage_not_found", request_id=request_id)
+                            continue
+                        else:
+                            logger.warning(
+                                "security_gate_max_rework_reached",
+                                request_id=request_id, cycles=rework_count,
+                            )
+                            artifacts["escalation_reason"] = (
+                                f"Pipeline failed after {rework_count} rework cycles. "
+                                f"Security gate could not pass.\n\n"
+                                f"Last issues:\n{sec_result['reason'][:500]}"
+                            )
+                            return artifacts
+
                 # Combined gate: runs after TESTING stage (checks both review + test)
                 if stage_id == "testing":
-                    gate_result = self._check_combined_gate(artifacts, request_id)
+                    gate_result = await self._check_combined_gate(artifacts, request_id)
 
                     if not gate_result["passed"]:
                         rework_count = self._rework_count.get(request_id, 0)
@@ -283,17 +334,46 @@ class WorkflowRunner:
 
         return artifacts
 
-    def _check_combined_gate(self, artifacts: dict[str, Any], request_id: str) -> dict[str, Any]:
-        """Check BOTH Code Reviewer verdict AND Tester results.
+    async def _check_combined_gate(self, artifacts: dict[str, Any], request_id: str) -> dict[str, Any]:
+        """Check Code Reviewer, Architecture Reviewer, Quality Guardian, AND Tester results.
 
-        Pass = Review APPROVED + zero test FAILs.
-        Fail = either has issues → aggregate feedback.
+        Pass = Review APPROVED + Arch APPROVED (no CRITICAL) + Quality APPROVED
+               (both the agent's prose verdict AND the structured policy_check
+               verdict per AET-06) + zero test FAILs.
+        Fail = any has issues → aggregate feedback for targeted rework.
+
+        Note: quality_report is produced during the review stage (parallel with code_reviewer
+        and architecture_reviewer), so it is always available by the time this gate runs
+        (after the testing stage).
+
+        AET-06 addition: the structured policy_check tool now runs against
+        the agent emissions in parallel with the agent's prose verdict.
+        Either signal can fail the gate — gives us defense in depth (the
+        agent's prose check catches cross-cutting issues like API contract
+        drift; policy_check catches deterministic patterns from L11-L21
+        without relying on the LLM's judgment). Emits the
+        quality.gate.failed / quality.gate.passed events (AET-05) so the
+        UI can surface the blocked state.
         """
         review_text = artifacts.get("review_report", "")
         if not review_text:
             for key, val in artifacts.items():
                 if isinstance(val, str) and "code_reviewer" in key:
                     review_text = val
+                    break
+
+        arch_text = artifacts.get("arch_review_report", "")
+        if not arch_text:
+            for key, val in artifacts.items():
+                if isinstance(val, str) and "architecture_reviewer" in key:
+                    arch_text = val
+                    break
+
+        quality_text = artifacts.get("quality_report", "")
+        if not quality_text:
+            for key, val in artifacts.items():
+                if isinstance(val, str) and "quality_guardian" in key:
+                    quality_text = val
                     break
 
         tester_text = artifacts.get("tester_specialist_output", "")
@@ -304,27 +384,362 @@ class WorkflowRunner:
                     break
 
         review_passed = self._check_review_passed(review_text)
+        arch_passed = self._check_arch_review_passed(arch_text)
+        quality_passed = self._check_quality_guardian_passed(quality_text)
         test_passed = self._check_tests_passed(tester_text)
 
-        if review_passed and test_passed:
-            logger.info("combined_gate_passed", request_id=request_id)
-            return {"passed": True, "reason": "Both code review and testing passed"}
+        # AET-06 — structured policy_check evaluation. The tool reads
+        # config/quality-rules.yaml (13 rules derived from L11-L21) and
+        # returns a structured verdict that the gate enforces in
+        # addition to the agent's text verdict.
+        policy_result = await self._evaluate_policy_check_for_gate(
+            artifacts, request_id,
+        )
+        policy_passed = policy_result["passed"]
+        policy_feedback = policy_result.get("reason", "")
+
+        if review_passed and arch_passed and quality_passed and test_passed and policy_passed:
+            logger.info(
+                "combined_gate_passed", request_id=request_id,
+                policy_check_verdict=policy_result.get("verdict"),
+            )
+            return {
+                "passed": True,
+                "reason": "Code review, architecture review, quality guardian, policy_check, and testing all passed",
+            }
 
         # Aggregate feedback
         feedback_parts = []
         if not review_passed:
             findings = self._extract_review_findings(review_text)
             feedback_parts.append(f"=== CODE REVIEW ISSUES ===\n{findings}")
+        if not arch_passed:
+            feedback_parts.append(
+                f"=== ARCHITECTURE VIOLATIONS ===\n"
+                f"The architecture_reviewer found CRITICAL violations that must be fixed "
+                f"before this code can be committed. See the Architecture Review Report:\n\n"
+                f"{arch_text[:2000] if arch_text else 'No arch review output found.'}"
+            )
+        if not quality_passed:
+            feedback_parts.append(
+                f"=== QUALITY GUARDIAN ESCALATION ===\n"
+                f"The quality_guardian found CRITICAL cross-cutting issues (API contract "
+                f"mismatches, missing test traceability, or known failure patterns) that "
+                f"must be fixed before this code can be committed. "
+                f"See the Quality Guardian Report:\n\n"
+                f"{quality_text[:2000] if quality_text else 'No quality guardian report found.'}"
+            )
         if not test_passed:
             failures = self._extract_test_failures(tester_text)
             feedback_parts.append(f"=== TEST FAILURES ===\n{failures}")
+        if not policy_passed and policy_feedback:
+            feedback_parts.append(policy_feedback)
 
         combined = "\n\n".join(feedback_parts)
         logger.info(
             "combined_gate_failed", request_id=request_id,
-            review_passed=review_passed, test_passed=test_passed,
+            review_passed=review_passed, arch_passed=arch_passed,
+            quality_passed=quality_passed, test_passed=test_passed,
+            policy_passed=policy_passed,
+            policy_check_verdict=policy_result.get("verdict"),
         )
         return {"passed": False, "reason": combined}
+
+    async def _evaluate_policy_check_for_gate(
+        self, artifacts: dict[str, Any], request_id: str,
+    ) -> dict[str, Any]:
+        """Run policy_check against the agent emissions in this batch,
+        emit the quality.gate.* event, return {passed, verdict, reason}.
+
+        Returns ``passed=True`` (i.e. don't block on policy) when policy_check
+        is unavailable — keeps the gate functional if the tool failed to
+        register (e.g., a broken quality-rules.yaml). Loud-fallback: the
+        ``policy_check_unavailable`` log line tells the operator the
+        structured gate isn't running.
+        """
+        get_tool = self._get_policy_check_tool
+        tool = get_tool() if get_tool is not None else None
+        if tool is None:
+            logger.info(
+                "policy_check_unavailable",
+                request_id=request_id,
+                hint=(
+                    "WorkflowRunner has no policy_check tool — gate falls "
+                    "back to text-parse-only behavior. Check executor "
+                    "boot logs for policy_check_registration_failed."
+                ),
+            )
+            return {"passed": True, "verdict": "SKIPPED", "reason": ""}
+
+        # Extract emissions from backend_code + frontend_code artifacts.
+        # Reuse the same `### \`path\`` block regex the code_writer uses
+        # to materialize files — that way the gate sees exactly the
+        # files that will land on disk.
+        emissions = self._extract_emissions_from_artifacts(artifacts)
+        if not emissions:
+            # No files emitted (e.g., research workflow); policy_check has
+            # nothing to evaluate. Don't block.
+            logger.debug(
+                "policy_check_no_emissions",
+                request_id=request_id,
+                artifact_keys=list(artifacts.keys()),
+            )
+            return {"passed": True, "verdict": "PASS", "reason": ""}
+
+        try:
+            result = await tool.execute({"emissions": emissions})
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "policy_check_eval_failed",
+                request_id=request_id, error=str(e),
+            )
+            # Don't block the workflow on a policy_check failure — same
+            # rationale as the boot-time fallback. Loud log + advance.
+            return {"passed": True, "verdict": "ERROR", "reason": ""}
+
+        verdict = result.get("verdict", "PASS")
+        violations = result.get("violations", [])
+        summary = result.get("summary", {})
+
+        # AET-05 — emit the quality.gate.* event so the UI (AET-07)
+        # and audit log can surface the gate decision. Soft-fails so
+        # an EventEmitter hiccup can't break the gate evaluation.
+        if self._events is not None:
+            try:
+                from src.core.quality_gate import emit_quality_gate_event
+                await emit_quality_gate_event(
+                    self._events,
+                    request_id=request_id,
+                    verdict=verdict,
+                    violations=violations,
+                    summary=summary,
+                    stage="code_review.quality_check",
+                    rework_cycle=self._rework_count.get(request_id, 0),
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "quality_gate_event_emit_failed",
+                    request_id=request_id, error=str(e),
+                )
+
+        if verdict != "BLOCK":
+            # PASS or PASS_WITH_WARNINGS — both let the workflow advance.
+            return {"passed": True, "verdict": verdict, "reason": ""}
+
+        # BLOCK — build a rework-feedback block from the enforce-severity
+        # violations. Each entry carries the rule_id, file, snippet, and
+        # the rule's own fix_hint so the next iteration of the agent
+        # has actionable, line-by-line guidance.
+        enforce_violations = [v for v in violations if v.get("severity") == "enforce"]
+        warn_violations = [v for v in violations if v.get("severity") == "warn"]
+
+        feedback_lines = [
+            "=== POLICY CHECK BLOCKED ===",
+            f"policy_check (the declarative rule catalog in config/quality-rules.yaml) "
+            f"found {len(enforce_violations)} enforce-severity violation(s) and "
+            f"{len(warn_violations)} warning(s). Enforce violations BLOCK the workflow — "
+            f"the listed code must be fixed before this commit can advance.",
+            "",
+            "Violations to fix:",
+        ]
+        for i, v in enumerate(enforce_violations, start=1):
+            rule_id = v.get("rule_id", "?")
+            rule_name = v.get("rule_name", "")
+            target = v.get("target_path", "?")
+            snippet = (v.get("snippet") or "").strip()
+            fix_hint = (v.get("fix_hint") or "").strip()
+            lesson_ref = v.get("lesson_ref")
+            lesson_str = f" (lesson {lesson_ref})" if lesson_ref else ""
+            feedback_lines.append(
+                f"\n{i}. [{rule_id}] {rule_name}{lesson_str}\n"
+                f"   File: {target}\n"
+                f"   Match: {snippet[:200]}\n"
+                f"   Fix: {fix_hint}"
+            )
+        if warn_violations:
+            feedback_lines.append(
+                f"\n(plus {len(warn_violations)} warning(s) — not blocking, "
+                f"but address them in this cycle if possible.)"
+            )
+
+        return {
+            "passed": False,
+            "verdict": "BLOCK",
+            "reason": "\n".join(feedback_lines),
+        }
+
+    # File-block regex matches the materializer's parser exactly
+    # (src/core/code_writer.py::_parse_and_write_files), so the gate
+    # sees the same set of files that will land on disk if approved.
+    _FILE_BLOCK_RE = re.compile(
+        r'###\s+(?:Full Source:\s*)?`([^`]+)`\s*(?:\([^)]*\))?\s*\n```\w*\n([\s\S]*?)```'
+    )
+
+    # Which artifact keys hold code emissions from which agents. Order
+    # matters only for logging — every key is scanned regardless.
+    _CODE_ARTIFACT_KEYS = (
+        ("backend_code", "backend_specialist"),
+        ("frontend_code", "frontend_specialist"),
+        ("backend_tests", "tester_specialist"),
+        ("frontend_tests", "tester_specialist"),
+    )
+
+    def _extract_emissions_from_artifacts(
+        self, artifacts: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Pull (target_path, content, agent_id, tool_name) emissions
+        from the code-bearing artifact text blobs.
+
+        Mirrors the materializer's file-block parser so the gate sees
+        exactly the files that would land on disk at the commit stage.
+        Skipping path-traversal patterns (`..`, leading `/`) matches the
+        materializer's security guard.
+        """
+        emissions: list[dict[str, Any]] = []
+        for key, agent_id in self._CODE_ARTIFACT_KEYS:
+            text = artifacts.get(key, "")
+            if not isinstance(text, str) or not text:
+                continue
+            for path, content in self._FILE_BLOCK_RE.findall(text):
+                path = path.strip()
+                content = content.strip()
+                if not path or not content:
+                    continue
+                # Path-traversal guard mirroring the materializer.
+                if ".." in path or path.startswith("/"):
+                    continue
+                emissions.append({
+                    "target_path": path,
+                    "content": content,
+                    "agent_id": agent_id,
+                    "tool_name": "file_write",
+                    "rework_cycle": self._rework_count.get(
+                        artifacts.get("request_id", ""), 0,
+                    ),
+                })
+        return emissions
+
+    def _check_arch_review_passed(self, text: str) -> bool:
+        """Parse architecture_reviewer verdict.
+
+        APPROVED  → pass (even if HIGH findings exist — those are warnings not blockers).
+        ARCH_VIOLATION → fail (CRITICAL structural issues must be fixed before commit).
+        No output → pass by default (agent may not have run yet).
+        """
+        if not text:
+            return True  # No arch review output = pass by default
+        upper = text.upper()
+        if "ARCH_VIOLATION" in upper:
+            return False
+        if "**APPROVED**" in upper or "VERDICT**\n**APPROVED" in upper:
+            return True
+        # Secondary check: CRITICAL findings in the report = fail even without explicit verdict
+        critical_count = upper.count("[CRITICAL]") + upper.count("**[CRITICAL]**")
+        if critical_count > 0:
+            return False
+        return True  # No clear failure signal = pass
+
+    def _check_quality_guardian_passed(self, text: str) -> bool:
+        """Parse quality_guardian verdict for the quality_guardian_approval gate.
+
+        APPROVED  → pass (risk low/medium + no CRITICAL findings).
+        ESCALATED → fail (CRITICAL findings found).
+        No output → pass by default (agent may not have run yet).
+        """
+        if not text:
+            return True
+        upper = text.upper()
+        if "VERDICT: ESCALATED" in upper:
+            return False
+        if "VERDICT: APPROVED" in upper:
+            return True
+        # Secondary: any CRITICAL finding in the report → fail
+        if "[CRITICAL]" in upper or "**[CRITICAL]**" in upper:
+            return False
+        return True  # No clear failure signal = pass
+
+    def _check_security_gate(self, artifacts: dict[str, Any], request_id: str) -> dict[str, Any]:
+        """Evaluate the security stage output against no_critical_vulnerabilities
+        and no_secrets_detected gates.
+
+        Pass = security_specialist emitted "Verdict: ✅ PASS" (or no report yet).
+        Fail = "Verdict: ❌ FAIL" or explicit CRITICAL/HIGH findings present.
+        """
+        sec_text = artifacts.get("security_report", "")
+        if not sec_text:
+            for key, val in artifacts.items():
+                if isinstance(val, str) and "security" in key:
+                    sec_text = val
+                    break
+
+        vuln_passed = self._check_no_critical_vulnerabilities(sec_text)
+        secrets_passed = self._check_no_secrets_detected(sec_text)
+
+        if vuln_passed and secrets_passed:
+            logger.info("security_gate_passed", request_id=request_id)
+            return {"passed": True, "reason": "Security scan passed — no critical vulnerabilities or secrets detected"}
+
+        feedback_parts = []
+        if not vuln_passed:
+            feedback_parts.append(
+                "=== SECURITY VULNERABILITIES ===\n"
+                "The security_specialist found CRITICAL or HIGH vulnerabilities that must be "
+                "remediated before this code can be committed. See the Security Report:\n\n"
+                f"{sec_text[:2000] if sec_text else 'No security report found.'}"
+            )
+        if not secrets_passed:
+            feedback_parts.append(
+                "=== SECRETS DETECTED ===\n"
+                "Hard-coded credentials or secrets were found in the generated code. "
+                "Remove all secrets and replace with environment variable references.\n\n"
+                f"{sec_text[:1000] if sec_text else 'No security report found.'}"
+            )
+
+        logger.info(
+            "security_gate_failed", request_id=request_id,
+            vuln_passed=vuln_passed, secrets_passed=secrets_passed,
+        )
+        return {"passed": False, "reason": "\n\n".join(feedback_parts)}
+
+    def _check_no_critical_vulnerabilities(self, text: str) -> bool:
+        """Parse security_specialist verdict for the no_critical_vulnerabilities gate.
+
+        PASS marker  → "Verdict: ✅ PASS"
+        FAIL marker  → "Verdict: ❌ FAIL"
+        No output    → pass by default (scanner may not have run)
+        """
+        if not text:
+            return True
+        upper = text.upper()
+        if "VERDICT: ✅ PASS" in upper or "VERDICT:**  ✅ PASS" in upper or "VERDICT: ✅ PASS" in text:
+            return True
+        if "VERDICT: ❌ FAIL" in text or "VERDICT: ❌ FAIL" in upper:
+            return False
+        # Secondary: explicit CRITICAL/HIGH keyword in findings table
+        if "[CRITICAL]" in upper or "**[CRITICAL]**" in upper:
+            return False
+        # Check for explicit FAIL line without emoji (safety fallback)
+        if "VERDICT: FAIL" in upper:
+            return False
+        return True  # No clear failure signal
+
+    def _check_no_secrets_detected(self, text: str) -> bool:
+        """Parse security_specialist verdict for the no_secrets_detected gate.
+
+        Fails only when the report explicitly mentions secrets found.
+        """
+        if not text:
+            return True
+        upper = text.upper()
+        # Explicit FAIL from the whole scan (with or without bold markdown)
+        if "❌ FAIL" in text or "VERDICT: FAIL" in upper:
+            return False
+        # Detect-secrets specific patterns
+        if "SECRETS DETECTED" in upper and "0 SECRETS" not in upper:
+            return False
+        if "SECRETS_FOUND" in upper and "SECRETS_FOUND: 0" not in upper:
+            return False
+        return True
 
     def _check_review_passed(self, text: str) -> bool:
         if not text:

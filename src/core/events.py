@@ -1,4 +1,11 @@
-"""WebSocket event emitter — broadcasts real-time events to connected clients."""
+"""WebSocket event emitter — broadcasts real-time events to connected clients.
+
+Event type constants
+--------------------
+Use the ``OPS_*`` constants below when emitting ops_heal_agent events so
+string literals don't drift between the orchestrator, the WebSocket handler,
+and the SystemHealthPill UI component.
+"""
 
 import asyncio
 import json
@@ -9,6 +16,41 @@ from typing import Any
 import structlog
 
 logger = structlog.get_logger()
+
+# ── ops_heal_agent event type constants ─────────────────────────────────────
+# Emitted by orchestrator._trigger_ops_monitor() after each deployment.
+# Consumed by the SystemHealthPill component (CommandCenter) and any WebSocket
+# subscribers that want to react to post-deploy health verdicts.
+
+#: Stack is healthy — all checks passed (HTTP 200, disk/mem OK, logs clean).
+OPS_HEALTHY = "ops.healthy"
+
+#: At least one check degraded or error-log issues found; may be self-healing.
+OPS_ISSUE_DETECTED = "ops.issue_detected"
+
+#: ops_heal_agent monitoring cycle started (emitted before the LLM runs).
+OPS_MONITORING_STARTED = "ops.monitoring_started"
+
+#: ops_heal_agent raised an internal exception (agent-level error, not infra).
+OPS_ERROR = "ops.error"
+
+# ── Phase AE-3 quality_guardian event type constants ────────────────────────
+# Emitted by the workflow runner's quality_guardian_approval gate (AET-06)
+# after evaluating policy_check's structured verdict (AET-03). Consumed by:
+#   - the WebSocket clients (AET-07 UI surfaces the blocked-by-quality-gate
+#     chip on the Request detail page when QUALITY_GATE_FAILED fires)
+#   - structlog audit pipeline (every emit logs the rule_ids that fired)
+# Payload contract: src/core/quality_gate.py::build_quality_gate_payload
+
+#: policy_check returned verdict='BLOCK' — at least one enforce-severity
+#: rule violated. The workflow halts at the gate; the next rework cycle
+#: receives the violations + fix_hints as input.
+QUALITY_GATE_FAILED = "quality.gate.failed"
+
+#: policy_check returned verdict='PASS' (clean) or 'PASS_WITH_WARNINGS'
+#: (warn-severity rules fired but enforce did not). Workflow advances;
+#: the inner `verdict` field on the payload tells subscribers which flavor.
+QUALITY_GATE_PASSED = "quality.gate.passed"
 
 # Server-side async handler: receives (event_type, data) and may perform
 # side effects (e.g. PDB-25 mapping request status → task status). Errors

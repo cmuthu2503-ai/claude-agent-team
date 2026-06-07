@@ -31,6 +31,11 @@ dependencies = [
     "markdown>=3.6",
     "python-slugify>=8.0.4",
     "firecrawl-py>=2.0.0",
+    # Security scanning tools — used by security_specialist via SecurityScanTool.
+    # safety<3.0 avoids the API-key requirement introduced in v3.
+    "bandit>=1.7.0",
+    "safety>=2.3.0,<3.0",
+    "detect-secrets>=1.4.0",
 ]
 
 [project.optional-dependencies]

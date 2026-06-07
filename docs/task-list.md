@@ -1166,6 +1166,121 @@ whose `depends_on` isn't fully `deployed`.
 | BPD-44 | task-list.md Post-Release Changes row: "Build Plan Decomposition (shipped YYYY-MM-DD)" | S | BPD-43 | `[x]` |
 | BPD-45 | Agent lessons doc update: new L19 explaining the agent's smaller per-task scope (you get a single `primary_file` + `acceptance_test`; no longer 4-8 sub-task bullets) | S | BPD-41 | `[x]` |
 
+### Phase F — Generation hardening (queued, not started)
+
+Two requirements raised after the BPD shipped, queued for a follow-up
+sprint:
+
+1. **Hard gate on PRD + API Spec.** Today the Epic / Feature / Task
+   generators only refuse to run when the PRD isn't finalized; API Spec
+   is treated as optional reference material. The new contract:
+   **both** PRD and API Spec must be finalized before any of the three
+   passes (epics / features / tasks) can fire. Without it, the agent
+   over-invents endpoints, schema fields, and integration points,
+   producing tasks that don't line up with the real surface area.
+
+2. **Pass 2 & Pass 3 prompt enrichment.** Today Pass 2 (features)
+   reads only a PRD excerpt + sibling feature titles, and Pass 3
+   (tasks) reads only the parent feature + epic + sibling titles —
+   neither pass consults the API Spec at all, and Pass 3 doesn't even
+   see the PRD. Result: tasks describe behavior in vague terms instead
+   of "POST /api/v1/users with the exact JSON shape from the spec".
+
+| ID | Task | Size | Depends | Status |
+|----|------|------|---------|--------|
+| BPD-46 | Backend: `generate_epics` returns 409 `"Finalize the API Spec before generating epics."` when no finalized API_SPEC artifact exists. Mirror the existing PRD-finalized check. | S | none | `[x]` |
+| BPD-47 | Backend: same gate on `generate_features_for_epic` and `generate_tasks_for_feature` (currently no check at either). 409 + hint pointing to the API Spec section. | S | BPD-46 | `[x]` |
+| BPD-48 | Backend: `_build_feature_generation_prompt` adds `api_spec_content` required arg + emits `## API Specification (reference)` block, same shape as the epic prompt. PRD excerpt stays. | M | BPD-47 | `[x]` |
+| BPD-49 | Backend: `_build_task_generation_prompt` adds BOTH `prd_content` and `api_spec_content` required args. PRD excerpt today is empty — agents lose product context by Pass 3. Include the **relevant API endpoints** explicitly when the spec is large enough to need chunking (heuristic: extract endpoints matching the feature title). | M | BPD-47 | `[x]` |
+| BPD-50 | Frontend: `BuildPlanGenerator` step buttons (Generate Epics/Features/Tasks) and mega-button disabled with tooltip `"Finalize PRD + API Spec first"` when either artifact is missing or in draft. Reads existing `/projects/{id}/artifacts` (or adds a small readiness endpoint). | S | BPD-46 | `[x]` |
+| BPD-51 | Frontend: `BuildPlanView` per-row `+ Features` and `+ Tasks` action buttons disabled with the same tooltip when API Spec is missing. Prevents the user from sidestepping the gate by using the per-row buttons. | S | BPD-50 | `[x]` |
+| BPD-52 | Smoke test: with no API Spec, hit all 5 endpoints (epics/generate, features/generate, tasks/generate, features/generate-all, tasks/generate-all) — confirm 409 on each with the hint. With both finalized, confirm prompts include both blocks (assert against the result of `_build_*_generation_prompt`). | M | BPD-49, BPD-51 | `[x]` |
+| BPD-53 | PRD revision bump: add §6.8 callout that PRD + API Spec are both prerequisites for BPD; document the chunking heuristic in §6.8.4 if BPD-49 ends up extracting endpoints rather than dumping the whole spec. | S | BPD-49 | `[x]` |
+
+### Phase AE — Agentic Engineering Enhancements (queued, not started)
+
+Five new agents — `security_specialist`, `self_learning_agent`,
+`quality_guardian`, `ops_heal_agent`, `architecture_reviewer` — already
+have YAML configs in `config/agents/` and appear on the Team Status
+page. Current state is uneven: `architecture_reviewer`, `quality_guardian`,
+and `security_specialist` are wired into the `feature_development` workflow
+and have run a handful of times; `self_learning_agent` runs ad-hoc with
+no automatic trigger; `ops_heal_agent` has **never** executed a single
+subtask. The tools they each own (`policy_check`, `lessons_writer`,
+`sast_scan`, `health_probe`, etc.) are mostly stubs.
+
+Phase AE closes the gap from "scaffolded YAML on the team page" to
+"fully functional, declaratively-configured, automatically triggered,
+end-to-end tested". Detailed agent requirements live in PRD §6.9.
+
+Execution order (per-agent, by ROI): AE-3 (quality_guardian rules) →
+AE-2 (self_learning auto-trigger) → AE-4 (security real tools) →
+AE-1 (ops_heal end-to-end) → AE-5 (architecture_reviewer tuning) →
+cross-cutting.
+
+| ID | Task | Size | Depends | Status |
+|----|------|------|---------|--------|
+
+**AE-3 — `quality_guardian` rule formalization (highest immediate ROI)**
+
+| AET-01 | Design `config/quality-rules.yaml` schema. Each rule has: `id` (QR-001), `name`, `severity` (enforce/warn/info), `pattern` (regex or python-eval expression), `applies_to` (glob of files/agents), `rationale`, `lesson_ref` (optional L11-L21 back-link). Document in `docs/quality-rules-schema.md`. | S | none | `[x]` |
+| AET-02 | Create initial `config/quality-rules.yaml` with rules derived from L11-L21 (no print() in src/, no F401 unused imports on commit, search_replace required for files >470 lines, no byte-identical re-emissions, deterministic TC-XXX IDs, etc.). 10-15 rules total. | M | AET-01 | `[x]` |
+| AET-03 | New tool `policy_check` (`src/tools/policy_check.py`). Loads `quality-rules.yaml` at agent init, evaluates rules against agent output (file contents + emission metadata), returns structured list of violations with rule_id + matched-content snippet + rationale. | M | AET-02 | `[x]` |
+| AET-04 | Wire `policy_check` to `quality_guardian` in `config/tools.yaml` (`available_to: [quality_guardian]`) and reference it in the agent's system prompt with explicit instructions to call it before approving. | S | AET-03 | `[x]` |
+| AET-05 | New event types `quality.gate.failed` + `quality.gate.passed`. Emit from workflow runner when `quality_guardian_approval` gate evaluates `policy_check` output. Payload: `{request_id, violations: [{rule_id, severity, snippet, rationale}]}`. | S | AET-03 | `[x]` |
+| AET-06 | Workflow runner — `quality_guardian_approval` gate (already declared in `config/workflows.yaml`) now ACTUALLY blocks on critical `policy_check` violations instead of approving on bare presence of a `quality_report` output. Routes back to `development` stage with violations in the rework input. | M | AET-04, AET-05 | `[x]` |
+| AET-07 | Frontend — Request detail page surfaces blocked-by-quality-gate state. New chip on the request header (`🛑 BLOCKED: QUALITY GATE · 2 violations`), expandable panel showing each violation's rule_id + snippet + L11-L21 reference. | M | AET-05 | `[x]` |
+| AET-08 | Smoke test: write a deliberate L11-style violation (a `print()` call) into a generated file, dispatch a Request that touches it, verify the workflow halts at `quality_guardian_approval` with `QR-XXX no_print_in_prod` surfaced in the UI. Pytest case lives at `tests/test_quality_guardian_smoke.py`. | M | AET-06, AET-07 | `[x]` |
+
+**AE-2 — `self_learning_agent` auto-trigger (compound leverage)**
+
+| AET-09 | New tool `lessons_writer` (`src/tools/lessons_writer.py`). Append-only to `docs/agent-lessons-learned.md` with the L21-style section format (signature / instance / what to do / examples / observed). Idempotent: refuses to write if a structurally similar lesson already exists (jaccard-similarity on signatures + grep on key tokens). | M | none | `[ ]` |
+| AET-10 | Wire `lessons_writer` tool grant to `self_learning_agent` in `config/tools.yaml`. | S | AET-09 | `[ ]` |
+| AET-11 | Orchestrator EventEmitter hook — on every `request.failed` event, fire `self_learning_agent.single_call(failure_context)`. Failure context = {request_id, final_error, retries, agent_traces[:1000], related_files}. Hook lives in `src/main.py` alongside the existing `auto_dispatch_handler_registered`. | M | AET-10 | `[ ]` |
+| AET-12 | De-dupe guard inside the agent's system prompt: read existing `docs/agent-lessons-learned.md` (already loaded into prompt via lessons-loader cap), refuse to add a lesson whose signature already matches an existing entry. Emit `lesson.duplicate_skipped` event for visibility. | S | AET-11 | `[ ]` |
+| AET-13 | "Pending review" gate — auto-generated lessons land in `docs/agent-lessons-learned.pending.md` (new file) instead of the canonical doc. Surface in UI for human approve/reject before merging to `agent-lessons-learned.md`. New endpoint `POST /api/v1/lessons/{id}/approve` + `/reject`. | M | AET-11 | `[ ]` |
+| AET-14 | Smoke test: synthesize 3 controlled `request.failed` events (one new-class failure, two duplicates of existing lessons). Verify only the new lesson lands in `.pending.md`. Verify approve endpoint promotes it to the canonical doc. | M | AET-13 | `[ ]` |
+
+**AE-4 — `security_specialist` real tool implementations**
+
+| AET-15 | New tool `sast_scan` (`src/tools/sast_scan.py`). Invokes `bandit -r src/ -f json` for Python; `eslint --plugin security` for JS/TS. Combines outputs into a single structured list of findings: `{severity, file, line, rule_id, message, snippet}`. | M | none | `[ ]` |
+| AET-16 | New tool `dependency_audit` (`src/tools/dependency_audit.py`). Invokes `pip-audit --format json` (Python) and `npm audit --json` (JS). Aggregates by severity. Returns `{critical: [], high: [], moderate: [], low: []}` per package manager. | S | none | `[ ]` |
+| AET-17 | New tool `secret_scan` (`src/tools/secret_scan.py`). Regex catalog (AWS keys, generic 32-char tokens, private key headers, Anthropic AWS workspace IDs, etc.) + Shannon-entropy filter on any string >20 chars. Runs against the agent's emitted file content BEFORE `code_commit` stage materializes it. | M | none | `[ ]` |
+| AET-18 | New tool `pen_test_simple` (`src/tools/pen_test.py`). Reads the project's finalized API Spec, replays endpoints with malicious inputs (SQL injection probes, IDOR id-bumping, missing-auth checks, oversized payloads). Returns structured findings. Skips when no API spec is finalized. | L | none | `[ ]` |
+| AET-19 | Wire all 4 tools to `security_specialist` in `config/tools.yaml` (`available_to: [security_specialist]`) + reference each in the agent's system prompt with required-call instructions. | S | AET-15, AET-16, AET-17, AET-18 | `[ ]` |
+| AET-20 | New threshold `security_max_severity_to_block` in `config/thresholds.yaml` (default `high` — block on `critical` + `high`, warn on lower). | S | none | `[ ]` |
+| AET-21 | `security` workflow stage (already declared in `config/workflows.yaml`) now reads the structured `security_report` JSON from `security_specialist` output and blocks on `no_critical_vulnerabilities` + `no_secrets_detected` gates per the threshold. Stops being LLM self-judgment. | M | AET-19, AET-20 | `[ ]` |
+| AET-22 | Smoke test: commit a diff with (a) a deliberate SQL injection pattern, (b) a leaked Anthropic AWS key, (c) a vulnerable dependency version. Verify all three block at the `security` stage with the matching tool's finding surfaced. Pytest case at `tests/test_security_smoke.py`. | M | AET-21 | `[ ]` |
+
+**AE-1 — `ops_heal_agent` end-to-end (biggest absolute gap — 0 subtasks today)**
+
+| AET-23 | New SQL table `deploy_health` (added to migrations in `src/state/sqlite_store.py`): `(probe_id, deploy_id, env, recorded_at, response_time_ms, error_rate_5m, http_status, restart_count, raw_metrics_json)`. Index on `(env, recorded_at)` for rolling-window queries. | S | none | `[ ]` |
+| AET-24 | Supervisor host-process addition — background asyncio task that loops every 60s, fires `health_probe` on every deploy in `running` state, writes a row to `deploy_health`. Crash-resilient via supervisor's existing restart logic. | M | AET-23 | `[ ]` |
+| AET-25 | New config `config/slo.yaml` — per-env SLO targets: `{p95_latency_ms, error_rate_max, uptime_min_pct, restart_max_per_hour}`. Documented in `docs/cross-cutting-concerns.md`. | S | none | `[ ]` |
+| AET-26 | New tool `health_probe` (`src/tools/health_probe.py`). HTTP GET to `/api/v1/health` on a deploy URL with timeout, returns `{ok, response_time_ms, http_status, error?}`. Reused by both the supervisor loop (AET-24) and the agent directly. | S | AET-23 | `[ ]` |
+| AET-27 | New tool `anomaly_detect` (`src/tools/anomaly_detect.py`). Reads recent `deploy_health` rows (last 1hr), computes rolling baseline + std dev for each metric, returns `{alerts: [{metric, current_value, baseline, sigma_deviation, threshold}]}` when any metric exceeds 2σ. | M | AET-23 | `[ ]` |
+| AET-28 | New tool `slo_check` (`src/tools/slo_check.py`). Loads `slo.yaml`, compares against recent `deploy_health` rows, returns `{breaches: [{slo_name, target, actual, breach_duration_minutes}]}`. | S | AET-25 | `[ ]` |
+| AET-29 | New tool `auto_rollback` (`src/tools/auto_rollback.py`). On sustained breach (configurable `slo_breach_sustain_minutes` threshold, default 5min), calls supervisor's existing revert path. Idempotent — no-op if a rollback is already in flight for that deploy. | M | AET-27, AET-28 | `[ ]` |
+| AET-30 | Wire all 4 tools to `ops_heal_agent` in `config/tools.yaml`. | S | AET-26, AET-27, AET-28, AET-29 | `[ ]` |
+| AET-31 | Event subscription — `ops_heal_agent` listens for `deploy_health.anomaly_detected` events emitted by the supervisor loop (AET-24 promotes anomaly_detect outputs to events). On fire, it invokes `slo_check` + decides whether to call `auto_rollback`. Emits `ops.alert.fired` / `ops.rollback.triggered` for UI. | M | AET-27, AET-30 | `[ ]` |
+| AET-32 | Smoke test: deploy a project to staging, inject a controlled 5xx storm (mock endpoint returning 500), verify (a) supervisor loop captures the error_rate spike, (b) `anomaly_detect` flags >2σ deviation, (c) `ops_heal_agent` fires, (d) sustained breach triggers `auto_rollback`, (e) supervisor reverts, (f) health probes recover, (g) `ops.alert.cleared` event fires. End-to-end in `tests/test_ops_heal_smoke.py`. | L | AET-29, AET-31 | `[ ]` |
+
+**AE-5 — `architecture_reviewer` tuning (smallest, mostly already-working)**
+
+| AET-33 | Audit existing `architecture_reviewer` outputs from CrewAI's 5 historical subtasks. Classify each into: useful block / false positive / missed issue. Write findings to `docs/arch-reviewer-audit.md`. | S | none | `[ ]` |
+| AET-34 | System prompt tuning based on audit (AET-33). Sharpen the "what counts as a block-worthy architecture concern" definition vs nitpicking. Add explicit anti-patterns list. | S | AET-33 | `[ ]` |
+| AET-35 | New threshold `arch_review_block_severity` in `config/thresholds.yaml` — only `high` severity findings block the stage, `medium`/`low` annotate but don't gate. | S | none | `[ ]` |
+| AET-36 | Smoke test against the audit corpus from AET-33 — verify previous false positives no longer block, verify previously-missed issues now surface. | M | AET-34, AET-35 | `[ ]` |
+
+**Cross-cutting — tracking + verification + docs**
+
+| AET-37 | Team Status page — agents with `subtasks=0` get a small dashed "SCAFFOLD" badge so the cosmetic-vs-functional distinction is visible. Removes the over-stated "all 15 working" illusion the current page projects. | S | none | `[ ]` |
+| AET-38 | Active Agents feed (on /team page) surfaces AE-driven activity uniformly: quality_guardian.blocked, security_specialist.findings_count, ops_heal_agent.alert_fired show as feed entries with their own glyph + label, not just generic "in_progress". | M | AET-06, AET-21, AET-31 | `[ ]` |
+| AET-39 | PRD revision bump v3.14 → v3.15 with Phase AE completion summary. Update §6.9 status table to show shipped vs planned. Bump `## 14.4 Revision History` row. | S | (after all per-agent phases) | `[ ]` |
+| AET-40 | `agent-lessons-learned.md` — add lessons L22+ for any new failure classes observed during AE implementation (predicted candidates: workflow-runner stage gate vs event-driven gate, supervisor loop crash recovery, async task lifecycle on shutdown). | S | (during implementation) | `[ ]` |
+| AET-41 | Update PRD §6.9.6 (YAML Conformance Requirements) with the new tool grants per agent. Each AE agent's YAML should list its now-real tools under `tool_permissions:`. | S | AET-04, AET-10, AET-19, AET-30 | `[ ]` |
+| AET-42 | End-to-end smoke: ship one BPD feature through the FULL pipeline (PRD draft → finalize → API Spec → finalize → BPD 3-pass → Finalize feature → Dispatch → backend code → frontend code → arch_review → code_review → quality_guardian → testing → security → commit → deploy → ops_heal monitoring → success). Captured as a single Vitest+pytest hybrid in `tests/test_full_pipeline_smoke.py`. The "definition of done" for Phase AE. | L | AET-08, AET-14, AET-22, AET-32, AET-36 | `[ ]` |
+
 ### Progress Summary
 
 | Phase | Tasks | Done | In Progress | Deferred | Not Started |
@@ -1175,7 +1290,58 @@ whose `depends_on` isn't fully `deployed`.
 | Phase C: Dispatch engine + auto-dispatch | 9 | 9 | 0 | 0 | 0 |
 | Phase D: UI rework | 9 | 6 | 3 | 0 | 0 |
 | Phase E: Migration + polish + verification | 8 | 7 | 0 | 1 | 0 |
-| **Total** | **45** | **41** | **3** | **1** | **0** |
+| Phase F: Generation hardening | 8 | 8 | 0 | 0 | 0 |
+| Phase AE: Agentic Engineering — quality_guardian (AE-3) | 8 | 8 | 0 | 0 | 0 |
+| Phase AE: Agentic Engineering — self_learning_agent (AE-2) | 6 | 0 | 0 | 0 | 6 |
+| Phase AE: Agentic Engineering — security_specialist (AE-4) | 8 | 0 | 0 | 0 | 8 |
+| Phase AE: Agentic Engineering — ops_heal_agent (AE-1) | 10 | 0 | 0 | 0 | 10 |
+| Phase AE: Agentic Engineering — architecture_reviewer (AE-5) | 4 | 0 | 0 | 0 | 4 |
+| Phase AE: Agentic Engineering — cross-cutting | 6 | 0 | 0 | 0 | 6 |
+| **Total** | **95** | **57** | **3** | **1** | **34** |
+
+### Phase AE execution notes
+
+**Recommended execution order** (by ROI):
+
+1. **AE-3 first** (AET-01..08) — `quality_guardian` rule formalization.
+   Converts L11-L21 from soft prompt suggestions to enforced gates.
+   Compound win on every subsequent agent task.
+2. **AE-2 second** (AET-09..14) — `self_learning_agent` auto-trigger.
+   Closes the loop on lesson generation; new failure classes become
+   lessons automatically.
+3. **AE-4 third** (AET-15..22) — `security_specialist` real tools.
+   Replaces security theater with real SAST + dependency audit +
+   secret scanning + pen-testing.
+4. **AE-1 fourth** (AET-23..32) — `ops_heal_agent` end-to-end.
+   Biggest absolute gap (currently 0 subtasks ever run) but lower
+   day-to-day visibility in dev environments.
+5. **AE-5 fifth** (AET-33..36) — `architecture_reviewer` tuning.
+   Already mostly working; only needs prompt refinement.
+6. **Cross-cutting last** (AET-37..42) — UI badges + tests + docs.
+
+**Definition of done for Phase AE**: AET-42 passes — a single BPD
+feature flows end-to-end through every workflow stage with every
+AE agent involved, all gates enforced from declarative configs (not
+LLM self-judgment), and the resulting artifact lands on origin/main
+with a security report + quality report + arch report attached.
+
+**Estimated total effort** (per per-row Size markers):
+
+| Size | Count | Hours each | Total hours |
+|------|-------|------------|-------------|
+| S    | 19    | 1          | 19          |
+| M    | 17    | 4          | 68          |
+| L    | 6     | 8          | 48          |
+| **Total** | **42** | | **~135 hours = 17 working days** |
+
+Larger than my initial 6-day rough estimate because this breakdown
+includes the cross-cutting + verification + docs work that a "ship
+the agent" rough estimate omits. The ~6 days from PRD §6.9 covers
+the LLM-prompt + YAML wiring only; the full lifecycle (tools + DB
+tables + supervisor loop + UI surfaces + tests + docs) is closer
+to the 17-day total above.
+
+
 
 ### Phase D partial-status notes
 

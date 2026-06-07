@@ -5,6 +5,7 @@ import { RichTextInput, type RichTextInputHandle } from "../components/ui/RichTe
 import { useSearchParams } from "react-router-dom"
 import { Plus, Send, X, Trash2 } from "lucide-react"
 import { RefreshButton } from "../components/ui/RefreshButton"
+import { SystemHealthPill } from "../components/ui/SystemHealthPill"
 import { useAuthStore } from "../stores/auth"
 import { CreateProjectModal, type CreatedProject } from "../components/projects/CreateProjectModal"
 import { ProjectChip } from "../components/projects/ProjectChip"
@@ -316,7 +317,10 @@ export function CommandCenterPage() {
           <h2 style={{ color: "var(--text-primary)", fontSize: 18, fontWeight: 600, margin: 0 }}>
             New_Request.init
           </h2>
-          <RefreshButton onClick={handleRefresh} refreshing={refreshing} />
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <SystemHealthPill wsRef={wsRef} />
+            <RefreshButton onClick={handleRefresh} refreshing={refreshing} />
+          </div>
         </div>
 
         <RichTextInput

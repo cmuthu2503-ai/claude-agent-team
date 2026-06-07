@@ -8,6 +8,7 @@ Not Bedrock. Not the direct Anthropic API. See docs/setup-claude-platform-on-aws
 """
 
 import os
+import time
 from typing import Any
 
 import structlog
@@ -53,6 +54,40 @@ class AgentSystemExecutor:
         self.registry = AgentRegistry()
         self.tool_registry = ToolRegistry(config)
         self.inference_geo: str | None = _resolve_inference_geo(config)
+
+        # Token tracker for single_agent_call cost recording. The workflow
+        # runner has its own tracker on the orchestrator (records via
+        # `_token_tracker.record(...)`), but `single_agent_call` writes
+        # directly to `record_token_usage` for the project-artifact path
+        # (PDB-05 PRD/tasks gen, BPD 3-pass generators). Both paths now
+        # share the same pricing source so the cost dashboard / ticker
+        # reports actual USD spend instead of $0.00 for BPD activity.
+        self._token_tracker: Any = None
+        if state is not None:
+            try:
+                from src.core.token_tracker import TokenTracker
+                self._token_tracker = TokenTracker(state)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "agent_executor_token_tracker_init_failed", error=str(e),
+                )
+
+        # In-flight tracking for single_agent_call invocations. The
+        # Team Status page (and the cyberpunk overlay's [NET] counter)
+        # determine "in progress" from `state.get_active_subtasks()`,
+        # but single_agent_call deliberately doesn't create subtasks —
+        # so PRD / API spec / epic / feature / task generation flowed
+        # through the LLM for 30-90s with every agent card showing
+        # "idle". This dict lets /agents merge in the busy set so
+        # those calls are visible while running.
+        #
+        # Keyed by agent_id; value carries `label` (what the agent is
+        # doing) and `started_at` (epoch seconds, for elapsed display).
+        # An agent_id is in this dict iff exactly one single_agent_call
+        # is currently in flight for it — concurrent calls for the same
+        # agent would overwrite, which is fine for status display since
+        # the user only sees "this agent is busy."
+        self._busy_agents: dict[str, dict[str, Any]] = {}
 
         # ── AnthropicAWS client (Claude Platform on AWS) ─────────────────
         # The SDK reads:
@@ -109,6 +144,10 @@ class AgentSystemExecutor:
         from src.tools.github_tools import GitHubAPITool, GitHubPRReviewTool
         from src.tools.firecrawl_tools import WebSearchTool, WebScrapeTool
         from src.tools.deploy_tools import WaitForDeploymentTool
+        from src.tools.lessons_writer import LessonsWriterTool
+        from src.tools.security_scan import SecurityScanTool
+        from src.tools.ops_check import OpsCheckTool
+        from src.tools.policy_check import PolicyCheckTool
 
         self.tool_registry.register_implementation("file_read", FileReadTool())
         self.tool_registry.register_implementation("file_write", FileWriteTool())
@@ -130,6 +169,40 @@ class AgentSystemExecutor:
         self.tool_registry.register_implementation(
             "wait_for_deployment", WaitForDeploymentTool(state=self.state),
         )
+        # lessons_writer is the write side of the self-learning loop.
+        # The self_learning_agent uses this to append new failure-pattern
+        # lessons to docs/agent-lessons-learned.md after a Request fails.
+        self.tool_registry.register_implementation("lessons_writer", LessonsWriterTool())
+        # security_scan is the scanning back-end for the security_specialist agent.
+        # Wraps bandit, safety, npm audit, and detect-secrets with graceful SKIP
+        # fallback when any binary is absent from the environment.
+        self.tool_registry.register_implementation("security_scan", SecurityScanTool())
+        # ops_check is the health-monitoring back-end for the ops_heal_agent.
+        # Checks HTTP health endpoints, disk/memory pressure, and recent error
+        # log patterns after each deployment.
+        self.tool_registry.register_implementation("ops_check", OpsCheckTool())
+        # policy_check evaluates the declarative rule catalog
+        # (config/quality-rules.yaml) against agent emissions for the
+        # quality_guardian agent. The tool's constructor loads + validates
+        # the YAML eagerly — if rules are malformed it raises here.
+        # Catching the failure rather than letting it crash backend boot:
+        # a bad rules file should disable quality_guardian, not the whole
+        # platform. Operator sees the WARNING in logs, fixes the YAML,
+        # restarts. quality_guardian will fail at request-time with
+        # "tool not registered" until then — also loud, but scoped.
+        try:
+            self.tool_registry.register_implementation("policy_check", PolicyCheckTool())
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "policy_check_registration_failed",
+                error=str(e),
+                hint=(
+                    "config/quality-rules.yaml failed to load or validate. "
+                    "quality_guardian will be unable to call policy_check until "
+                    "the YAML is fixed and the backend restarted. See "
+                    "docs/quality-rules-schema.md for the expected schema."
+                ),
+            )
 
         # ── Create agents ────────────────────────────
         factory = AgentFactory(config)
@@ -227,21 +300,36 @@ class AgentSystemExecutor:
             request_id, inputs, project_root=project_root,
         )
 
+    def get_busy_agents(self) -> dict[str, dict[str, Any]]:
+        """Snapshot of currently-busy agents (single_agent_call in flight).
+
+        Returns a shallow copy so callers can iterate without worrying
+        about the dict mutating mid-loop if a call finishes concurrently.
+        Each value: {'label': str, 'started_at': float epoch-seconds}.
+        Empty dict when nothing's in flight.
+        """
+        return dict(self._busy_agents)
+
     async def single_agent_call(
         self,
         agent_id: str,
         prompt: str,
         project_artifact_id: str | None = None,
         max_tokens: int | None = None,
+        project_id: str | None = None,
+        label: str | None = None,
     ) -> dict[str, Any]:
         """One-shot agent call for Project-driven Build (PDB-05).
 
         Unlike `execute()`, this:
         - does NOT create a Request, Subtask, or emit `request.*` events;
         - does NOT run the tool-use loop (no file_read, git, etc.);
-        - records token usage attributed to `project_artifact_id` rather
-          than a request_id, so the cost dashboard can scope per-project
-          spend across both Requests and artifact-generation calls.
+        - records token usage attributed to ``project_artifact_id`` AND
+          (preferred) ``project_id`` so the cost dashboard's per-project
+          filter is a direct `WHERE project_id = ?` instead of an OR over
+          two subqueries. Callers that don't have an artifact_id (the
+          BPD epic/feature/task generators) still get correctly attributed
+          cost by passing project_id only.
 
         ``max_tokens`` overrides the default 8192 cap on the underlying
         Messages API call. Long-form generators (PRD, API spec, tasks
@@ -259,28 +347,67 @@ class AgentSystemExecutor:
         logger.info(
             "single_agent_call",
             agent_id=agent_id, artifact_id=project_artifact_id,
+            project_id=project_id,
+            label=label,
             max_tokens=max_tokens,
             inference_geo=self.inference_geo or "global",
         )
-        result = await agent.single_call(prompt, max_tokens=max_tokens)
+        # Mark the agent as busy for the duration of the LLM call so
+        # the Team Status page (5s poll) and the [NET] counter on the
+        # cyberpunk overlay show real activity instead of "0 agents
+        # active" while a 90-second PRD generation is running.
+        # try/finally guarantees we always clear it — even on exception
+        # or task cancellation — so a crashed generator can't leave an
+        # agent stuck "in progress" forever.
+        self._busy_agents[agent_id] = {
+            "label": label or f"single_call ({agent_id})",
+            "started_at": time.time(),
+        }
+        try:
+            result = await agent.single_call(prompt, max_tokens=max_tokens)
+        finally:
+            self._busy_agents.pop(agent_id, None)
 
         # Persist token usage so the cost dashboard's project filter picks
         # this call up. In mock mode (no client → both counts 0) we still
         # record the row so the wiring is observable.
+        #
+        # Cost is computed via the shared TokenTracker so this path uses
+        # the same pricing source as the workflow runner (config/thresholds.yaml
+        # ::cost.pricing). Previously cost_usd was hardcoded to 0.0, which
+        # caused BPD generation spend (epics/features/tasks 3-pass) plus
+        # PDB-05 (PRD/brief/tasks gen) to disappear from the cost dashboard
+        # and the cyberpunk overlay's "[COST] today $X" ticker — tokens
+        # accumulated correctly but the dollar column stayed zero.
         if self.state is not None:
             import uuid as _uuid
             from src.models.base import TokenUsage as _TokenUsage
+            input_tokens = int(result.get("input_tokens") or 0)
+            output_tokens = int(result.get("output_tokens") or 0)
+            model_name = str(result.get("model") or agent.model or "")
+            cost_usd = 0.0
+            if self._token_tracker and model_name:
+                try:
+                    cost_usd = self._token_tracker.calculate_cost(
+                        model_name, input_tokens, output_tokens,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "single_agent_cost_calc_failed",
+                        error=str(e), agent=agent_id, model=model_name,
+                    )
             try:
                 await self.state.record_token_usage(_TokenUsage(
                     usage_id=f"usage-{_uuid.uuid4().hex[:12]}",
                     request_id="",
                     subtask_id="",
                     agent_id=agent_id,
-                    model=str(result.get("model") or agent.model or ""),
-                    input_tokens=int(result.get("input_tokens") or 0),
-                    output_tokens=int(result.get("output_tokens") or 0),
-                    cost_usd=0.0,  # pricing lookup is out of scope here; supervisor cost reports already cover this
+                    model=model_name,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost_usd,
                     project_artifact_id=project_artifact_id,
+                    project_id=project_id,
                 ))
             except Exception as e:
                 logger.warning("token_usage_record_failed", error=str(e), agent=agent_id)

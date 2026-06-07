@@ -117,3 +117,27 @@ tools:
     category: infrastructure
     available_to:
       - devops_specialist
+
+  lessons_writer:
+    description: "Read from or append to docs/agent-lessons-learned.md — the shared failure-pattern knowledge base injected into every code-producing agent's system prompt. Use action='read' to check existing lessons, action='append' to persist a new lesson block so future agents avoid the same mistake."
+    category: quality
+    available_to:
+      - self_learning_agent
+
+  security_scan:
+    description: "Run SAST (bandit), Python dependency CVE scan (safety), frontend dependency audit (npm audit), and secrets detection (detect-secrets) against generated project files. Returns structured results with verdict=PASS or verdict=FAIL. FAIL if any CRITICAL/HIGH finding or any secret is detected."
+    category: security
+    available_to:
+      - security_specialist
+
+  ops_check:
+    description: "Post-deploy health monitoring: HTTP health endpoint checks (:8000/:3000), disk usage, memory pressure (/proc/meminfo), and recent error log scan. Use action='full_check' for a combined verdict. Returns verdict=HEALTHY/DEGRADED/UNHEALTHY."
+    category: infrastructure
+    available_to:
+      - ops_heal_agent
+
+  policy_check:
+    description: "Evaluate the declarative quality rule catalog (config/quality-rules.yaml) against a batch of agent emissions. Each emission is {target_path, content, agent_id, tool_name, rework_cycle}. Returns {verdict, violations[], summary{}}. verdict='BLOCK' when any enforce-severity rule fires (workflow halts at quality_guardian_approval gate); 'PASS_WITH_WARNINGS' when only warn-severity rules fire (workflow advances with annotated quality_report); 'PASS' when nothing fires. Each violation carries rule_id, rationale, fix_hint, and a snippet of the matched content so the next rework cycle has actionable guidance."
+    category: quality
+    available_to:
+      - quality_guardian
