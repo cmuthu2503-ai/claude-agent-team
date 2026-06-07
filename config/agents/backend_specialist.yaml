@@ -233,6 +233,14 @@ tools:
   - web_search
   - web_scrape
 
+# KB-09 — `forced`: relevant platform knowledge (architecture, conventions,
+# lessons) is pre-injected into the system prompt, REPLACING the wholesale
+# agent-lessons-learned.md dump with relevance-ranked retrieval (FR-005).
+# Falls back to the wholesale lessons when the KB is unavailable.
+retrieval:
+  mode: forced
+  forced_top_k: 6
+
 outputs:
   - name: "API Endpoints"
     format: code

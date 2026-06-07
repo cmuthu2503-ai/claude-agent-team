@@ -1,12 +1,26 @@
 """Agent executor — bridges the agent system with the orchestrator.
 
-Single LLM provider: Claude Platform on AWS (Anthropic-operated, AWS-authenticated).
-All agents share one AnthropicAWS client and the same model — set in
-`config/agents/*.yaml` as `model:` (e.g. `claude-opus-4-7`).
+PAM-07: Per-call model resolution
+---------------------------------
+The executor now resolves the model PER agent invocation through
+``ModelResolver`` (PAM-05), which consults the 5-layer precedence chain
+(request_override → db_override → YAML default → env default → catalog
+default). The resolved ``(client, model, tool_calling_mode)`` triple is
+threaded into ``BaseAgent.process_task()`` as keyword arguments (PAM-06)
+so concurrent calls on the same agent with different models can't
+cross-pollinate via shared instance state.
 
-Not Bedrock. Not the direct Anthropic API. See docs/setup-claude-platform-on-aws.md.
+The single AnthropicAWS client is still constructed eagerly at boot for
+the common case and registered into ``LLMClientPool`` (PAM-03) under the
+``anthropic_aws`` provider key. Other providers (Bedrock, OpenAI,
+Ollama in PR-4) are built lazily by the pool the first time an agent
+resolves to one of those models.
+
+See docs/setup-claude-platform-on-aws.md for Claude Platform on AWS
+auth setup (the platform's primary provider).
 """
 
+import hashlib
 import os
 import time
 from typing import Any
@@ -137,17 +151,108 @@ class AgentSystemExecutor:
         # Backward compat: legacy callers still read self.client
         self.client = self.anthropic_client
 
+        # ── PAM-07 — ModelCatalog + LLMClientPool + ModelResolver ──
+        # Catalog is the single source of truth for "which models exist
+        # and how to talk to each one." Resolver is the per-call entry
+        # point the dispatcher uses to pick a model (5-layer precedence).
+        # Client pool caches one client per (provider_type, base_url).
+        # All three soft-fail: if config/models.yaml is missing or
+        # invalid we log a WARNING and fall back to the legacy
+        # ``agent.set_llm_client(self.anthropic_client)`` path so the
+        # platform stays bootable even with a broken catalog.
+        # KB-09 — the agentic knowledge subsystem (retriever + stores +
+        # ingestion). Built asynchronously in main.py's lifespan (KB-10) and
+        # set here afterward; None until then. When None/unavailable, agents
+        # run without retrieval — behaviour identical to pre-KB.
+        self.kb_subsystem: Any = None
+        self.model_catalog: Any = None
+        self.client_pool: Any = None
+        self.model_resolver: Any = None
+        try:
+            from src.agents.client_pool import LLMClientPool
+            from src.agents.model_resolver import ModelResolver
+            from src.models.catalog import ModelCatalog, default_catalog_path
+
+            self.model_catalog = ModelCatalog.load(default_catalog_path())
+            # LLMClientPool takes no constructor args — it's a stateless
+            # cache keyed by (provider_type, base_url). The catalog
+            # passes per-model context at get_for() time, not init time.
+            self.client_pool = LLMClientPool()
+            # Pre-register the already-built AnthropicAWS client so the
+            # pool returns the same instance for any anthropic_aws model
+            # (no double-construction). Lazy paths still apply for
+            # bedrock / openai / openai_compat / ollama.
+            if self.anthropic_client and hasattr(
+                self.client_pool, "register_prebuilt"
+            ):
+                try:
+                    self.client_pool.register_prebuilt(
+                        provider_type="anthropic_aws",
+                        client=self.anthropic_client,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "client_pool_prebuilt_registration_failed",
+                        error=str(e),
+                    )
+            self.model_resolver = ModelResolver(
+                catalog=self.model_catalog,
+                client_pool=self.client_pool,
+                agents_config=getattr(config, "agents", None),
+                # PAM-11 — wire the state store so layer 2 (DB override)
+                # is now live. The resolver tolerates state being None
+                # (mock-mode tests, executor constructed without state)
+                # and tolerates lookup failures (logs + falls through).
+                state_store=self.state,
+            )
+            # PAM-15: attach the freshly-loaded catalog to the token
+            # tracker so cost calc reads pricing from models.yaml
+            # rather than the legacy thresholds.yaml block. Set after
+            # the catalog is loaded — the tracker was constructed
+            # earlier (line above) before catalog existed; back-fill
+            # the reference now so the next record() call uses it.
+            if self._token_tracker is not None:
+                self._token_tracker._catalog = self.model_catalog
+            logger.info(
+                "model_resolver_initialized",
+                catalog_models=len(self.model_catalog.models),
+                default_model=self.model_catalog.default_model,
+            )
+        except Exception as e:  # noqa: BLE001
+            # Catalog / pool / resolver init failed — the platform must
+            # still boot. The legacy path (eager set_llm_client below)
+            # picks up the slack: every agent gets the AnthropicAWS
+            # client and its YAML model, exactly as before PAM-07.
+            logger.warning(
+                "model_resolver_init_failed_falling_back_to_legacy_path",
+                error=str(e),
+                hint=(
+                    "config/models.yaml is missing or invalid. Per-call "
+                    "model resolution disabled; all agents will use the "
+                    "single AnthropicAWS client + their YAML model. Fix "
+                    "the catalog and restart to re-enable PAM-07."
+                ),
+            )
+
         # ── Tool implementations ─────────────────────
-        from src.tools.file_tools import FileReadTool, FileWriteTool, SearchReplaceTool
-        from src.tools.git_tools import GitTool
-        from src.tools.code_tools import CodeExecTool, TestRunnerTool, CodeAnalysisTool
-        from src.tools.github_tools import GitHubAPITool, GitHubPRReviewTool
-        from src.tools.firecrawl_tools import WebSearchTool, WebScrapeTool
+        from src.tools.anomaly_detect import AnomalyDetectTool
+        from src.tools.auto_rollback import AutoRollbackTool
+        from src.tools.code_tools import CodeAnalysisTool, CodeExecTool, TestRunnerTool
+        from src.tools.dependency_audit import DependencyAuditTool
         from src.tools.deploy_tools import WaitForDeploymentTool
+        from src.tools.file_tools import FileReadTool, FileWriteTool, SearchReplaceTool
+        from src.tools.firecrawl_tools import WebScrapeTool, WebSearchTool
+        from src.tools.git_tools import GitTool
+        from src.tools.github_tools import GitHubAPITool, GitHubPRReviewTool
+        from src.tools.health_probe import HealthProbeTool
         from src.tools.lessons_writer import LessonsWriterTool
-        from src.tools.security_scan import SecurityScanTool
         from src.tools.ops_check import OpsCheckTool
+        from src.tools.pen_test_simple import PenTestSimpleTool
         from src.tools.policy_check import PolicyCheckTool
+        from src.tools.sast_scan import SastScanTool
+        from src.tools.secret_scan import SecretScanTool
+        from src.tools.security_scan import SecurityScanTool
+        from src.tools.slo_check import SloCheckTool
 
         self.tool_registry.register_implementation("file_read", FileReadTool())
         self.tool_registry.register_implementation("file_write", FileWriteTool())
@@ -177,6 +282,48 @@ class AgentSystemExecutor:
         # Wraps bandit, safety, npm audit, and detect-secrets with graceful SKIP
         # fallback when any binary is absent from the environment.
         self.tool_registry.register_implementation("security_scan", SecurityScanTool())
+        # AET-15 / AET-16 — focused replacements for the monolithic
+        # security_scan. sast_scan handles SAST (bandit + eslint),
+        # dependency_audit handles supply-chain CVEs (pip-audit + npm
+        # audit). Both emit unified-severity findings the security
+        # gate (AET-20) can consume directly.
+        self.tool_registry.register_implementation("sast_scan", SastScanTool())
+        self.tool_registry.register_implementation("dependency_audit", DependencyAuditTool())
+        # AET-17 — pre-`code_commit` secret detector. Runs on the
+        # agent's IN-MEMORY emissions, not on disk, so a leaked key is
+        # caught before code_writer / github_publisher materialises it.
+        self.tool_registry.register_implementation("secret_scan", SecretScanTool())
+        # AET-18 — black-box probe against the project's finalized
+        # OpenAPI spec. Read-only where possible; mutating probes only
+        # on endpoints the spec declares as POST/PUT. Skips when no
+        # spec or base_url is available.
+        self.tool_registry.register_implementation("pen_test_simple", PenTestSimpleTool())
+        # AET-25 — rolling-window SLO evaluator for the ops_heal_agent.
+        # Reads deploy_health rows through the StateStore, so the
+        # constructor takes the same `state` handle wait_for_deployment
+        # uses. No state → tool returns ERROR at call time rather than
+        # crashing at boot.
+        self.tool_registry.register_implementation(
+            "slo_check", SloCheckTool(state=self.state),
+        )
+        # AET-26 — single-shot HTTP probe (same primitive the supervisor
+        # uses, exposed as a tool so the agent can run on-demand probes
+        # between supervisor ticks).
+        self.tool_registry.register_implementation(
+            "health_probe", HealthProbeTool(),
+        )
+        # AET-27 — z-score anomaly detector over rolling 1hr / 5min
+        # windows. Complementary to slo_check (absolute thresholds vs
+        # relative deviation).
+        self.tool_registry.register_implementation(
+            "anomaly_detect", AnomalyDetectTool(state=self.state),
+        )
+        # AET-29 — idempotent rollback request queue. Writes a
+        # rollback_requests row; supervisor host process consumes it
+        # and runs the actual git revert + redeploy.
+        self.tool_registry.register_implementation(
+            "auto_rollback", AutoRollbackTool(state=self.state),
+        )
         # ops_check is the health-monitoring back-end for the ops_heal_agent.
         # Checks HTTP health endpoints, disk/memory pressure, and recent error
         # log patterns after each deployment.
@@ -259,10 +406,141 @@ class AgentSystemExecutor:
             )
             return None
 
+    async def _resolve_model_for_agent(
+        self,
+        agent_id: str,
+        request_provider: str | None = None,
+    ) -> tuple[Any, str | None, str | None, str | None]:
+        """Return ``(client, model_id, tool_calling_mode, source)`` for
+        the given agent.
+
+        PAM-07: Replaces the old ``_resolve_provider()`` indirection.
+        When the catalog + resolver are wired (the common path), the
+        5-layer precedence chain in ``ModelResolver.resolve()`` decides
+        which model wins. When the resolver is unavailable (catalog
+        load failed at boot — see warning in ``__init__``), we fall
+        back to the legacy values: the AnthropicAWS client + the
+        agent's YAML model. The caller passes these into
+        ``BaseAgent.process_task()`` as kwargs so concurrent calls on
+        the same agent can carry different models without racing on
+        instance state (PAM-06's contract).
+        """
+        if self.model_resolver is not None:
+            try:
+                resolved = await self.model_resolver.resolve(
+                    agent_id=agent_id,
+                    request_provider=request_provider,
+                )
+                return (
+                    resolved.client,
+                    resolved.vendor_model_id,
+                    resolved.tool_calling_mode,
+                    resolved.resolution_source,
+                )
+            except Exception as e:  # noqa: BLE001
+                # Resolver hiccup: log + fall through to legacy path.
+                # MUST NOT block dispatch on a resolution failure — same
+                # principle the resolver itself applies to its DB layer.
+                logger.warning(
+                    "model_resolver_failed_falling_back",
+                    agent_id=agent_id, error=str(e),
+                )
+        # Legacy path: single AnthropicAWS client + per-agent YAML model.
+        agent = self.registry.get(agent_id)
+        agent_model = agent.model if agent else None
+        return (self.anthropic_client, agent_model, "native", "legacy_fallback")
+
+    async def _resolve_kb_for_request(
+        self, agent_id: str, request_id: str, inputs: dict[str, Any],
+    ) -> tuple[Any, Any, dict[str, Any] | None]:
+        """Return ``(kb_scope, kb_retriever, retrieval_config)`` for this
+        invocation, or ``(None, None, None)`` when the KB is unavailable.
+
+        KB-09: builds the grounding scope from the Request's ``bucket_ids``
+        (the user's per-request bucket selection) + the agent's YAML
+        ``retrieval:`` config.
+
+        KB-15: the **namespace** is derived from the Request's ``project_id``
+        (the per-application isolation boundary) honouring the agent's YAML
+        ``retrieval.scope`` grant — a project Request scopes the agent to
+        ``kb_project_<id>`` so it can't reach another app's knowledge. The
+        agent's tool schema has no namespace param, so it cannot widen.
+
+        Gated on subsystem availability — when the KB is down, returns all-None
+        and the agent runs exactly as pre-KB.
+        """
+        from src.knowledge.scoping import resolve_craft_namespace, resolve_namespace
+        from src.knowledge.tools import KbScope
+
+        sub = self.kb_subsystem
+        if sub is None or not getattr(sub, "available", False):
+            return None, None, None
+        retrieval_config = (self.config.agents.get(agent_id, {}) or {}).get("retrieval")
+
+        # Fetch the Request once for BOTH its project_id (→ namespace) and its
+        # selected bucket_ids (→ in-namespace refinement). inputs may override
+        # bucket_ids (workflow-passed) and project_id (single_agent_call path).
+        project_id: str | None = None
+        bucket_ids: list[str] = []
+        if isinstance(inputs, dict) and inputs.get("bucket_ids"):
+            bucket_ids = list(inputs["bucket_ids"])
+        if isinstance(inputs, dict) and inputs.get("project_id"):
+            project_id = str(inputs["project_id"])
+        if project_id is None or not bucket_ids:
+            try:
+                request = await self.state.get_request(request_id) if self.state else None
+                if request is not None:
+                    if project_id is None:
+                        project_id = getattr(request, "project_id", None)
+                    if not bucket_ids:
+                        bucket_ids = list(getattr(request, "bucket_ids", []) or [])
+            except Exception as e:  # noqa: BLE001
+                logger.warning("kb_scope_request_lookup_failed", error=str(e))
+
+        agent_scope = str((retrieval_config or {}).get("scope", "auto"))
+        namespace = resolve_namespace(sub.settings, project_id, agent_scope)
+        craft_namespace = resolve_craft_namespace(sub.settings, project_id, agent_scope)
+        # KB-25 — episodic recall is per-app; only scope it when this Request
+        # belongs to a real application (not the platform-only / unassigned case).
+        from src.models.base import UNASSIGNED_PROJECT_ID
+
+        memory_namespace = (
+            sub.settings.memory_namespace(project_id)
+            if project_id and project_id != UNASSIGNED_PROJECT_ID
+            else None
+        )
+        # KB-32 — per-Request retrieval budget from the agent's YAML config.
+        try:
+            max_searches = int((retrieval_config or {}).get("max_searches") or 0) or None
+        except (TypeError, ValueError):
+            max_searches = None
+        scope = KbScope(
+            namespace=namespace, craft_namespace=craft_namespace,
+            bucket_ids=bucket_ids, agent_id=agent_id, request_id=request_id,
+            is_project=namespace != sub.settings.platform_namespace,
+            project_id=project_id, memory_namespace=memory_namespace,
+            max_searches=max_searches,
+        )
+        logger.debug(
+            "kb_scope_resolved", agent_id=agent_id, namespace=namespace,
+            craft_namespace=craft_namespace, project_id=project_id,
+            buckets=len(bucket_ids), scope=agent_scope,
+        )
+        return scope, sub.retriever, retrieval_config
+
     async def execute(
         self, agent_id: str, request_id: str, inputs: dict[str, Any],
     ) -> dict[str, Any]:
-        """Execute an agent task. Falls back to mock if the client isn't configured."""
+        """Execute an agent task. Falls back to mock if the client isn't configured.
+
+        PAM-07: The model is resolved per-invocation through
+        ``ModelResolver`` and threaded into ``process_task()`` as
+        kwargs. No more snapshot-and-restore of ``self._llm_client`` /
+        ``self.model`` on the agent (which was the race we worked
+        around before PAM-06). A per-request provider override can be
+        passed in via ``inputs["provider"]`` (the Command Center submit
+        form sets this; in-flight retries persist it on Request.provider).
+        """
         agent = self.registry.get(agent_id)
         if not agent:
             logger.error("agent_not_found", agent_id=agent_id)
@@ -279,26 +557,121 @@ class AgentSystemExecutor:
         # filesystem tools resolve under the platform's project_root.
         project_root = await self._resolve_project_root_for_request(request_id)
 
-        if not self.anthropic_client:
-            agent.set_llm_client(None)
+        # PAM-07: per-call model resolution. ``request_provider`` from
+        # the inputs dict feeds layer 1 of the resolver chain (request
+        # override beats DB override beats YAML default beats env beats
+        # catalog default).
+        request_provider = None
+        if isinstance(inputs, dict):
+            request_provider = (
+                inputs.get("provider")
+                or inputs.get("request_provider")
+                or None
+            )
+        (
+            llm_client,
+            resolved_model,
+            tool_calling_mode,
+            source,
+        ) = await self._resolve_model_for_agent(
+            agent_id=agent_id, request_provider=request_provider,
+        )
+
+        # KB-09: resolve the knowledge grounding scope + retriever for this
+        # invocation (all-None when the KB is unavailable → no behaviour change).
+        kb_scope, kb_retriever, retrieval_config = await self._resolve_kb_for_request(
+            agent_id, request_id, inputs,
+        )
+
+        if not llm_client:
             logger.info(
                 "agent_executing_mock",
                 agent_id=agent_id, request_id=request_id,
                 project_root=str(project_root) if project_root else "platform",
+                resolution_source=source,
             )
             return await agent.process_task(
                 request_id, inputs, project_root=project_root,
+                llm_client=None,
+                model=resolved_model,
+                tool_calling_mode=tool_calling_mode,
+                kb_scope=kb_scope,
+                kb_retriever=kb_retriever,
+                retrieval_config=retrieval_config,
             )
 
         logger.info(
             "agent_executing",
-            agent_id=agent_id, request_id=request_id, model=agent.model,
+            agent_id=agent_id, request_id=request_id,
+            model=resolved_model,
+            tool_calling_mode=tool_calling_mode,
+            resolution_source=source,
             inference_geo=self.inference_geo or "global",
             project_root=str(project_root) if project_root else "platform",
+            kb_buckets=len(kb_scope.bucket_ids) if kb_scope else 0,
+            kb_grounded=kb_retriever is not None,
         )
-        return await agent.process_task(
+        result = await agent.process_task(
             request_id, inputs, project_root=project_root,
+            llm_client=llm_client,
+            model=resolved_model,
+            tool_calling_mode=tool_calling_mode,
+            kb_scope=kb_scope,
+            kb_retriever=kb_retriever,
+            retrieval_config=retrieval_config,
         )
+        # KB-20 — record this agent's decision into the provenance ledger.
+        # Auto-derived from the trace unless the agent called record_decision
+        # itself. Soft-fails; never affects the agent result.
+        await self._auto_record_decision(
+            agent_id, request_id, kb_scope, retrieval_config, inputs, result,
+        )
+        return result
+
+    async def _auto_record_decision(
+        self, agent_id: str, request_id: str, kb_scope: Any,
+        retrieval_config: dict[str, Any] | None, inputs: dict[str, Any],
+        result: dict[str, Any],
+    ) -> None:
+        """KB-20 — if a KB-grounded agent finished without explicitly calling
+        ``record_decision``, derive one from the trace: conclusion (output
+        text) + the chunks its retrievals returned + an inputs digest. Only for
+        agents actually wired to the KB (``retrieval`` config present)."""
+        sub = self.kb_subsystem
+        if sub is None or not getattr(sub, "available", False):
+            return
+        if kb_scope is None or not retrieval_config:
+            return
+        try:
+            store = sub.knowledge_store
+            # Skip if the agent already recorded its own decision this request.
+            existing = await store.list_decisions(request_id)
+            if any(d.get("agent_id") == agent_id for d in existing):
+                return
+            summary = str((result or {}).get("text", "")).strip()
+            if not summary:
+                return
+            # Chunks this agent's retrievals surfaced (provenance).
+            audit = await store.list_retrieval_audit(request_id)
+            chunk_ids: list[str] = []
+            for a in audit:
+                if a.get("agent_id") == agent_id:
+                    chunk_ids.extend(a.get("returned_chunk_ids") or [])
+            chunk_ids = list(dict.fromkeys(chunk_ids))[:50]
+            digest = hashlib.sha256(
+                repr(sorted(inputs.items()) if isinstance(inputs, dict) else inputs).encode()
+            ).hexdigest()[:16]
+            await store.record_decision(
+                request_id=request_id, agent_id=agent_id, summary=summary[:2000],
+                project_id=getattr(kb_scope, "project_id", None),
+                retrieved_chunk_ids=chunk_ids, inputs_digest=digest,
+            )
+            logger.debug(
+                "kb_decision_auto_recorded", agent_id=agent_id,
+                request_id=request_id, chunks=len(chunk_ids),
+            )
+        except Exception as e:  # noqa: BLE001 — provenance must never block work
+            logger.warning("kb_auto_record_decision_failed", error=str(e))
 
     def get_busy_agents(self) -> dict[str, dict[str, Any]]:
         """Snapshot of currently-busy agents (single_agent_call in flight).
@@ -363,8 +736,23 @@ class AgentSystemExecutor:
             "label": label or f"single_call ({agent_id})",
             "started_at": time.time(),
         }
+        # PAM-07: resolve per-call so single_agent_call benefits from the
+        # same model-resolution chain as the workflow-driven execute()
+        # path. Falls back to (anthropic_client, agent.model) when the
+        # resolver isn't wired.
+        (
+            llm_client,
+            resolved_model,
+            tool_calling_mode,
+            _source,
+        ) = await self._resolve_model_for_agent(agent_id=agent_id)
         try:
-            result = await agent.single_call(prompt, max_tokens=max_tokens)
+            result = await agent.single_call(
+                prompt, max_tokens=max_tokens,
+                llm_client=llm_client,
+                model=resolved_model,
+                tool_calling_mode=tool_calling_mode,
+            )
         finally:
             self._busy_agents.pop(agent_id, None)
 
@@ -381,6 +769,7 @@ class AgentSystemExecutor:
         # accumulated correctly but the dollar column stayed zero.
         if self.state is not None:
             import uuid as _uuid
+
             from src.models.base import TokenUsage as _TokenUsage
             input_tokens = int(result.get("input_tokens") or 0)
             output_tokens = int(result.get("output_tokens") or 0)

@@ -162,6 +162,20 @@ tools:
   - file_read
   - web_search
   - web_scrape
+  - knowledge_search
+  - knowledge_get
+  - knowledge_cite
+  - record_decision
+  - recall_memory
+
+# KB-22 — `agentic`: the reviewer pulls prior reviews / app conventions from
+# the KB on demand (knowledge_search), cites them, and records its verdict.
+# scope: auto (§5.1) — app facts from the project namespace; platform craft
+# (lessons-learned, conventions) informs but is never citeable as fact.
+retrieval:
+  mode: agentic
+  scope: auto
+  max_searches: 8
 
 outputs:
   - name: "Review Report"
@@ -173,6 +187,7 @@ delegation:
   can_delegate_to:
     - backend_specialist
     - frontend_specialist
+    - architecture_reviewer
   max_concurrent_tasks: 4
 
 quality_gates:

@@ -125,6 +125,12 @@ class BaseAgent(ABC):
     async def process_task(
         self, request_id: str, inputs: dict[str, Any],
         *, project_root: "Path | None" = None,
+        llm_client: Any = None,
+        model: str | None = None,
+        tool_calling_mode: str | None = None,
+        kb_scope: Any = None,
+        kb_retriever: Any = None,
+        retrieval_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Iterative tool-use loop: messages → LLM → tools → repeat until text.
 
@@ -135,17 +141,59 @@ class BaseAgent(ABC):
         — without this, an agent task on CrewAI could (and did) scribble
         into the platform's ``frontend/src/App.tsx``. See file_tools.py
         for the resolution logic.
+
+        PAM-06: ``llm_client``, ``model``, and ``tool_calling_mode`` are
+        now keyword arguments. The executor (PAM-07) resolves them
+        per-invocation via ModelResolver and passes them down here.
+        Each call carries its own values on the call stack rather than
+        mutating ``self._llm_client`` / ``self.model`` — two concurrent
+        ``process_task()`` calls on the same agent with different models
+        can no longer cross-pollinate, eliminating the L24-style race
+        the executor previously worked around with snapshot-and-restore.
+
+        Defaults fall back to instance attributes so legacy callers that
+        pre-set them via ``set_llm_client()`` keep working unchanged.
         """
         # Stashed so _execute_tool can forward without an explicit pass.
         self._current_project_root: "Path | None" = project_root
+        # KB-09 — stash the knowledge scope so _execute_tool forwards it to
+        # knowledge_search/get (the agent can't widen it). Same per-call
+        # self-stash pattern as project_root above.
+        self._current_kb_scope: Any = kb_scope
+        # KB-09 — forced/hybrid retrieval grounding, computed once below and
+        # consumed by _build_system_prompt across loop iterations.
+        self._kb_grounding: str = ""
+        # Per-call values resolved here as LOCALS (not self attributes) so
+        # concurrent process_task() invocations on this agent each carry
+        # their own values on the stack — no cross-pollination via self.
+        effective_client: Any = (
+            llm_client if llm_client is not None else self._llm_client
+        )
+        effective_model: str = model if model is not None else self.model
+        effective_mode: str = (
+            tool_calling_mode if tool_calling_mode is not None else "native"
+        )
         logger.info(
             "agent_processing_task",
             agent=self.agent_id, request_id=request_id,
             project_root=str(project_root) if project_root else "platform",
+            model=effective_model,
+            tool_calling_mode=effective_mode,
         )
 
-        if not self._llm_client:
+        if not effective_client:
             return self._mock_result(inputs)
+
+        # KB-09 — forced/hybrid pre-injection. When a retriever is wired AND
+        # this agent's retrieval mode pre-injects, pull the top-K relevant
+        # chunks for the task and stash them; _build_system_prompt then grounds
+        # the agent in ranked retrieval INSTEAD of the wholesale lessons dump
+        # (FR-005). Soft-fails to "" → wholesale lessons fallback, so when the
+        # KB is unavailable (no retriever) behaviour is byte-for-byte unchanged.
+        rc = retrieval_config or {}
+        mode = str(rc.get("mode", "none"))
+        if kb_retriever is not None and kb_scope is not None and mode in ("forced", "hybrid"):
+            await self._inject_forced_grounding(inputs, kb_retriever, kb_scope, rc)
 
         messages = self._build_messages(inputs)
         tool_schemas = self._get_tool_schemas()
@@ -164,6 +212,10 @@ class BaseAgent(ABC):
             response = await self._call_anthropic(
                 messages, tool_schemas,
                 max_tokens=self._default_max_tokens(),
+                # PAM-06: pass the per-call client + model as kwargs so
+                # the LLM call doesn't read self.* (concurrency fix).
+                llm_client=effective_client,
+                model=effective_model,
             )
             llm_calls += 1
             total_input_tokens += response.get("input_tokens", 0)
@@ -213,6 +265,7 @@ class BaseAgent(ABC):
             return self._build_result(
                 final_text, llm_calls, tool_call_count,
                 total_input_tokens, total_output_tokens,
+                model=effective_model,
             )
 
         logger.warning(
@@ -226,12 +279,17 @@ class BaseAgent(ABC):
         return self._build_result(
             final_text, llm_calls, tool_call_count,
             total_input_tokens, total_output_tokens,
+            model=effective_model,
         )
 
     async def single_call(
         self,
         prompt: str,
         max_tokens: int | None = None,
+        *,
+        llm_client: Any | None = None,
+        model: str | None = None,
+        tool_calling_mode: str | None = None,
     ) -> dict[str, Any]:
         """One-shot LLM call: no tool-use loop, no `inputs` formatting.
 
@@ -245,26 +303,36 @@ class BaseAgent(ABC):
         generators (PRD ≥ 60 KB, API spec ≥ 30 KB) need 32 000+ here so
         the output doesn't get truncated mid-document.
 
+        PAM-07: ``llm_client``, ``model``, and ``tool_calling_mode`` are
+        keyword arguments threaded from the executor's ModelResolver.
+        Defaults to instance attrs for legacy callers (PDB-05 BPD path
+        still calls ``executor.single_agent_call`` which now passes
+        these kwargs).
+
         Returns a stub result in mock mode (no LLM client configured) so
         dev environments still exercise the wire-up.
         """
-        if not self._llm_client:
+        effective_client = llm_client if llm_client is not None else self._llm_client
+        effective_model = model if model is not None else self.model
+        if not effective_client:
             return {
                 "text": f"(mock {self.agent_id} output for prompt: {prompt[:80]}...)",
                 "input_tokens": 0,
                 "output_tokens": 0,
-                "model": self.model,
+                "model": effective_model,
             }
         response = await self._call_anthropic(
             messages=[{"role": "user", "content": prompt}],
             tool_schemas=[],
             max_tokens=max_tokens,
+            llm_client=effective_client,
+            model=effective_model,
         )
         return {
             "text": response.get("text", ""),
             "input_tokens": response.get("input_tokens", 0),
             "output_tokens": response.get("output_tokens", 0),
-            "model": self.model,
+            "model": effective_model,
             # Surfaced so callers can detect truncation (stop_reason ==
             # "max_tokens" means the response was cut off — used by BPD
             # generation endpoints to show a "split this epic" hint per
@@ -274,7 +342,8 @@ class BaseAgent(ABC):
 
     def _build_result(
         self, text: str, llm_calls: int, tool_calls: int,
-        input_tokens: int, output_tokens: int
+        input_tokens: int, output_tokens: int,
+        *, model: str | None = None,
     ) -> dict[str, Any]:
         return {
             "status": "completed",
@@ -285,7 +354,10 @@ class BaseAgent(ABC):
             "tool_calls": tool_calls,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "model": self.model,
+            # PAM-06: prefer per-call model (threaded as kwarg) so concurrent
+            # calls with different models report accurately. Falls back to
+            # self.model for legacy callers.
+            "model": model if model is not None else self.model,
         }
 
     def _build_messages(self, inputs: dict[str, Any]) -> list[dict[str, Any]]:
@@ -330,8 +402,118 @@ class BaseAgent(ABC):
             f'"today" and THIS year as "current". Never default to an earlier year '
             f"from your training data.\n\n"
         )
-        lessons_block = self._load_cross_agent_lessons()
-        return date_header + lessons_block + self.system_prompt
+        # KB-09: prefer ranked KB grounding (forced/hybrid retrieval) when it
+        # was computed this call; otherwise fall back to the wholesale lessons
+        # dump. The ranked block includes the relevant lessons (the lessons doc
+        # is in kb_platform), so FR-005 holds when the KB is up, and the
+        # fallback preserves today's behaviour when it's down.
+        grounding = getattr(self, "_kb_grounding", "")
+        knowledge_block = grounding or self._load_cross_agent_lessons()
+        return date_header + knowledge_block + self.system_prompt
+
+    async def _inject_forced_grounding(
+        self, inputs: dict[str, Any], retriever: Any, kb_scope: Any, rc: dict[str, Any]
+    ) -> None:
+        """Retrieve top-K relevant chunks for the task and stash a grounding
+        block on ``self._kb_grounding``. Never raises — retrieval failure just
+        leaves grounding empty (→ wholesale-lessons fallback)."""
+        # Self-contained default so the attribute always exists after this
+        # method runs, even if called outside process_task (which also sets it).
+        self._kb_grounding = ""
+        try:
+            query = self._kb_query_from_inputs(inputs)
+            if not query:
+                return
+            top_k = int(rc.get("forced_top_k", 5))
+            req_id = getattr(kb_scope, "request_id", None)
+            # FACTS — the citeable scope (project namespace for a project task).
+            hits = await retriever.retrieve(
+                query, kb_scope.namespace,
+                bucket_ids=getattr(kb_scope, "bucket_ids", None) or None,
+                agent_id=self.agent_id, request_id=req_id, top_k=top_k,
+            )
+            # CRAFT (KB-17) — optional secondary scope (platform). Retrieved to
+            # inform format/method/tone but NEVER citeable as a substantive fact
+            # (§5.1). No bucket filter — craft is platform-wide.
+            craft_ns = getattr(kb_scope, "craft_namespace", None)
+            craft_hits: list[Any] = []
+            if craft_ns and craft_ns != kb_scope.namespace:
+                craft_hits = await retriever.retrieve(
+                    query, craft_ns, bucket_ids=None,
+                    agent_id=self.agent_id, request_id=req_id,
+                    top_k=int(rc.get("craft_top_k", 3)),
+                )
+            # KB-19 cold-start — a project task whose app KB has no grounded
+            # facts yet. Emit an explicit SPARSE banner so the agent leans on
+            # the task brief/PRD + provided sources and flags ungrounded claims
+            # (rather than silently falling back to platform craft as if it
+            # were app fact).
+            sparse = getattr(kb_scope, "is_project", False) and not hits
+            self._kb_grounding = self._format_grounding(hits, craft_hits, sparse=sparse)
+        except Exception as e:  # noqa: BLE001 — never block the agent on retrieval
+            logger.warning("kb_forced_injection_failed", agent=self.agent_id, err=str(e))
+
+    @staticmethod
+    def _kb_query_from_inputs(inputs: dict[str, Any]) -> str:
+        """Build a retrieval query from the task inputs. Uses the most
+        descriptive text field (description / requirements / the first long
+        string), capped so the embed call stays cheap."""
+        for key in ("description", "requirements", "task", "content", "title"):
+            v = inputs.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()[:1000]
+        for v in inputs.values():
+            if isinstance(v, str) and len(v.strip()) > 20:
+                return v.strip()[:1000]
+        return ""
+
+    @staticmethod
+    def _format_grounding(
+        hits: list[Any], craft_hits: list[Any] | None = None, sparse: bool = False,
+    ) -> str:
+        """Wrap retrieved chunks as a system-prompt grounding block.
+
+        Two sections (KB-17): FACTS are citeable as ``[KB#id]``; CRAFT
+        (platform conventions/format/method) is guidance only and must NEVER be
+        cited as a substantive fact (§5.1). ``sparse`` (KB-19) prepends a
+        cold-start banner for a project whose app KB has no grounded facts yet.
+        Empty facts + empty craft + not sparse → "" (the caller then falls back
+        to wholesale lessons)."""
+        craft_hits = craft_hits or []
+        if not hits and not craft_hits and not sparse:
+            return ""
+        parts: list[str] = []
+        if sparse:
+            parts += [
+                "=== APP KNOWLEDGE SPARSE ===",
+                "This application's knowledge base has little or no grounded content",
+                "yet. Ground substantive claims in the task's PRD/brief and any",
+                "provided sources. If you cannot ground a claim, FLAG it and lower",
+                "your stated confidence — do NOT invent app-specific facts.\n",
+            ]
+        if hits:
+            parts += [
+                "=== RELEVANT KNOWLEDGE (retrieved for this task — cite as [KB#id]) ===",
+                "These are the grounded FACTS for this task. Cite the source of every",
+                "substantive claim as [KB#id]. If a claim isn't supported here, say so",
+                "rather than inventing it (citation-or-flag).\n",
+            ]
+            for h in hits:
+                src = getattr(h, "title", "") or getattr(h, "doc_id", "")
+                parts.append(f"[KB#{h.chunk_id}] ({src})\n{h.text}\n")
+            parts.append("=== END KNOWLEDGE ===\n")
+        if craft_hits:
+            parts += [
+                "=== PLATFORM CRAFT (format / method / tone — GUIDANCE ONLY) ===",
+                "Use these for HOW to do the work (structure, conventions, style).",
+                "They are NOT facts about this application — do NOT cite them as",
+                "substantive claims.\n",
+            ]
+            for h in craft_hits:
+                src = getattr(h, "title", "") or getattr(h, "doc_id", "")
+                parts.append(f"(craft: {src})\n{h.text}\n")
+            parts.append("=== END CRAFT ===\n")
+        return "\n".join(parts)
 
     # Agents that consume cross-agent lessons. Other agents (PRD,
     # user_story, research, content) don't write code so the lessons
@@ -442,6 +624,9 @@ class BaseAgent(ABC):
         tool_schemas: list[dict],
         max_tokens: int | None = None,
         disable_parallel_tool_use: bool = False,
+        *,
+        llm_client: Any | None = None,
+        model: str | None = None,
     ) -> dict[str, Any]:
         """Call the Messages API on Claude Platform on AWS with retry
         on rate limits.
@@ -467,6 +652,10 @@ class BaseAgent(ABC):
         """
         import asyncio as _asyncio
 
+        # PAM-06: resolve client + model from per-call kwargs, falling back to
+        # instance attrs for legacy callers (single_call still uses self.*).
+        effective_client = llm_client if llm_client is not None else self._llm_client
+        effective_model = model if model is not None else self.model
         effective_max_tokens = max_tokens if max_tokens is not None else 8192
         use_streaming = effective_max_tokens > self._STREAMING_MAX_TOKENS_THRESHOLD
         timeout_seconds = (
@@ -478,7 +667,7 @@ class BaseAgent(ABC):
         for attempt in range(max_retries):
             try:
                 kwargs: dict[str, Any] = {
-                    "model": self.model,
+                    "model": effective_model,
                     "max_tokens": effective_max_tokens,
                     "system": self._build_system_prompt(),
                     "messages": messages,
@@ -501,7 +690,7 @@ class BaseAgent(ABC):
 
                 if use_streaming:
                     response = await _asyncio.wait_for(
-                        self._stream_messages(kwargs),
+                        self._stream_messages(kwargs, llm_client=effective_client),
                         timeout=timeout_seconds,
                     )
                 else:
@@ -509,7 +698,7 @@ class BaseAgent(ABC):
                     # raises TimeoutError after _LLM_CALL_TIMEOUT_SECONDS instead of
                     # blocking the workflow indefinitely.
                     response = await _asyncio.wait_for(
-                        self._llm_client.messages.create(**kwargs),
+                        effective_client.messages.create(**kwargs),
                         timeout=timeout_seconds,
                     )
 
@@ -606,7 +795,10 @@ class BaseAgent(ABC):
 
         raise RuntimeError(f"Rate limit exceeded after {max_retries} retries")
 
-    async def _stream_messages(self, kwargs: dict[str, Any]) -> Any:
+    async def _stream_messages(
+        self, kwargs: dict[str, Any],
+        *, llm_client: Any | None = None,
+    ) -> Any:
         """Run a streamed messages.create() call and return a Message-
         shaped object compatible with the non-streaming response.
 
@@ -621,7 +813,9 @@ class BaseAgent(ABC):
         stream.get_final_message()`` returns the same Message shape as
         ``messages.create()`` (with ``.content``, ``.usage``, etc.) so
         the caller doesn't need a separate code path."""
-        async with self._llm_client.messages.stream(**kwargs) as stream:
+        # PAM-06: prefer the per-call client; fall back to instance attr.
+        client = llm_client if llm_client is not None else self._llm_client
+        async with client.messages.stream(**kwargs) as stream:
             # Iterate the stream so the SDK accumulates content blocks
             # and usage counters. We don't need per-chunk handling here
             # — the platform's downstream UX is "give me the full
@@ -643,6 +837,10 @@ class BaseAgent(ABC):
                 # so filesystem tools resolve under the per-project working
                 # tree, not the platform's /app/ tree.
                 project_root=getattr(self, "_current_project_root", None),
+                # KB-09 — forward the knowledge grounding scope so
+                # knowledge_search/get retrieve only within the Request's
+                # buckets. The agent never sets this; the executor injected it.
+                kb_scope=getattr(self, "_current_kb_scope", None),
             )
         except Exception as e:
             return f"Tool error: {e}"

@@ -47,7 +47,10 @@ from src.core.project_workspace import (
     delete_host_file,
     delete_project_root,
     project_root_dir,
+    render_build_plan_markdown,
+    render_finalized_tasks_flat_markdown,
     render_tasks_markdown,
+    write_build_plan,
     write_finalized_api_spec,
     write_finalized_prd,
     write_finalized_tasks,
@@ -1784,6 +1787,8 @@ async def generate_prd(
             agent_id="prd_specialist",
             prompt=prompt,
             project_artifact_id=new_art.artifact_id,
+            project_id=project_id,
+            label="Generating PRD",
             # Atlas-style PRDs run ~60 KB / ~15-25K tokens. The default
             # 8192-token cap truncates the output mid-document. 32 000
             # gives healthy headroom on Claude Opus 4.7 without hitting
@@ -2215,6 +2220,8 @@ async def generate_api_spec(
             agent_id="backend_specialist",
             prompt=prompt,
             project_artifact_id=new_art.artifact_id,
+            project_id=project_id,
+            label="Generating API spec",
             # API specs run 30-60 KB (OpenAPI YAML + narrative). Same
             # rationale as the PRD path — 8192-token default truncates.
             max_tokens=32_000,
@@ -2417,6 +2424,21 @@ def _task_to_dict(t: ProjectTask) -> dict[str, Any]:
         "review_input": t.review_input,
         "created_at": t.created_at.isoformat(),
         "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+        # BPD fields (BPD-003). MUST be included in the serialized row —
+        # without them, `/projects/{pid}/tasks` returns tasks with
+        # feature_id=undefined to the frontend, and BuildPlanView's
+        # `tasksByFeature` grouping silently drops every task. This was
+        # the actual root cause of every "tasks list shows empty"
+        # report — not auto-refresh, not the cascade NULLing — the API
+        # never exposed feature_id in the first place. Surfaced via DB
+        # query showing 348/348 tasks with feature_id set but the tree
+        # showing 0 BPD tasks: the data was there, the wire format
+        # didn't carry it.
+        "feature_id": t.feature_id,
+        "depends_on": list(t.depends_on or []),
+        "primary_file": t.primary_file,
+        "expected_loc": t.expected_loc,
+        "acceptance_test": t.acceptance_test,
     }
 
 
@@ -2783,7 +2805,9 @@ async def generate_tasks(
         result = await executor.single_agent_call(
             agent_id="user_story_author",
             prompt=prompt,
-            project_artifact_id=None,  # tasks aren't an artifact row; cost is unattributed
+            project_artifact_id=None,  # tasks aren't an artifact row
+            project_id=project_id,     # but they ARE attributable by project
+            label="Generating flat task list",
             # The phased task list with multi-line descriptions runs
             # 25-50 KB (15-40 tasks × 4-8 sub-tasks). Default 8192 cuts
             # off around task 10 — easy to miss because the JSON parser
@@ -3546,9 +3570,54 @@ async def get_epic_status(
             "complete": len(ft) > 0 and ft_counts.get("deployed", 0) == len(ft),
         })
     epic_counts = _count_by_status(epic_tasks)
+
+    # BPD-33 — rollup stats for the epic-detail popup. Walks every
+    # request that ever ran for an epic task and sums:
+    #   - cost: actual_cost_usd (falls back to estimated when missing)
+    #   - wall_time: completed_at - created_at per request
+    #   - commits: unique commit_sha entries (deduped — one feature can
+    #     land in multiple requests but ship as one commit)
+    # All three degrade gracefully — tasks that never ran (request_id
+    # null) contribute 0. The popup is read-only so we accept a small
+    # over-fetch here in exchange for one round-trip end-to-end.
+    request_ids = [t.request_id for t in epic_tasks if t.request_id]
+    total_cost_usd = 0.0
+    total_wall_seconds = 0
+    commit_shas: set[str] = set()
+    for rid in request_ids:
+        try:
+            req = await state.get_request(rid)
+        except Exception:
+            req = None
+        if req is None:
+            continue
+        cost = getattr(req, "actual_cost_usd", None)
+        if cost is None:
+            cost = getattr(req, "estimated_cost_usd", None) or 0.0
+        total_cost_usd += float(cost or 0.0)
+        started = getattr(req, "created_at", None)
+        completed = getattr(req, "completed_at", None)
+        if started and completed:
+            try:
+                total_wall_seconds += int((completed - started).total_seconds())
+            except Exception:
+                pass
+        sha = getattr(req, "commit_sha", None)
+        if sha:
+            commit_shas.add(sha)
+
+    rollup_stats = {
+        "cost_usd": round(total_cost_usd, 4),
+        "wall_seconds": total_wall_seconds,
+        "commit_count": len(commit_shas),
+        "commit_shas": sorted(commit_shas),
+        "requests_walked": len(request_ids),
+    }
+
     return {
         "data": {
             "epic_id": epic_id,
+            "title": epic.title,
             "feature_count": len(features),
             "features_complete": sum(1 for f in per_feature if f["complete"]),
             "task_count": len(epic_tasks),
@@ -3558,6 +3627,7 @@ async def get_epic_status(
                 and all(f["complete"] for f in per_feature)
             ),
             "features": per_feature,
+            "rollup_stats": rollup_stats,
         },
         "meta": None,
         "error": None,
@@ -3593,6 +3663,417 @@ async def list_epics(
     return {
         "data": [e.model_dump(mode="json") for e in epics],
         "meta": {"count": len(epics)},
+        "error": None,
+    }
+
+
+class BulkDeleteEpicsBody(BaseModel):
+    epic_ids: list[str]
+
+
+@router.post("/{project_id}/epics/bulk_delete")
+async def bulk_delete_epics(
+    project_id: str,
+    body: BulkDeleteEpicsBody,
+    request: Request,
+    user: dict = Depends(require_role("developer", "admin")),
+):
+    """Hard-delete multiple epics and cascade their features + task
+    back-links in one call.
+
+    Mirrors `requests.bulk_delete` shape so the UI's selection / partial-
+    success handling can use the same envelope. Per-row pre-check skips
+    epics that don't exist or don't belong to ``project_id`` (defence
+    against stale UI selections). The DB-level cascade in
+    ``state.delete_epic`` NULLs ``project_tasks.feature_id`` for any
+    tasks whose feature lived under the deleted epic, then drops the
+    feature rows, then the epic — same behavior as the existing single-
+    epic delete path, just batched.
+
+    Returns:
+        {data: {deleted: [epic_id, …], skipped: [{epic_id, reason}, …]},
+         meta: {requested, deleted_count, skipped_count,
+                cascaded_features, cascaded_tasks_unlinked},
+         error: None}
+    """
+    if not body.epic_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="epic_ids must contain at least one entry.",
+        )
+    # Cap the batch — same 100-row ceiling as bulk_delete_requests so a
+    # runaway selection (e.g. "select all" on a 1000-epic project) can't
+    # lock the DB for minutes.
+    if len(body.epic_ids) > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="epic_ids may contain at most 100 entries per call.",
+        )
+
+    state = request.app.state.state_store
+    await _require_project(state, project_id)
+
+    deleted: list[str] = []
+    skipped: list[dict[str, str]] = []
+    cascaded_features = 0
+    cascaded_tasks = 0
+    seen: set[str] = set()
+    for eid in body.epic_ids:
+        if eid in seen:
+            continue
+        seen.add(eid)
+        epic = await state.get_epic(eid)
+        if epic is None:
+            skipped.append({"epic_id": eid, "reason": "not_found"})
+            continue
+        # Defence-in-depth: don't let a stale UI selection cross-delete
+        # an epic from a different project.
+        if epic.project_id != project_id:
+            skipped.append({"epic_id": eid, "reason": "wrong_project"})
+            continue
+        # Count features + tasks-about-to-be-unlinked BEFORE the cascade
+        # so the response can tell the user the blast radius. Uses direct
+        # SQL because there's no `list_tasks_for_feature` helper on the
+        # store and we want a single roundtrip per epic, not N+1.
+        feats: list = []
+        tasks_to_unlink = 0
+        try:
+            feats = await state.list_features_for_epic(eid)
+            feat_ids = [f.feature_id for f in feats]
+            if feat_ids:
+                db = await state._get_db()
+                placeholders = ",".join("?" * len(feat_ids))
+                async with db.execute(
+                    f"SELECT COUNT(*) AS n FROM project_tasks "
+                    f"WHERE feature_id IN ({placeholders})",
+                    feat_ids,
+                ) as cur:
+                    row = await cur.fetchone()
+                    tasks_to_unlink = int(row["n"]) if row else 0
+        except Exception:
+            pass
+
+        try:
+            await state.delete_epic(eid)
+            deleted.append(eid)
+            cascaded_features += len(feats)
+            cascaded_tasks += tasks_to_unlink
+        except Exception as e:  # noqa: BLE001
+            skipped.append({"epic_id": eid, "reason": f"delete_failed: {e!s}"[:200]})
+
+    # Sync build-plan.md + tasks.md so the host files reflect the
+    # post-cascade DB state. Without this, both files kept the deleted
+    # epics' rows until the next pass touched them — confusing for the
+    # user who deleted via the UI and expected the editor view to match.
+    project = await state.get_project(project_id)
+    sync = await _sync_build_plan_to_disk(
+        state, project,
+        actor=user.get("username") or user.get("user_id") or "unknown",
+    ) if project else None
+
+    return {
+        "data": {"deleted": deleted, "skipped": skipped},
+        "meta": {
+            "requested": len(body.epic_ids),
+            "deleted_count": len(deleted),
+            "skipped_count": len(skipped),
+            "cascaded_features": cascaded_features,
+            "cascaded_tasks_unlinked": cascaded_tasks,
+            "sync": sync,
+        },
+        "error": None,
+    }
+
+
+@router.post("/{project_id}/build-plan/reset")
+async def reset_build_plan(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(require_role("developer", "admin")),
+):
+    """Hard-reset the entire BPD hierarchy for a project: every epic,
+    every feature, every UNSTARTED backlog task is deleted in one call.
+
+    Started / completed tasks (those with a request_id) survive the
+    cascade with `feature_id=NULL` so the user keeps the work history
+    they already paid compute for — those become "Legacy" pseudo-epic
+    rows. The PRD and API Spec are NOT touched; this is a build-plan
+    reset, not a project reset.
+
+    Use when you want a clean slate to re-run the 3-pass generation —
+    typically after a bad cascade ran or the user wants to redo the
+    plan from scratch with different brief / PRD wording.
+
+    Returns:
+        {data: {epics_deleted, features_deleted, tasks_deleted,
+                tasks_preserved_as_legacy},
+         meta: {project_id, project_name}, error: None}
+    """
+    state = request.app.state.state_store
+    project = await _require_project(state, project_id)
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+    # Snapshot the counts BEFORE the cascade so the response can tell
+    # the user what just happened (and confirm the operation ran).
+    db = await state._get_db()
+    async with db.execute(
+        "SELECT COUNT(*) AS n FROM epics WHERE project_id=?", (project_id,),
+    ) as c:
+        epics_before = int((await c.fetchone())["n"])
+    async with db.execute(
+        "SELECT COUNT(*) AS n FROM features WHERE project_id=?", (project_id,),
+    ) as c:
+        features_before = int((await c.fetchone())["n"])
+    async with db.execute(
+        "SELECT COUNT(*) AS n FROM project_tasks WHERE project_id=? "
+        "AND task_status='backlog' AND (request_id IS NULL OR request_id='')",
+        (project_id,),
+    ) as c:
+        backlog_before = int((await c.fetchone())["n"])
+    async with db.execute(
+        "SELECT COUNT(*) AS n FROM project_tasks WHERE project_id=? "
+        "AND NOT (task_status='backlog' AND (request_id IS NULL OR request_id=''))",
+        (project_id,),
+    ) as c:
+        dispatched_before = int((await c.fetchone())["n"])
+
+    # Walk the epics + cascade-delete via the existing path (which
+    # uses the hardened "hard-delete backlog, preserve dispatched"
+    # semantics from delete_epic). One iteration per epic so the
+    # cascade rules are applied uniformly — no special-case bulk path
+    # to maintain.
+    epics = await state.list_epics_for_project(project_id)
+    for e in epics:
+        try:
+            await state.delete_epic(e.epic_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "build_plan_reset_epic_delete_failed",
+                project_id=project_id, epic_id=e.epic_id, error=str(exc),
+            )
+
+    # Safety net: there may be backlog orphans whose epic was already
+    # gone before this call ran (e.g. from a partial earlier cascade).
+    # Sweep them up so the project_tasks counter goes to a clean
+    # "only dispatched tasks remain" state.
+    await db.execute(
+        "DELETE FROM project_tasks WHERE project_id=? "
+        "AND task_status='backlog' AND (request_id IS NULL OR request_id='')",
+        (project_id,),
+    )
+    await db.commit()
+
+    # Sync the now-empty (or legacy-only) plan to docs/build-plan.md so
+    # the host file matches the DB. Without this, the user's editor
+    # would keep showing the pre-reset plan until they manually
+    # refreshed by re-running a pass.
+    sync = await _sync_build_plan_to_disk(
+        state, project,
+        actor=user.get("username") or user.get("user_id") or "unknown",
+    )
+
+    return {
+        "data": {
+            "epics_deleted": epics_before,
+            "features_deleted": features_before,
+            "tasks_deleted": backlog_before,
+            "tasks_preserved_as_legacy": dispatched_before,
+            "sync": sync,
+        },
+        "meta": {
+            "project_id": project_id,
+            "project_name": getattr(project, "name", None),
+        },
+        "error": None,
+    }
+
+
+@router.post("/{project_id}/epics/{epic_id}/finalize")
+async def finalize_epic_endpoint(
+    project_id: str,
+    epic_id: str,
+    request: Request,
+    user: dict = Depends(require_role("developer", "admin")),
+):
+    """Finalize one epic + every feature under it + every task under
+    those features. Per-row alternative to the project-wide finalize.
+
+    Idempotent — already-finalized rows stay finalized, archived rows
+    aren't touched. Returns counts of rows actually flipped so the
+    user knows what was locked.
+
+    The PRD pattern locks epic/feature/task structure but doesn't
+    affect task_status (a backlog task stays backlog after its list_status
+    flips to finalized — finalize means "the plan is approved", not
+    "the work is done").
+
+    Also rewrites docs/build-plan.md so the host file mirrors the new
+    status badges immediately.
+    """
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    project = await _require_project(state, project_id)
+    epic = await state.get_epic(epic_id)
+    if epic is None or epic.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Epic not found in this project.")
+    if str(epic.list_status) == str(ArtifactStatus.ARCHIVED):
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot finalize an archived epic. Regenerate or restore first.",
+        )
+    counts = await state.finalize_epic_subtree(epic_id)
+    sync = await _sync_build_plan_to_disk(
+        state, project,
+        actor=user.get("username") or user.get("user_id") or "unknown",
+    )
+    return {
+        "data": {
+            "epic_id": epic_id,
+            "epic_title": epic.title,
+            "epics_finalized": counts["epics"],
+            "features_finalized": counts["features"],
+            "tasks_finalized": counts["tasks"],
+        },
+        "meta": {"sync": sync},
+        "error": None,
+    }
+
+
+@router.post("/{project_id}/features/{feature_id}/finalize")
+async def finalize_feature_endpoint(
+    project_id: str,
+    feature_id: str,
+    request: Request,
+    user: dict = Depends(require_role("developer", "admin")),
+):
+    """Finalize one feature + every task under it.
+
+    Per-feature alternative to ``epics/{eid}/finalize``. The parent
+    epic is NOT auto-finalized (a finalized feature inside a still-
+    draft epic is a valid state — means "this feature's spec is
+    locked but the surrounding epic structure isn't yet").
+    """
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    project = await _require_project(state, project_id)
+    feature = await state.get_feature(feature_id)
+    if feature is None or feature.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Feature not found in this project.")
+    if str(feature.list_status) == str(ArtifactStatus.ARCHIVED):
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot finalize an archived feature.",
+        )
+    counts = await state.finalize_feature_subtree(feature_id)
+    sync = await _sync_build_plan_to_disk(
+        state, project,
+        actor=user.get("username") or user.get("user_id") or "unknown",
+    )
+    return {
+        "data": {
+            "feature_id": feature_id,
+            "feature_title": feature.title,
+            "features_finalized": counts["features"],
+            "tasks_finalized": counts["tasks"],
+        },
+        "meta": {"sync": sync},
+        "error": None,
+    }
+
+
+@router.post("/{project_id}/epics/{epic_id}/unfinalize")
+async def unfinalize_epic_endpoint(
+    project_id: str,
+    epic_id: str,
+    request: Request,
+    user: dict = Depends(require_role("developer", "admin")),
+):
+    """Flip a finalized epic (+ features + tasks) back to draft.
+
+    Inverse of ``finalize`` — same scope, same idempotent semantics.
+    Lets the user fix an accidental finalize without going through
+    archive + regenerate (which would lose generated content).
+
+    Refuses to operate on archived rows (use the archive-restore path
+    if you want one back).
+    """
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    project = await _require_project(state, project_id)
+    epic = await state.get_epic(epic_id)
+    if epic is None or epic.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Epic not found in this project.")
+    if str(epic.list_status) == str(ArtifactStatus.ARCHIVED):
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot unfinalize an archived epic.",
+        )
+    counts = await state.unfinalize_epic_subtree(epic_id)
+    sync = await _sync_build_plan_to_disk(
+        state, project,
+        actor=user.get("username") or user.get("user_id") or "unknown",
+    )
+    return {
+        "data": {
+            "epic_id": epic_id,
+            "epic_title": epic.title,
+            "epics_unfinalized": counts["epics"],
+            "features_unfinalized": counts["features"],
+            "tasks_unfinalized": counts["tasks"],
+        },
+        "meta": {"sync": sync},
+        "error": None,
+    }
+
+
+@router.post("/{project_id}/features/{feature_id}/unfinalize")
+async def unfinalize_feature_endpoint(
+    project_id: str,
+    feature_id: str,
+    request: Request,
+    user: dict = Depends(require_role("developer", "admin")),
+):
+    """Flip a finalized feature (+ its tasks) back to draft.
+    Doesn't touch the parent epic."""
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    project = await _require_project(state, project_id)
+    feature = await state.get_feature(feature_id)
+    if feature is None or feature.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Feature not found in this project.")
+    if str(feature.list_status) == str(ArtifactStatus.ARCHIVED):
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot unfinalize an archived feature.",
+        )
+    counts = await state.unfinalize_feature_subtree(feature_id)
+    sync = await _sync_build_plan_to_disk(
+        state, project,
+        actor=user.get("username") or user.get("user_id") or "unknown",
+    )
+    return {
+        "data": {
+            "feature_id": feature_id,
+            "feature_title": feature.title,
+            "features_unfinalized": counts["features"],
+            "tasks_unfinalized": counts["tasks"],
+        },
+        "meta": {"sync": sync},
         "error": None,
     }
 
@@ -3944,6 +4425,131 @@ def _extract_json_array(text: str) -> tuple[list[dict[str, Any]] | None, str]:
     return None, "empty"
 
 
+async def _sync_build_plan_to_disk(
+    state: Any,
+    project: Project,
+    *,
+    actor: str = "system",
+    push_to_github: bool = True,
+) -> dict[str, Any]:
+    """Rewrite the project's `docs/build-plan.md` AND `docs/tasks.md` on
+    the host filesystem (and optionally push to GitHub) from the live
+    DB state.
+
+    Two files always travel together:
+      - **build-plan.md** — the full Epic → Feature → Task hierarchy
+        including drafts. Always rewritten — even when nothing is
+        finalized — so the editor view mirrors what the BuildPlanView
+        UI shows.
+      - **tasks.md** — flat view of FINALIZED tasks only, grouped by
+        Epic → Feature. Always rewritten too — gets a "no finalized
+        tasks yet" placeholder when empty. Without this, `tasks.md`
+        was the legacy flat-task-list output and went stale the moment
+        we replaced that flow with BPD; the user reported the file
+        showing 5/21 contents long after they'd finalized BPD epics.
+
+    Called by every BPD generation + finalize endpoint after a
+    successful state mutation. Soft-fails: all host writes and GitHub
+    pushes are non-fatal — the SQLite mutation succeeded, the user can
+    always read the plan in the UI even if file writes fail.
+
+    Returns a dict with two top-level keys per file:
+      - ``host_write``: build-plan.md host write result
+      - ``github_push``: build-plan.md GitHub push result
+      - ``host_write_tasks``: tasks.md host write result
+      - ``github_push_tasks``: tasks.md GitHub push result
+    """
+    # Snapshot the whole project's BPD state. Three short reads — no
+    # join overhead, no concurrency hazard (we're a single async task).
+    epics = await state.list_epics_for_project(project.project_id)
+    features = await state.list_features_for_project(project.project_id)
+    tasks = await state.list_tasks_for_project(project.project_id)
+
+    from datetime import datetime as _dt
+    now_iso = _dt.utcnow().isoformat() + "Z"
+
+    # ─── 1. build-plan.md (full tree, including drafts) ────────────
+    md = render_build_plan_markdown(
+        project.name, epics, features, tasks, generated_at_iso=now_iso,
+    )
+    host_result = write_build_plan(project.name, md)
+    if not host_result.ok:
+        logger.warning(
+            "build_plan.host_write_failed",
+            project_id=project.project_id, project_name=project.name,
+            error=host_result.error,
+        )
+
+    github_result: dict[str, Any] = {"skipped": "disabled_by_caller"}
+    if push_to_github:
+        try:
+            github_result = await _push_finalized_doc_to_repo(
+                project=project,
+                repo_path="docs/build-plan.md",
+                content=md,
+                commit_subject=(
+                    f"docs: sync build plan "
+                    f"({len(epics)} epics, {len(features)} features, "
+                    f"{len(tasks)} tasks)"
+                ),
+                descriptor=(
+                    f"build plan ({len(epics)}E/{len(features)}F/{len(tasks)}T)"
+                ),
+                actor=actor,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "build_plan.github_push_failed",
+                project_id=project.project_id, error=str(e),
+            )
+            github_result = {"ok": False, "error": str(e)}
+
+    # ─── 2. tasks.md (FINALIZED tasks only, flat view) ────────────
+    # Rendered from the same snapshot so the two files can never
+    # disagree on what's finalized. Empty/placeholder content is fine
+    # here — the file is always present so the editor doesn't show
+    # a stale legacy version.
+    tasks_md = render_finalized_tasks_flat_markdown(
+        project.name, epics, features, tasks, generated_at_iso=now_iso,
+    )
+    finalized_count = sum(1 for t in tasks if str(t.list_status).lower() == "finalized")
+    host_result_tasks = write_finalized_tasks(project.name, tasks_md)
+    if not host_result_tasks.ok:
+        logger.warning(
+            "tasks_md.host_write_failed",
+            project_id=project.project_id, project_name=project.name,
+            error=host_result_tasks.error,
+        )
+
+    github_result_tasks: dict[str, Any] = {"skipped": "disabled_by_caller"}
+    if push_to_github:
+        try:
+            github_result_tasks = await _push_finalized_doc_to_repo(
+                project=project,
+                repo_path="docs/tasks.md",
+                content=tasks_md,
+                commit_subject=(
+                    f"docs: sync finalized tasks "
+                    f"({finalized_count} task{'s' if finalized_count != 1 else ''} finalized)"
+                ),
+                descriptor=f"tasks.md ({finalized_count} finalized)",
+                actor=actor,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "tasks_md.github_push_failed",
+                project_id=project.project_id, error=str(e),
+            )
+            github_result_tasks = {"ok": False, "error": str(e)}
+
+    return {
+        "host_write": host_result.as_dict(),
+        "github_push": github_result,
+        "host_write_tasks": host_result_tasks.as_dict(),
+        "github_push_tasks": github_result_tasks,
+    }
+
+
 def _check_truncation(result: dict[str, Any]) -> str | None:
     """Return a user-actionable hint when the agent's response was
     cut off at max_tokens (BPD-18). The downstream parser may still
@@ -4080,12 +4686,23 @@ async def generate_epics(
             status_code=409,
             detail="Finalize the PRD before generating epics.",
         )
+    # BPD-46 — API Spec is now a hard gate (was optional reference).
+    # The agent needs concrete endpoint shapes to produce epics that
+    # map to a real surface area; without the spec it over-invents
+    # endpoints and the downstream features/tasks become work that
+    # doesn't line up with what the project actually exposes.
     api_spec = await state.get_artifact(project_id, ArtifactKind.API_SPEC)
-    api_spec_content = (
-        api_spec.content
-        if api_spec is not None and api_spec.status == ArtifactStatus.FINALIZED
-        else ""
-    )
+    if api_spec is None or api_spec.status != ArtifactStatus.FINALIZED:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "api_spec_not_finalized",
+                "hint": "Finalize the API Specification before generating epics. "
+                        "Go to the API Specification section, generate it from the "
+                        "PRD, then click Finalize.",
+            },
+        )
+    api_spec_content = api_spec.content
 
     review_comments = ((body or {}).get("review_comments") or "").strip()
     if len(review_comments) > _REVIEW_COMMENTS_MAX:
@@ -4139,6 +4756,8 @@ async def generate_epics(
             agent_id="user_story_author",
             prompt=prompt,
             project_artifact_id=None,
+            project_id=project_id,
+            label="BPD Pass 1 · Generating Epics",
             max_tokens=32_000,
         )
     except Exception as e:
@@ -4182,6 +4801,14 @@ async def generate_epics(
         )
         await state.create_epic(e)
         saved.append(e)
+    # Sync the BPD hierarchy to docs/build-plan.md after every successful
+    # pass so the host file mirrors the DB. Soft-fail per the helper's
+    # contract; failures show in meta.sync but don't fail the request.
+    project_obj = await state.get_project(project_id)
+    sync = await _sync_build_plan_to_disk(
+        state, project_obj,
+        actor=user.get("username") or user.get("user_id") or "unknown",
+    ) if project_obj else None
     return {
         "data": [e.model_dump(mode="json") for e in saved],
         "meta": {
@@ -4190,6 +4817,7 @@ async def generate_epics(
             "parse_mode": parse_mode,
             "truncated": truncation_hint is not None,
             "truncation_hint": truncation_hint,
+            "sync": sync,
         },
         "error": None,
     }
@@ -4198,15 +4826,104 @@ async def generate_epics(
 # ── Pass 2 — Epic → Features ─────────────────────────────────────────────
 
 
+def _extract_relevant_api_endpoints(api_spec_content: str, hint_text: str) -> str:
+    """BPD-49 — pull only the API spec endpoints whose path / summary / tags
+    mention any of the keywords in ``hint_text`` (the feature or epic title).
+
+    A full API spec can run 30-60 KB. Injecting the whole thing into every
+    Pass-2 / Pass-3 prompt blows past the model's context budget when the
+    project has 30+ features × 5 tasks. This heuristic keeps the spec
+    excerpt focused on the endpoints the current pass actually touches.
+
+    Strategy:
+      1. Split the spec into OpenAPI path blocks (each "/path:" + indented body).
+      2. Score each block by keyword overlap with the hint (case-insensitive
+         word tokens, ignoring short / stoplist words).
+      3. Return blocks with score ≥ 1, capped at 12 to bound the prompt size.
+      4. If nothing matches, return the first 6 KB of the spec as a fallback
+         (better to include something than to ship a context-blind prompt).
+
+    Returns "" only when the spec itself is empty.
+    """
+    if not api_spec_content.strip():
+        return ""
+
+    # Tokenize the hint into useful words (drop stoplist + short tokens)
+    stoplist = {
+        "the", "and", "for", "with", "from", "into", "this", "that",
+        "what", "when", "have", "will", "must", "page", "view", "list",
+        "user", "data", "form", "show", "make", "add", "new",
+    }
+    import re as _re
+    hint_tokens = {
+        t.lower() for t in _re.findall(r"[A-Za-z][A-Za-z0-9_]{3,}", hint_text or "")
+        if t.lower() not in stoplist
+    }
+    if not hint_tokens:
+        # Hint had nothing useful — fall back to a short generic excerpt.
+        return api_spec_content[:6000] + ("\n…[truncated]" if len(api_spec_content) > 6000 else "")
+
+    # Split into OpenAPI path-level blocks. Heuristic: a line starting at
+    # column 2 with "/" is a path key. Indented lines until the next
+    # column-2 line belong to that path.
+    lines = api_spec_content.splitlines()
+    blocks: list[str] = []
+    current: list[str] = []
+    inside_paths = False
+    for line in lines:
+        stripped = line.rstrip()
+        if stripped == "paths:":
+            inside_paths = True
+            continue
+        if not inside_paths:
+            continue
+        # New path block: starts at column 2 with /
+        if _re.match(r"^  /", line):
+            if current:
+                blocks.append("\n".join(current))
+            current = [line]
+        elif current and (line.startswith("    ") or line.startswith("\t") or not stripped):
+            current.append(line)
+        elif stripped and not line.startswith(" "):
+            # Hit a top-level key (components:, security:, etc.) — paths section ended
+            if current:
+                blocks.append("\n".join(current))
+                current = []
+            break
+    if current:
+        blocks.append("\n".join(current))
+
+    if not blocks:
+        # Spec wasn't in standard OpenAPI shape (or paths section absent).
+        # Fall back to the first 6 KB so the agent at least sees something.
+        return api_spec_content[:6000] + ("\n…[truncated]" if len(api_spec_content) > 6000 else "")
+
+    # Score each block by keyword overlap
+    scored: list[tuple[int, str]] = []
+    for block in blocks:
+        block_tokens = {t.lower() for t in _re.findall(r"[A-Za-z][A-Za-z0-9_]{3,}", block)}
+        score = len(hint_tokens & block_tokens)
+        if score > 0:
+            scored.append((score, block))
+    if not scored:
+        return api_spec_content[:6000] + ("\n…[truncated]" if len(api_spec_content) > 6000 else "")
+    scored.sort(key=lambda x: x[0], reverse=True)
+    keep = scored[:12]
+    return "\n".join(b for _, b in keep)
+
+
 def _build_feature_generation_prompt(
     epic: Epic,
     sibling_epic_titles: list[str],
     prd_excerpt: str,
+    api_spec_content: str,
     review_comments: str,
     previous_features: list[Feature] | None,
 ) -> str:
-    """BPD-12. One epic → 1-8 features. Includes sibling-epic titles so
-    the agent doesn't duplicate work that belongs to a different epic."""
+    """BPD-12 + BPD-48. One epic → 1-8 features. Includes sibling-epic
+    titles so the agent doesn't duplicate work that belongs to a
+    different epic, PLUS the relevant API spec endpoints so generated
+    features map to a real REST surface (not to invented endpoints)."""
     siblings_block = (
         "## Sibling epics in this project (DO NOT duplicate their work)\n"
         + "\n".join(f"- {t}" for t in sibling_epic_titles if t != epic.title)
@@ -4215,6 +4932,20 @@ def _build_feature_generation_prompt(
     prd_block = (
         f"## PRD reference (in case the epic description elided detail)\n{prd_excerpt}\n\n"
         if prd_excerpt else ""
+    )
+    # BPD-48 — inject API spec endpoints relevant to this epic. We scope
+    # to relevant endpoints (not the whole spec) so multi-epic projects
+    # don't blow the prompt budget; the scoping heuristic is in
+    # _extract_relevant_api_endpoints above.
+    spec_excerpt = _extract_relevant_api_endpoints(
+        api_spec_content,
+        f"{epic.title} {epic.description}",
+    ) if api_spec_content else ""
+    api_spec_block = (
+        f"## API Specification (endpoints relevant to this epic)\n"
+        f"```yaml\n{spec_excerpt}\n```\n"
+        f"Features SHOULD line up with these endpoints. Don't invent new ones.\n\n"
+        if spec_excerpt else ""
     )
     if review_comments and previous_features:
         prev_json = json.dumps(
@@ -4236,6 +4967,7 @@ def _build_feature_generation_prompt(
             f"Acceptance: {epic.acceptance_criteria}\n\n"
             f"{siblings_block}"
             f"{prd_block}"
+            f"{api_spec_block}"
             "## Current feature list (revise this)\n"
             "```json\n"
             f"{prev_json}\n"
@@ -4254,6 +4986,7 @@ def _build_feature_generation_prompt(
         f"Acceptance criterion: {epic.acceptance_criteria}\n\n"
         f"{siblings_block}"
         f"{prd_block}"
+        f"{api_spec_block}"
         "## Output format\n"
         "Emit a SINGLE fenced ```json``` block containing an ARRAY of "
         "1-8 feature objects. Each object has exactly these keys:\n\n"
@@ -4312,6 +5045,30 @@ async def generate_features(
     if epic is None or epic.project_id != project_id:
         raise HTTPException(status_code=404, detail="Epic not found in this project.")
 
+    # BPD-47 — same PRD + API Spec gate as the epic-generation path.
+    # Without these the feature prompt has no concrete surface area to
+    # decompose against, and the agent invents endpoints that don't
+    # match what the project actually exposes.
+    prd = await state.get_artifact(project_id, ArtifactKind.PRD)
+    if prd is None or prd.status != ArtifactStatus.FINALIZED:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "prd_not_finalized",
+                "hint": "Finalize the PRD before generating features.",
+            },
+        )
+    api_spec = await state.get_artifact(project_id, ArtifactKind.API_SPEC)
+    if api_spec is None or api_spec.status != ArtifactStatus.FINALIZED:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "api_spec_not_finalized",
+                "hint": "Finalize the API Specification before generating features.",
+            },
+        )
+    api_spec_content = api_spec.content
+
     review_comments = ((body or {}).get("review_comments") or "").strip()
     if len(review_comments) > _REVIEW_COMMENTS_MAX:
         raise HTTPException(
@@ -4323,11 +5080,10 @@ async def generate_features(
     all_epics = await state.list_epics_for_project(project_id)
     sibling_titles = [e.title for e in all_epics if e.epic_id != epic_id]
 
-    # PRD reference (truncated to fit token budget on a multi-pass run)
-    prd = await state.get_artifact(project_id, ArtifactKind.PRD)
+    # PRD reference (truncated to fit token budget on a multi-pass run).
+    # Pulled above as part of the gate; just compute the excerpt here.
     prd_excerpt = (prd.content[:6000] + "\n…[truncated]"
-                   if prd and len(prd.content) > 6000
-                   else (prd.content if prd else ""))
+                   if len(prd.content) > 6000 else prd.content)
 
     # Pull existing features under this epic for revision flow
     existing = await state.list_features_for_epic(
@@ -4344,7 +5100,7 @@ async def generate_features(
         raise HTTPException(status_code=503, detail="Agent executor not configured.")
 
     prompt = _build_feature_generation_prompt(
-        epic, sibling_titles, prd_excerpt,
+        epic, sibling_titles, prd_excerpt, api_spec_content,
         review_comments, previous if review_comments else None,
     )
     try:
@@ -4352,6 +5108,8 @@ async def generate_features(
             agent_id="user_story_author",
             prompt=prompt,
             project_artifact_id=None,
+            project_id=project_id,
+            label=f"BPD Pass 2 · Generating Features for {epic.title[:40]}",
             max_tokens=32_000,
         )
     except Exception as e:
@@ -4423,6 +5181,13 @@ async def generate_features(
         if resolved_ids:
             await state.update_feature(f.feature_id, {"depends_on": resolved_ids})
 
+    # Same disk-sync as Pass 1 — rewrite docs/build-plan.md from live DB.
+    project_obj = await state.get_project(project_id)
+    sync = await _sync_build_plan_to_disk(
+        state, project_obj,
+        actor=user.get("username") or user.get("user_id") or "unknown",
+    ) if project_obj else None
+
     return {
         "data": [f.model_dump(mode="json") for f in saved],
         "meta": {
@@ -4432,6 +5197,7 @@ async def generate_features(
             "truncated": truncation_hint is not None,
             "truncation_hint": truncation_hint,
             "unresolved_deps": unresolved or None,
+            "sync": sync,
         },
         "error": None,
     }
@@ -4444,15 +5210,50 @@ def _build_task_generation_prompt(
     feature: Feature,
     epic: Epic,
     sibling_feature_titles: list[str],
+    prd_content: str,
+    api_spec_content: str,
     review_comments: str,
     previous_tasks: list[ProjectTask] | None,
 ) -> str:
-    """BPD-14. One feature → 3-15 atomic tasks. Enforces atomic contract
-    (one primary_file, 50-300 LOC, single acceptance_test)."""
+    """BPD-14 + BPD-49. One feature → 3-15 atomic tasks. Enforces atomic
+    contract (one primary_file, 50-300 LOC, single acceptance_test).
+
+    Pass 3 used to receive ONLY (feature + epic + sibling titles), which
+    meant by the time the agent picked a primary_file or wrote an
+    acceptance_test it had no product context and no concrete API
+    surface. The PRD excerpt + scoped API endpoints close that gap so
+    generated tasks reference real paths / endpoints instead of
+    plausible-sounding invented ones.
+    """
     siblings = "\n".join(f"- {t}" for t in sibling_feature_titles if t != feature.title)
     siblings_block = (
         f"## Sibling features under epic '{epic.title}'\n{siblings}\n\n"
         if siblings else ""
+    )
+    # PRD excerpt: tasks need product context to write meaningful
+    # descriptions + acceptance tests. Cap at 6 KB — Pass 3 makes one
+    # call PER feature so the cumulative token cost matters.
+    prd_block = ""
+    if prd_content:
+        prd_excerpt = (prd_content[:6000] + "\n…[truncated]"
+                       if len(prd_content) > 6000 else prd_content)
+        prd_block = (
+            f"## PRD reference (product context for this feature)\n"
+            f"{prd_excerpt}\n\n"
+        )
+    # API spec, scoped to endpoints touching this feature. Tasks should
+    # name concrete endpoint paths in their primary_file / acceptance_test
+    # fields, so this is where they look them up.
+    spec_excerpt = _extract_relevant_api_endpoints(
+        api_spec_content,
+        f"{feature.title} {feature.description}",
+    ) if api_spec_content else ""
+    api_spec_block = (
+        f"## API Specification (endpoints relevant to this feature)\n"
+        f"```yaml\n{spec_excerpt}\n```\n"
+        f"primary_file paths and acceptance_test wording MUST reference "
+        f"these endpoints (not invented ones).\n\n"
+        if spec_excerpt else ""
     )
     if review_comments and previous_tasks:
         prev_json = json.dumps(
@@ -4477,6 +5278,8 @@ def _build_task_generation_prompt(
             "Apply the reviewer's feedback; keep unaffected tasks identical.\n\n"
             f"## Feature: {feature.title}\n{feature.description}\n\n"
             f"Acceptance: {feature.acceptance_criteria}\n\n"
+            f"{prd_block}"
+            f"{api_spec_block}"
             "## Current tasks (revise this)\n"
             "```json\n"
             f"{prev_json}\n"
@@ -4497,6 +5300,8 @@ def _build_task_generation_prompt(
         f"## Feature: {feature.title}\n{feature.description}\n\n"
         f"Acceptance criterion: {feature.acceptance_criteria}\n\n"
         f"{siblings_block}"
+        f"{prd_block}"
+        f"{api_spec_block}"
         "## Output format\n"
         "Emit a SINGLE fenced ```json``` block containing an ARRAY of "
         "3-15 atomic task objects. Each object has exactly these keys:\n\n"
@@ -4601,6 +5406,32 @@ async def generate_tasks_for_feature(
     if epic is None:
         raise HTTPException(status_code=404, detail="Parent epic missing.")
 
+    # BPD-47 — same PRD + API Spec gate as Pass 1 and Pass 2. Pass 3
+    # is the one that produces actual implementation tasks (primary_file,
+    # acceptance_test, expected_loc), so it needs concrete API surface
+    # MORE than the earlier passes, not less. Pulling PRD + spec here
+    # also feeds the BPD-49 prompt-enrichment block below.
+    prd = await state.get_artifact(project_id, ArtifactKind.PRD)
+    if prd is None or prd.status != ArtifactStatus.FINALIZED:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "prd_not_finalized",
+                "hint": "Finalize the PRD before generating atomic tasks.",
+            },
+        )
+    api_spec = await state.get_artifact(project_id, ArtifactKind.API_SPEC)
+    if api_spec is None or api_spec.status != ArtifactStatus.FINALIZED:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "api_spec_not_finalized",
+                "hint": "Finalize the API Specification before generating atomic tasks.",
+            },
+        )
+    prd_content = prd.content
+    api_spec_content = api_spec.content
+
     review_comments = ((body or {}).get("review_comments") or "").strip()
     if len(review_comments) > _REVIEW_COMMENTS_MAX:
         raise HTTPException(
@@ -4621,6 +5452,20 @@ async def generate_tasks_for_feature(
         if t.list_status == ArtifactStatus.DRAFT:
             await state.delete_task(t.task_id)
 
+    # Safety net: also purge any UNSTARTED orphan tasks (feature_id IS NULL
+    # AND task_status='backlog' AND no request_id) from prior re-generation
+    # cycles. The cascade fixes in delete_epic / delete_feature should
+    # prevent these going forward, but pre-existing orphans (from before
+    # the cascade fix shipped) would otherwise pile up forever — they'd
+    # show in the Generator's `tasks:N` rollup but never render under
+    # any feature in the tree because their feature is gone.
+    orphans = [t for t in all_tasks
+               if t.feature_id is None
+               and t.task_status == TaskStatus.BACKLOG
+               and not t.request_id]
+    for t in orphans:
+        await state.delete_task(t.task_id)
+
     next_version = max(
         (t.list_version for t in all_tasks if t.list_status != ArtifactStatus.ARCHIVED),
         default=0,
@@ -4635,6 +5480,7 @@ async def generate_tasks_for_feature(
 
     prompt = _build_task_generation_prompt(
         feature, epic, sibling_titles,
+        prd_content, api_spec_content,
         review_comments, previous if review_comments else None,
     )
     try:
@@ -4642,6 +5488,8 @@ async def generate_tasks_for_feature(
             agent_id="user_story_author",
             prompt=prompt,
             project_artifact_id=None,
+            project_id=project_id,
+            label=f"BPD Pass 3 · Generating Atomic Tasks for {feature.title[:40]}",
             max_tokens=32_000,
         )
     except Exception as e:
@@ -4743,6 +5591,15 @@ async def generate_tasks_for_feature(
             },
         )
 
+    # Sync docs/build-plan.md after Pass 3 too — this is the pass that
+    # actually moves the "tasks: N" counter, so this is where the user
+    # most often expects to see fresh disk state.
+    project_obj = await state.get_project(project_id)
+    sync = await _sync_build_plan_to_disk(
+        state, project_obj,
+        actor=user.get("username") or user.get("user_id") or "unknown",
+    ) if project_obj else None
+
     return {
         "data": [t.model_dump(mode="json") for t in to_insert],
         "meta": {
@@ -4754,6 +5611,7 @@ async def generate_tasks_for_feature(
             "truncation_hint": truncation_hint,
             "unresolved_deps": unresolved_deps or None,
             "row_warnings": all_warnings or None,
+            "sync": sync,
         },
         "error": None,
     }
@@ -4900,3 +5758,71 @@ async def generate_tasks_for_all_features(
                 "error": "partial",
             }
     return {"data": {"task_counts": counts}, "meta": None, "error": None}
+
+
+@router.post("/{project_id}/epics/{epic_id}/tasks/generate-all")
+async def generate_tasks_for_epic(
+    project_id: str,
+    epic_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Pass 3 scoped to a single epic — runs `generate_tasks_for_feature`
+    for every feature under that epic, sequentially.
+
+    Sits between the per-feature endpoint (one feature, ~30s) and the
+    whole-project endpoint (every feature, ~24 min on a project with
+    48 features). For a typical epic with 5-7 features this takes
+    3-5 minutes — small enough to wait through, large enough to be
+    worth batching instead of clicking 7 individual buttons.
+
+    Returns the same `task_counts` shape as `generate_tasks_for_all_features`
+    so the frontend can render a uniform summary. Stops on the first
+    HTTPException to surface the failure clearly rather than masking
+    a bad feature in a partial-success blob.
+    """
+    state = request.app.state.state_store
+    try:
+        assert_not_unassigned(project_id, "modified")
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    await _require_project(state, project_id)
+    epic = await state.get_epic(epic_id)
+    if epic is None or epic.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Epic not found in this project.")
+    features = await state.list_features_for_epic(epic_id)
+    if not features:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "no_features_under_epic",
+                "hint": f"Generate features under epic '{epic.title}' first.",
+            },
+        )
+    counts: dict[str, int] = {}
+    for f in features:
+        try:
+            res = await generate_tasks_for_feature(
+                project_id, f.feature_id, request, None, user,
+            )
+            counts[f.feature_id] = res["meta"]["count"]
+        except HTTPException as he:
+            return {
+                "data": {"task_counts": counts},
+                "meta": {
+                    "epic_id": epic_id,
+                    "failed_at_feature": f.feature_id,
+                    "inner": he.detail,
+                },
+                "error": "partial",
+            }
+    return {
+        "data": {"task_counts": counts},
+        "meta": {
+            "epic_id": epic_id,
+            "epic_title": epic.title,
+            "feature_count": len(features),
+            "total_tasks": sum(counts.values()),
+        },
+        "error": None,
+    }

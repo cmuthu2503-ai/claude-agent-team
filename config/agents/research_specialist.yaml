@@ -118,6 +118,26 @@ responsibilities:
 tools:
   - web_search
   - web_scrape
+  - knowledge_search
+  - knowledge_get
+  - knowledge_cite
+  - record_decision
+  - recall_memory
+
+# KB-09/15/17 — Knowledge Base retrieval. `hybrid`: relevant chunks are
+# pre-injected into the system prompt before the task starts (forced) AND the
+# agent can call knowledge_search for follow-up (agentic).
+#   scope: auto (§5.1) — for a PROJECT task, FACTS are grounded strictly in the
+#   app's own namespace (kb_project_<id>); platform KB contributes CRAFT
+#   (format/method/tone) only, never a citeable fact. For a project-less task it
+#   degrades to platform-only. The agent cannot widen this grant.
+# Dormant until the KB subsystem is available (local embedder + Postgres).
+retrieval:
+  mode: hybrid
+  scope: auto
+  forced_top_k: 5
+  craft_top_k: 3
+  max_searches: 10
 
 outputs:
   - name: "Research Report"

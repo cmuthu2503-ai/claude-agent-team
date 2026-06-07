@@ -16,12 +16,16 @@ class CreateUserBody(BaseModel):
     email: str
     role: str = "developer"
     password: str
+    # KB-29 — optional curator scopes ("platform" | project_id | "*").
+    kb_curator_scopes: list[str] | None = None
 
 
 class UpdateUserBody(BaseModel):
     email: str | None = None
     role: str | None = None
     is_active: bool | None = None
+    # KB-29 — admin grants/revokes the curator capability per scope here.
+    kb_curator_scopes: list[str] | None = None
 
 
 @router.get("")
@@ -39,6 +43,7 @@ async def list_users(
                 "email": u.email,
                 "role": u.role,
                 "is_active": u.is_active,
+                "kb_curator_scopes": u.kb_curator_scopes,
                 "created_at": u.created_at.isoformat(),
                 "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
             }
@@ -62,6 +67,7 @@ async def create_user(
         username=body.username,
         email=body.email,
         role=UserRole(body.role),
+        kb_curator_scopes=body.kb_curator_scopes or [],
     )
     password_hash = auth.hash_password(body.password)
     await state.create_user(user, password_hash)
@@ -85,5 +91,7 @@ async def update_user(
         user.role = UserRole(body.role)
     if body.is_active is not None:
         user.is_active = body.is_active
+    if body.kb_curator_scopes is not None:
+        user.kb_curator_scopes = body.kb_curator_scopes
     await state.update_user(user)
     return {"data": {"user_id": user.user_id, "updated": True}, "meta": None, "error": None}

@@ -52,6 +52,70 @@ QUALITY_GATE_FAILED = "quality.gate.failed"
 #: the inner `verdict` field on the payload tells subscribers which flavor.
 QUALITY_GATE_PASSED = "quality.gate.passed"
 
+# ── Phase AE-4 security gate event type constants (AET-21) ──────────────────
+# Emitted by the workflow runner's security stage gate after evaluating the
+# structured security_report (or, when the agent didn't emit one, after
+# parsing the prose Verdict). Payload: see src/core/security_gate_payload.py.
+#   - SECURITY_GATE_FAILED — at least one finding at-or-above the configured
+#                             security_max_severity_to_block (AET-20 default
+#                             'high'). Workflow halts; rework cycle fires.
+#   - SECURITY_GATE_PASSED — clean run OR only sub-threshold findings (e.g.
+#                             medium/low when cutoff is high). Workflow
+#                             advances.
+SECURITY_GATE_FAILED = "security.gate.failed"
+SECURITY_GATE_PASSED = "security.gate.passed"
+
+# ── Phase AE-1 ops_heal_agent event type constants (AET-31) ─────────────────
+# Three event types flow through the AE-1 ops loop:
+#
+#   DEPLOY_HEALTH_ANOMALY_DETECTED — emitted by the backend's periodic
+#       anomaly_detect sweep over deploy_health rows. Wakes the
+#       ops_heal handler. Payload: {env, deploy_id, alerts[], …}.
+#
+#   OPS_ALERT_FIRED — emitted by the handler AFTER it has run
+#       slo_check and decided this anomaly is worth surfacing on the
+#       UI (i.e. slo_check returned DEGRADED or BREACH, not PASS).
+#       Distinct from the raw anomaly event so the UI doesn't show
+#       every blip; only confirmed alerts get a chip.
+#
+#   OPS_ROLLBACK_TRIGGERED — emitted by the handler when slo_check
+#       returned BREACH AND auto_rollback returned 'queued'. Lets the
+#       Ops Console badge flip to "rollback in progress" without
+#       polling the rollback_requests table.
+DEPLOY_HEALTH_ANOMALY_DETECTED = "deploy_health.anomaly_detected"
+OPS_ALERT_FIRED = "ops.alert.fired"
+OPS_ROLLBACK_TRIGGERED = "ops.rollback.triggered"
+
+# ── Phase AE-2 self_learning_agent event type constants ─────────────────────
+# Three lessons-pipeline events the frontend Active Agents feed (AET-38)
+# surfaces in its recent-events strip. Emitted from:
+#   - src/core/self_learning_trigger.py (handler outcome routing)
+#   - src/api/routes/lessons.py (approve/reject endpoints)
+# Promoted to constants per L23 so the wire format has a single source
+# of truth — the AET-38 frontend reads these via the constant name's
+# value, not by hardcoding the dotted string.
+LESSONS_ADDED = "lessons.added"
+LESSONS_PENDING_REVIEW = "lessons.pending_review"
+LESSONS_DUPLICATE_SKIPPED = "lessons.duplicate_skipped"
+LESSONS_NO_NEW_PATTERN = "lessons.no_new_pattern"
+LESSONS_APPROVED = "lessons.approved"
+LESSONS_REJECTED = "lessons.rejected"
+
+# ── Research publish pipeline event constants (RPP-11) ──────────────────────
+# Fired by Orchestrator._handle_publish during the research workflow's
+# `publish` system stage (see src/core/research_publisher.py). Three
+# events for the three terminal states:
+#   STARTED   — publisher began (folder created, files about to write)
+#   COMPLETED — files written locally AND GitHub commit succeeded
+#   PARTIAL   — files written locally but GitHub commit errored
+#               (publish error is captured; the request still completes)
+# Promoted to constants so the Command Center feed (CommandCenter.tsx
+# _eventMessage switch) and the AET-38 AE event strip have a single
+# source of truth for the wire format (L23).
+RESEARCH_PUBLISH_STARTED = "research_publish.started"
+RESEARCH_PUBLISH_COMPLETED = "research_publish.completed"
+RESEARCH_PUBLISH_PARTIAL = "research_publish.partial"
+
 # Server-side async handler: receives (event_type, data) and may perform
 # side effects (e.g. PDB-25 mapping request status → task status). Errors
 # are logged and swallowed so a failing handler can't break event delivery.

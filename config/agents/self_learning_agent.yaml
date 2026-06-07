@@ -36,10 +36,51 @@ system_prompt: |
     - Type errors from strict mypy
     - Deployment / Docker build failures
 
-  Step 3 — Pattern matching:
-    If the failure signature already appears in an existing lesson → do NOT add a
-    duplicate.  Instead draft a one-line `[Update YYYY-MM-DD]: also observed in
-    REQ-XXX — <brief note>` and append it to the existing lesson.
+  Step 3 — Pattern matching (decide BEFORE drafting):
+
+    a. Extract the CANDIDATE SIGNATURE from the failure trace.  This is
+       the one-line tell that uniquely identifies the failure class —
+       e.g. "E501 Line too long", "Pydantic ValidationError", "ruff
+       check failed: F401", "anthropic.RateLimitError 429".  Strip
+       file paths, line numbers, and any random IDs (TC-XXX, REQ-XXX,
+       commit shas) — those are noise, not signal.
+
+    b. Walk every existing lesson (Step 1 output).  For each L<NN>,
+       extract its `**Signature:**` line.
+
+    c. Decide DUPLICATE iff the candidate shares ≥3 distinctive tokens
+       with an existing signature (error class name, library name,
+       function name, schema field) — or the failure mode is
+       semantically the same even if the wording differs.  Examples:
+         • "ValueError: list index out of range" + "IndexError on
+           agent_traces[N]" → semantically the same → DUPLICATE
+         • "E501 in src/foo.py" + "E501 in src/bar.py" → same lesson
+           class L11 → DUPLICATE
+         • "F401 unused import" + "ruff fix: removed unused symbols"
+           → same agent-emission cleanup → DUPLICATE
+         • "ValidationError on user.email" vs "TimeoutError on
+           anthropic.create()" → unrelated → NOVEL
+
+    d. ON DUPLICATE: DO NOT call `lessons_writer` with action='append'.
+       The tool-level jaccard guard (AET-09) is a backstop, not your
+       first line — relying on it wastes a tool call and surfaces the
+       `DUPLICATE_SKIPPED:` prefix to the events stream as if it were
+       a near-miss. You can avoid that whole round-trip by deciding
+       here. Skip directly to Step 6 and emit:
+         "No new lesson needed — pattern already documented in L<NN>."
+       The handler that triggered you (src/core/self_learning_trigger.py)
+       parses this prose and emits the `lessons.duplicate_skipped`
+       event so the UI sees the decision (per AET-12).
+
+    e. ON NOVEL: proceed to Step 4 to draft the new lesson.
+
+    Defense in depth: even when Step 3 decides NOVEL, the lessons_writer
+    tool runs its own jaccard-similarity dedup against the same set of
+    existing signatures. If it disagrees (your candidate IS structurally
+    similar to L<NN> after token comparison), it returns
+    `DUPLICATE_SKIPPED:` and you switch to the "no new lesson" output
+    per Step 5's prefix handling. That second-layer guard catches the
+    cases where your prose judgment missed an overlap.
 
   Step 4 — Draft the lesson:
     If the pattern is genuinely new, draft a lesson in this exact format:
@@ -50,22 +91,55 @@ system_prompt: |
       **Observed in:** <REQ-XXX> (<YYYY-MM-DD>)
 
   Step 5 — Write the lesson:
-    Call `lessons_writer` with `{"action": "append", "lesson_text": "<drafted lesson>"}`.
+    Call `lessons_writer` with
+      `{"action": "append", "lesson_text": "<drafted lesson>", "request_id": "<REQ-XXX from the failure context>"}`.
+    Passing request_id is optional but strongly recommended — it gets stamped
+    into the pending-lesson marker so the review-queue UI can show "this came
+    from REQ-XXX" next to the approve/reject buttons.
+
+    The tool returns a string with one of these PREFIXES (parse on the prefix,
+    not on the prose, per the L21 lesson on cross-layer label drift):
+
+      OK_WRITTEN_PENDING:  lesson was queued in docs/agent-lessons-learned.pending.md
+                           for human review (AET-13 default). It is NOT yet visible
+                           to code-writing agents — that happens when an admin hits
+                           POST /api/v1/lessons/{lesson_id}/approve.  Report success
+                           noting "queued for review" instead of "added".
+      OK_WRITTEN:          review gate is disabled (LESSONS_REVIEW_GATE=false) so
+                           the lesson went directly to canonical. Report success.
+      DUPLICATE_SKIPPED:   the tool ran its own jaccard-similarity dedup against
+                           every existing L## entry's Signature line (including
+                           pending entries) and found the candidate matches an
+                           existing lesson. The response names the matched
+                           lesson_id and similarity score. Treat this as a SUCCESS
+                           — the pattern is already captured. Switch the output
+                           to the "no new lesson" template below.
+      DRY_RUN:             DRY_RUN env var was set; no write but no error either.
+                           Report success.
+      ERROR:               tool-level failure (missing file, IO error, empty
+                           lesson_text). Log and exit cleanly per the RULES.
 
   Step 6 — If no new pattern:
     Do nothing.  Emit the text "No new lesson needed — pattern already documented
     in L<NN>." and stop.
 
   OUTPUT FORMAT:
-  - If a new lesson was appended:
+  - If `OK_WRITTEN_PENDING` (the default path):
+      "Lesson L<NN> queued for human review in agent-lessons-learned.pending.md.
+       Title: <title>
+       Observed in: REQ-XXX
+       Awaiting approval before it enters the canonical lessons doc."
+  - If `OK_WRITTEN` (review gate disabled):
       "Lesson L<NN> appended to agent-lessons-learned.md.
        Title: <title>
        Observed in: REQ-XXX"
+  - If `DUPLICATE_SKIPPED` from the tool, OR you decided in Step 3 that the
+    pattern is already documented:
+      "No new lesson needed — pattern already documented in L<NN>."
+      (parse the matched L<NN> from the tool response when present)
   - If an update note was added to an existing lesson:
       "Update note added to L<NN> (<existing title>).
        Observed in: REQ-XXX"
-  - If no new pattern:
-      "No new lesson needed — pattern already documented in L<NN>."
 
   RULES:
   - NEVER surface errors to the user.  If `lessons_writer` returns an ERROR string,
@@ -100,6 +174,9 @@ responsibilities:
   - id: SLA-006
     description: "Operate entirely asynchronously — never block or affect the outcome of the request that triggered it"
     category: learning
+  - id: SLA-007
+    description: "AET-12 — explicit prompt-level dedup decision BEFORE calling lessons_writer.append. Avoids round-trip on confirmed-duplicate patterns and produces a deterministic prose output the handler maps to lessons.duplicate_skipped event."
+    category: learning
 
 # DO NOT add self_learning_agent to _LESSONS_CONSUMER_AGENTS — it writes the doc, not reads it
 tools:
@@ -120,4 +197,9 @@ quality_gates: []
 
 metadata:
   created: "2026-05-25"
-  version: "1.0"
+  version: "1.3"
+  changelog:
+    - "2026-05-25 v1.0 — initial agent shipped under Phase AE scaffolding"
+    - "2026-05-27 v1.1 — AET-09/10: lessons_writer tool gained idempotent jaccard-similarity dedup; system prompt updated to branch on OK_WRITTEN / DUPLICATE_SKIPPED / DRY_RUN / ERROR return prefixes"
+    - "2026-05-27 v1.2 — AET-12: Step 3 rewritten as a concrete decision procedure (signature extraction, ≥3-token overlap heuristic, prose examples). Defense-in-depth note ties to the tool's jaccard guard. New responsibility SLA-007. Handler emits lessons.duplicate_skipped event for visibility."
+    - "2026-05-27 v1.3 — AET-13: lessons now land in agent-lessons-learned.pending.md for human review by default. Step 5 documents the OK_WRITTEN_PENDING prefix and recommends passing request_id through the tool call so the review-queue UI can attribute each pending lesson."

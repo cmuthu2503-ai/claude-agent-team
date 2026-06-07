@@ -1089,6 +1089,177 @@ def _run_project_stop(db: sqlite3.Connection, row: dict) -> None:
     update_project_deploy_status(db, pid, status="stopped", url="", error="")
 
 
+# ── AET-24 — Deploy health probe loop ────────────────────────────────────
+
+
+# Env → host port mapping. Matches docker-compose.{env}.yml port
+# bindings; kept in lockstep with src/main.py::_cors_default_map (L23
+# cross-layer drift defence — both files name the same env→port pairs).
+_ENV_PORT_MAP: dict[str, int] = {
+    "development": 8000,
+    "staging":     8010,
+    "production":  8020,
+    "demo":        8030,
+}
+
+# Probe cadence — every 60 s as AET-24 spec says. POLL_INTERVAL is 5s
+# so we fire on every 12th tick. Tracked via a process-local counter
+# (no DB state) so a supervisor restart re-aligns to a fresh window
+# without missing a probe.
+HEALTH_PROBE_INTERVAL_S = 60
+_PROBE_TICK_COUNTER: dict[str, int] = {"n": 0}
+
+
+def _probe_one_env(env: str, port: int, deploy_id: str) -> dict:
+    """Synchronously probe one environment's /api/v1/health endpoint.
+
+    Returns a dict the caller stuffs into ``deploy_health`` columns +
+    ``raw_metrics_json``. Total budget: 5 s (the urlopen timeout). On
+    any failure the row still lands — we record http_status=0 so the
+    anomaly detector (AET-26) can see "env stopped responding" as a
+    real signal, not as a missing sample."""
+    host = os.getenv("HEALTHCHECK_HOST", "localhost")
+    url = f"http://{host}:{port}/api/v1/health"
+    started = time.monotonic()
+    status_code = 0
+    response_body = ""
+    error: str | None = None
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            status_code = resp.status
+            # Cap body read — /health is small but a misbehaving env could
+            # stream gigabytes; we only need enough to confirm it's JSON.
+            response_body = resp.read(2048).decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        status_code = e.code
+        error = f"HTTP {e.code}"
+    except urllib.error.URLError as e:
+        error = f"URLError: {e.reason}"
+    except Exception as e:  # noqa: BLE001
+        error = f"{type(e).__name__}: {e}"
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+
+    return {
+        "deploy_id": deploy_id,
+        "env": env,
+        "response_time_ms": elapsed_ms,
+        "http_status": status_code,
+        # AET-26 will compute error_rate_5m from rolling history; this
+        # single probe contributes its own bit (1.0 = error, 0.0 = OK).
+        # Writing the per-probe contribution NOT the rolling rate keeps
+        # the column meaningful without a SQL JOIN at write time.
+        "error_rate_5m": 0.0 if 200 <= status_code < 300 else 1.0,
+        "restart_count": 0,  # populated by docker-stats probe in a later AET
+        "raw_metrics_json": json.dumps({
+            "url": url,
+            "error": error,
+            "response_body_preview": response_body[:200],
+            "probe_source": "supervisor.health_probe_tick",
+        }),
+    }
+
+
+def _latest_deploy_id_for(db: sqlite3.Connection, env: str) -> str:
+    """Find the deployment_id of the most recent completed deploy.
+    Falls back to a synthetic ``platform-{env}`` ID when no deploy
+    has reached completion yet — the probe still lands so we capture
+    cold-start data, but the deploy_id makes it obvious this row is
+    not tied to a specific rollout."""
+    try:
+        cur = db.execute(
+            """SELECT deployment_id
+               FROM deployment_states
+               WHERE current_step = 'completed'
+               ORDER BY started_at DESC LIMIT 1"""
+        )
+        row = cur.fetchone()
+        if row:
+            return row[0]
+    except Exception:
+        pass
+    return f"platform-{env}"
+
+
+def _insert_probe_row(db: sqlite3.Connection, fields: dict) -> None:
+    """Write one probe row. Generates a probe_id with millisecond
+    precision so the supervisor restart loop can't collide. INSERT
+    OR IGNORE protects against a transient retry."""
+    probe_id = (
+        f"PROBE-{fields['env']}-"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')}"
+    )
+    db.execute(
+        """INSERT OR IGNORE INTO deploy_health
+           (probe_id, deploy_id, env, recorded_at,
+            response_time_ms, error_rate_5m, http_status,
+            restart_count, raw_metrics_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            probe_id,
+            fields["deploy_id"],
+            fields["env"],
+            datetime.now(timezone.utc).isoformat(),
+            fields["response_time_ms"],
+            fields["error_rate_5m"],
+            fields["http_status"],
+            fields["restart_count"],
+            fields["raw_metrics_json"],
+        ),
+    )
+    db.commit()
+
+
+def health_probe_tick(db: sqlite3.Connection) -> None:
+    """Called once per supervisor poll iteration; runs the actual
+    probe only every Nth tick where N = HEALTH_PROBE_INTERVAL_S /
+    POLL_INTERVAL. Crash-resilient: any per-env probe failure logs
+    and continues; one bad env can't stop the others from being
+    recorded. Idempotent under restart — counter resets to 0, so
+    the next tick fires immediately and the cadence reconverges
+    within one window.
+    """
+    _PROBE_TICK_COUNTER["n"] += 1
+    ticks_per_probe = max(1, HEALTH_PROBE_INTERVAL_S // POLL_INTERVAL)
+    if _PROBE_TICK_COUNTER["n"] % ticks_per_probe != 0:
+        return
+
+    # Determine which envs to probe. We probe ANY env that has a
+    # configured port AND whose dev-stack docker-compose file exists
+    # at the project root — the file's presence is the cheapest
+    # "is this env even installed?" check available without a docker
+    # round-trip. Avoids logging cold-port failures on a user's box
+    # that doesn't run prod/demo locally.
+    envs_to_probe: list[tuple[str, int]] = []
+    for env, port in _ENV_PORT_MAP.items():
+        compose_path = PROJECT_ROOT / f"docker-compose.{env if env != 'development' else ''}.yml".replace("..yml", ".yml").lstrip(".")
+        # development uses the root docker-compose.yml; everything else
+        # has a docker-compose.{env}.yml sibling.
+        if env == "development":
+            compose_path = PROJECT_ROOT / "docker-compose.yml"
+        else:
+            compose_path = PROJECT_ROOT / f"docker-compose.{env}.yml"
+        if compose_path.exists():
+            envs_to_probe.append((env, port))
+
+    for env, port in envs_to_probe:
+        try:
+            deploy_id = _latest_deploy_id_for(db, env)
+            fields = _probe_one_env(env, port, deploy_id)
+            _insert_probe_row(db, fields)
+            # One-line log per env per probe — verbose but the supervisor
+            # produces ~12 lines/minute total across 4 envs, well under
+            # noise threshold. Useful for "is the probe even running?"
+            # questions during AE-1 debugging.
+            log(
+                f"  📊 probe {env}:{port} → "
+                f"{fields['http_status']} ({fields['response_time_ms']}ms)"
+            )
+        except Exception as e:  # noqa: BLE001
+            # Crash-resilience contract: log and continue. Never let
+            # one env's probe wedge the loop.
+            log(f"  ⚠️  probe {env}:{port} failed: {e}")
+
+
 def main() -> None:
     """Main supervisor loop — poll for pending deployments."""
     log("=" * 60)
@@ -1139,6 +1310,15 @@ def main() -> None:
                 # process for both platform autodeploy and per-project
                 # deploys.
                 process_project_deploy_requests(db)
+                # AET-24 — emit deploy_health probe rows every 60 s.
+                # Cheap per-tick (just increments a counter) until the
+                # 12th poll, then probes each installed env in series.
+                # Wrapped in its own try because a probe failure must
+                # NOT prevent the next deployment pickup.
+                try:
+                    health_probe_tick(db)
+                except Exception as e:  # noqa: BLE001
+                    log(f"⚠️  health_probe_tick crashed: {e}")
                 db.close()
         except KeyboardInterrupt:
             log("Supervisor stopped by user")

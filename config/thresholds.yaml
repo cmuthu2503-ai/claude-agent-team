@@ -33,6 +33,46 @@ thresholds:
     enforcement: block_merge
     description: "No hard-coded secrets or credentials may be present in committed code"
 
+  # AET-20 — single threshold the AE-4 security gate (AET-21) reads to
+  # decide which severities cause BLOCK vs PASS_WITH_WARNINGS. Applies
+  # uniformly across all four security tools (secret_scan, sast_scan,
+  # dependency_audit, pen_test_simple) so the agent's tools, the
+  # workflow runner, and the UI all use the same cutoff (L21 single
+  # source of truth for cross-layer labels).
+  #
+  # Severity ordering (worst → best): critical > high > medium > low > info.
+  # Setting value=high means findings of severity critical OR high
+  # cause BLOCK; medium/low are reported but advance the workflow.
+  # Tighten to "medium" for regulated environments; loosen to "critical"
+  # for proof-of-concept work where false positives are expensive.
+  security_max_severity_to_block:
+    value: high
+    options: [critical, high, medium, low]
+    enforcement: block_merge
+    description: "Highest finding severity that the AE-4 security gate ignores. Findings AT or ABOVE this severity (i.e. as bad or worse) cause BLOCK; below cause PASS_WITH_WARNINGS. Default 'high' blocks on critical+high, warns on medium+low."
+
+  # AET-35 — severity cutoff for the architecture review stage gate.
+  # The architecture_reviewer agent (AET-34 prompt) emits findings at
+  # two severities:
+  #   - CRITICAL — rules 1-3 (DB-in-routes, unregistered handler,
+  #                unrouted page). Real structural breakage.
+  #   - HIGH     — rules 4-6 (Pydantic v1 patterns, circular imports
+  #                that don't break the build, config-system gaps).
+  #                Quality signals, not breakage.
+  #
+  # Default cutoff = 'critical' so the gate blocks ONLY on CRITICAL
+  # findings — matches the agent's own ARCH_VIOLATION verdict logic
+  # (the audit at docs/arch-reviewer-audit.md §3 R3 recommended this).
+  # Tighten to 'high' for projects that want HIGH findings to gate
+  # too (e.g. v1→v2 Pydantic migration enforced via the workflow).
+  # Below 'critical' is intentionally NOT supported — there's no
+  # arch-finding severity below HIGH.
+  arch_review_block_severity:
+    value: critical
+    options: [critical, high]
+    enforcement: block_merge
+    description: "Severity cutoff for the architecture review stage gate. Findings AT or ABOVE this severity cause ARCH_VIOLATION (block). Default 'critical' blocks only on rules 1-3 violations (DB bypass, unregistered handler, unrouted page). Tighten to 'high' to also block on Pydantic v1 / circular-import / config-system findings."
+
   quality_guardian_approval:
     value: true
     enforcement: block_merge
@@ -117,6 +157,29 @@ thresholds:
 # If you flip inference_geo to "global", divide these by 1.1 (or just accept
 # the small over-estimate).
 cost:
+  # ── PAM-28 — DEPRECATED PRICING SOURCE ─────────────────────────────
+  #
+  # As of PAM-15 (2026-05), the runtime cost calculator
+  # (``src/core/token_tracker.py``) reads pricing from
+  # ``config/models.yaml`` FIRST — each entry in that catalog carries
+  # ``pricing_per_million.{input, output}`` keyed by catalog id. The
+  # block below is now the FALLBACK source, consulted only when:
+  #
+  #   1. the catalog hasn't loaded (boot-time soft-fail path); or
+  #   2. a ``token_usage.model`` value isn't a catalog id and doesn't
+  #      resolve through the catalog's legacy alias map (e.g. an old
+  #      persisted row from a model that's since been removed).
+  #
+  # New models should be priced ONLY in ``config/models.yaml``. Adding
+  # them here too creates a drift surface where the dashboard can show
+  # one cost and the cost dashboard another. The legacy entries below
+  # are kept so historical ``token_usage`` rows still resolve to a
+  # price — do not extend them. When all historical rows have either
+  # been re-attributed (PR-5 future work) or aged out, this whole
+  # block can be deleted.
+  #
+  # See ``docs/prd-per-agent-model-assignment.md`` §6 (Phase 5) for
+  # the migration plan.
   pricing:                             # USD per million tokens (1.1× US-geo multiplier baked in)
     claude-opus-4-7:
       input: 16.50                     # 15.00 × 1.1

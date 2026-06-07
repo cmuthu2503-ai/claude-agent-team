@@ -4,7 +4,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
 
-from src.auth.service import get_current_user
+from src.auth.service import get_current_user, require_role
 
 router = APIRouter(prefix="/api/v1/cost", tags=["cost"])
 
@@ -20,17 +20,26 @@ async def cost_dashboard(
     # Get all token usage records for breakdowns
     db = await state._get_db()
 
-    # PM-17 / PDB-08 — when scoped to a project, restrict every aggregation
-    # to either (a) that project's requests OR (b) that project's artifacts.
-    # The artifact branch picks up single-agent calls from Project-driven Build
-    # (brief / PRD / tasks generation) that don't have a request_id but DO
-    # have a project_artifact_id pointing back to one of this project's rows.
-    # The non-scoped path stays exactly as before (no perf hit when omitted).
+    # PM-17 / PDB-08 / cost-attribution-fix — when scoped to a project,
+    # restrict every aggregation by the direct `token_usage.project_id`
+    # column. That column is now populated by:
+    #   • record_token_usage (which back-derives project_id from
+    #     request_id when the caller didn't set it explicitly), and
+    #   • single_agent_call's BPD generators (which pass project_id
+    #     directly because they have no request_id).
+    # Previously this was an OR-of-subqueries over request_id +
+    # project_artifact_id, which left BPD generation spend stranded —
+    # those rows had request_id='' AND project_artifact_id=NULL, so they
+    # appeared in the All Projects total but couldn't be attributed to
+    # any project. The old OR clause is kept for the artifact branch
+    # only (rows recorded before this migration are backfilled by the
+    # migration UPDATE for the request branch but artifact-only rows
+    # need the legacy join). New rows match on project_id directly.
     where_proj = ""
     params_proj: tuple = ()
     if project_id:
         where_proj = (
-            "WHERE request_id IN (SELECT request_id FROM requests WHERE project_id = ?) "
+            "WHERE project_id = ? "
             "OR project_artifact_id IN (SELECT artifact_id FROM project_artifacts WHERE project_id = ?)"
         )
         params_proj = (project_id, project_id)
@@ -40,13 +49,15 @@ async def cost_dashboard(
     # tables go filtered — confusing. Compute them inline against the same
     # scoped query when project_id is set, fall back to the legacy helpers
     # (which scan the full table once) when unscoped.
+    today_iso = datetime.utcnow().date().isoformat()
+    first_of_month_iso = datetime.utcnow().replace(day=1).date().isoformat()
     if project_id:
-        today_iso = datetime.utcnow().date().isoformat()
-        first_of_month_iso = datetime.utcnow().replace(day=1).date().isoformat()
-        # Same OR-shape as the where_proj clause above so the daily/monthly
-        # cards stay consistent with the breakdown tables.
+        # Same shape as the where_proj clause above so the daily/monthly
+        # cards stay consistent with the breakdown tables — direct
+        # project_id column hit plus the legacy artifact-id branch for
+        # pre-migration rows that only have project_artifact_id set.
         proj_filter = (
-            "(request_id IN (SELECT request_id FROM requests WHERE project_id = ?) "
+            "(project_id = ? "
             "OR project_artifact_id IN (SELECT artifact_id FROM project_artifacts WHERE project_id = ?))"
         )
         async with db.execute(
@@ -64,6 +75,29 @@ async def cost_dashboard(
     else:
         daily = await state.get_daily_cost()
         monthly = await state.get_monthly_cost()
+
+    # Today's input/output token totals — the cyberpunk overlay's ticker pairs
+    # these with `today.total_cost_usd` so "[COST] today" and "[TOKENS] today"
+    # share the same time window. Previously the ticker showed all-time tokens
+    # next to today's cost (mixed scopes), which made the bar hard to read.
+    where_today = "recorded_at >= ?"
+    today_params: tuple = (today_iso,)
+    if project_id:
+        where_today = (
+            "recorded_at >= ? AND "
+            "(project_id = ? "
+            "OR project_artifact_id IN (SELECT artifact_id FROM project_artifacts WHERE project_id = ?))"
+        )
+        today_params = (today_iso, project_id, project_id)
+    async with db.execute(
+        f"SELECT COALESCE(SUM(input_tokens), 0) AS inp, "
+        f"COALESCE(SUM(output_tokens), 0) AS outp "
+        f"FROM token_usage WHERE {where_today}",
+        today_params,
+    ) as cur:
+        today_tok_row = await cur.fetchone()
+    today_input_tokens = int(today_tok_row["inp"]) if today_tok_row else 0
+    today_output_tokens = int(today_tok_row["outp"]) if today_tok_row else 0
 
     # Per-model breakdown
     async with db.execute(
@@ -111,7 +145,11 @@ async def cost_dashboard(
 
     return {
         "data": {
-            "today": {"total_cost_usd": round(daily, 4)},
+            "today": {
+                "total_cost_usd": round(daily, 4),
+                "total_input_tokens": today_input_tokens,
+                "total_output_tokens": today_output_tokens,
+            },
             "this_month": {"total_cost_usd": round(monthly, 4)},
             "totals": {
                 "total_cost_usd": round(sum(r["cost"] for r in agent_rows), 4) if agent_rows else 0,
@@ -122,6 +160,90 @@ async def cost_dashboard(
             "by_model": by_model,
             "by_agent": by_agent,
             "by_request": by_request,
+        },
+        "meta": None,
+        "error": None,
+    }
+
+
+@router.get("/orphans")
+async def list_orphan_cost(
+    request: Request,
+    user: dict = Depends(require_role("admin")),
+):
+    """Return rollup of token_usage rows that have NO project linkage
+    (no request_id → project, no project_artifact_id, no project_id).
+
+    These rows came from pre-migration BPD generation calls
+    (single_agent_call with all three keys empty/NULL). The dashboard's
+    All-Projects total includes them but no per-project filter can
+    surface them — they're unattributable spend. Admins can use this
+    endpoint to inspect the blast radius before calling the DELETE
+    endpoint below to purge them.
+    """
+    state = request.app.state.state_store
+    db = await state._get_db()
+    # An "orphan" = no request → project link AND no artifact → project
+    # link AND project_id IS NULL. The migration backfilled project_id
+    # from request_id where possible, so anything still NULL after
+    # migration is genuinely unattributable.
+    async with db.execute(
+        "SELECT COUNT(*) AS n, "
+        "COALESCE(SUM(cost_usd), 0) AS cost, "
+        "COALESCE(SUM(input_tokens), 0) AS inp, "
+        "COALESCE(SUM(output_tokens), 0) AS outp "
+        "FROM token_usage "
+        "WHERE project_id IS NULL "
+        "AND (request_id = '' OR request_id IS NULL) "
+        "AND project_artifact_id IS NULL"
+    ) as cur:
+        row = await cur.fetchone()
+    return {
+        "data": {
+            "orphan_count": int(row["n"]) if row else 0,
+            "orphan_cost_usd": round(float(row["cost"]) if row else 0.0, 4),
+            "orphan_input_tokens": int(row["inp"]) if row else 0,
+            "orphan_output_tokens": int(row["outp"]) if row else 0,
+        },
+        "meta": None,
+        "error": None,
+    }
+
+
+@router.delete("/orphans")
+async def delete_orphan_cost(
+    request: Request,
+    user: dict = Depends(require_role("admin")),
+):
+    """Hard-delete unattributable token_usage rows.
+
+    Admin-only. Use after this migration ships to clean up cost rows
+    from BPD generation calls that ran BEFORE single_agent_call learned
+    to pass project_id. New rows are attributed correctly so this
+    endpoint is effectively a one-shot cleanup — running it on a clean
+    DB is a no-op.
+    """
+    state = request.app.state.state_store
+    db = await state._get_db()
+    async with db.execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(cost_usd), 0) AS cost "
+        "FROM token_usage "
+        "WHERE project_id IS NULL "
+        "AND (request_id = '' OR request_id IS NULL) "
+        "AND project_artifact_id IS NULL"
+    ) as cur:
+        before = await cur.fetchone()
+    await db.execute(
+        "DELETE FROM token_usage "
+        "WHERE project_id IS NULL "
+        "AND (request_id = '' OR request_id IS NULL) "
+        "AND project_artifact_id IS NULL"
+    )
+    await db.commit()
+    return {
+        "data": {
+            "deleted_count": int(before["n"]) if before else 0,
+            "deleted_cost_usd": round(float(before["cost"]) if before else 0.0, 4),
         },
         "meta": None,
         "error": None,

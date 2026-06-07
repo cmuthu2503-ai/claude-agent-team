@@ -100,6 +100,23 @@ responsibilities:
 tools:
   - web_search
   - web_scrape
+  - knowledge_search
+  - knowledge_get
+  - knowledge_cite
+  - record_decision
+  - recall_memory
+
+# KB-22 — `hybrid`: relevant app knowledge is pre-injected so a NEW PRD is
+# grounded in the application's existing PRD/spec/docs (not written blind), AND
+# the agent can knowledge_search for follow-up. scope: auto (§5.1) — app facts
+# from the project namespace, platform craft (PRD method/format) as guidance
+# only. Citation-or-flag.
+retrieval:
+  mode: hybrid
+  scope: auto
+  forced_top_k: 5
+  craft_top_k: 3
+  max_searches: 8
 
 outputs:
   - name: "PRD Document"
