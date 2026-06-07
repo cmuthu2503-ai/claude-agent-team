@@ -59,34 +59,35 @@ async def test_read_lessons_returns_string():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_append_then_cleanup():
-    """append_lesson() must persist the lesson to disk; duplicate call does not error."""
-    tool = LessonsWriterTool()
+async def test_append_then_cleanup(monkeypatch, tmp_path):
+    """append_lesson() must persist the lesson; a duplicate call does not error.
 
-    # Ensure clean state
-    _cleanup_test_lesson("L999")
+    Isolated to temp files (monkeypatching the module-level path globals) so it
+    NEVER touches the repo's real lessons docs — previously this test wrote L999
+    into docs/agent-lessons-learned.pending.md and polluted the working tree.
+    """
+    import src.tools.lessons_writer as lw
 
-    try:
-        # First append
-        result = await tool.execute({"action": "append", "lesson_text": _TEST_LESSON})
-        assert "appended" in result.lower() or "lesson" in result.lower()
+    canonical = tmp_path / "agent-lessons-learned.md"
+    pending = tmp_path / "agent-lessons-learned.pending.md"
+    canonical.write_text("# Agent Lessons Learned\n", encoding="utf-8")
+    pending.write_text("# Pending Review Queue\n", encoding="utf-8")
+    monkeypatch.setattr(lw, "LESSONS_FILE", canonical)
+    monkeypatch.setattr(lw, "PENDING_LESSONS_FILE", pending)
 
-        # Verify on disk
-        text = LESSONS_FILE.read_text(encoding="utf-8")
-        assert "L999" in text, "Appended lesson not found in file"
-        assert "TEST_SIG" in text
+    tool = lw.LessonsWriterTool()
 
-        # Second call (idempotency check — should not raise, just append again or succeed)
-        result2 = await tool.execute({"action": "append", "lesson_text": _TEST_LESSON})
-        assert isinstance(result2, str)
-    finally:
-        # Always clean up — remove ALL occurrences of the test lesson
-        if LESSONS_FILE.exists():
-            raw = LESSONS_FILE.read_text(encoding="utf-8")
-            # Remove from first occurrence to end of that block
-            idx = raw.find("## L999 —")
-            if idx != -1:
-                LESSONS_FILE.write_text(raw[:idx].rstrip() + "\n", encoding="utf-8")
+    # First append — fresh temp files, so the dedup guard finds no match.
+    result = await tool.execute({"action": "append", "lesson_text": _TEST_LESSON})
+    assert "lesson" in result.lower() or "ok_written" in result.lower() or "appended" in result.lower()
+
+    # The lesson landed in one of the two files (pending when the review gate is on).
+    written = canonical.read_text(encoding="utf-8") + pending.read_text(encoding="utf-8")
+    assert "L999" in written and "TEST_SIG" in written, "Appended lesson not found"
+
+    # Second call must not raise (dedup may now skip it — that's fine).
+    result2 = await tool.execute({"action": "append", "lesson_text": _TEST_LESSON})
+    assert isinstance(result2, str)
 
 
 # ---------------------------------------------------------------------------
@@ -127,30 +128,44 @@ async def test_dry_run_mode():
 
 @pytest.mark.asyncio
 async def test_orchestrator_triggers_self_learning_on_fail():
-    """_trigger_self_learning must call execute_agent with 'self_learning_agent'."""
-    from src.core.orchestrator import Orchestrator
+    """The self-learning handler (AET-11) fires single_agent_call with
+    'self_learning_agent' on a request.failed event.
 
-    # Minimal mock setup — we only need to verify execute_agent is called
-    mock_execute = AsyncMock(return_value={
-        "outputs": {"self_learning_agent": "No new lesson needed."},
-        "artifacts": [],
+    Self-learning moved from an Orchestrator method to an EventEmitter handler
+    (`make_self_learning_handler`) registered in main.py; it runs the analysis
+    in a background task via single_agent_call (silent — no Request/Subtask)."""
+    from src.core.self_learning_trigger import make_self_learning_handler
+
+    state = MagicMock()
+    state.get_request = AsyncMock(return_value=MagicMock(
+        description="x", task_type="feature_request", project_id=None,
+    ))
+    state.get_subtasks_for_request = AsyncMock(return_value=[])
+
+    agent_executor = MagicMock()
+    agent_executor.single_agent_call = AsyncMock(return_value={
         "text": "No new lesson needed — pattern already documented.",
-        "self_learning_agent_output": "No new lesson needed — pattern already documented.",
     })
 
-    orch = object.__new__(Orchestrator)
-    orch.execute_agent = mock_execute
-    orch.events = MagicMock()
-    orch.events.emit = AsyncMock()
+    events = MagicMock()
+    events.emit = AsyncMock()
 
-    await orch._trigger_self_learning("REQ-TEST-SLA")
+    handler = make_self_learning_handler(state, agent_executor, events)
+    await handler("request.failed", {"request_id": "REQ-TEST-SLA", "error": "boom"})
 
-    # execute_agent must have been called with self_learning_agent as first positional arg
-    assert mock_execute.called, "execute_agent was never called"
-    call_args = mock_execute.call_args
-    agent_arg = call_args[0][0] if call_args[0] else call_args[1].get("agent_id")
+    # The handler runs single_agent_call in a background task — yield to let it run.
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if agent_executor.single_agent_call.called:
+            break
+
+    assert agent_executor.single_agent_call.called, "single_agent_call was never called"
+    kwargs = agent_executor.single_agent_call.call_args.kwargs
+    agent_arg = kwargs.get("agent_id")
+    if agent_arg is None and agent_executor.single_agent_call.call_args.args:
+        agent_arg = agent_executor.single_agent_call.call_args.args[0]
     assert agent_arg == "self_learning_agent", (
-        f"Expected execute_agent to be called with 'self_learning_agent', got '{agent_arg}'"
+        f"Expected single_agent_call with 'self_learning_agent', got '{agent_arg}'"
     )
 
 

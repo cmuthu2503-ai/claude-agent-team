@@ -15,12 +15,12 @@ def config():
 
 
 def test_all_agents_loaded(config):
-    assert len(config.agents) == 8
+    assert len(config.agents) == 15
 
 
 def test_all_teams_loaded(config):
     teams = config.teams.get("teams", {})
-    assert len(teams) == 4
+    assert len(teams) == 6
     assert "engineering" in teams
     assert "planning" in teams
     assert "development" in teams
@@ -29,12 +29,12 @@ def test_all_teams_loaded(config):
 
 def test_all_workflows_loaded(config):
     workflows = config.workflows.get("workflows", {})
-    assert len(workflows) == 4
+    assert len(workflows) == 6
 
 
 def test_all_tools_loaded(config):
     tools = config.tools.get("tools", {})
-    assert len(tools) == 14
+    assert len(tools) == 34
 
 
 def test_validator_passes_on_valid_config(config):

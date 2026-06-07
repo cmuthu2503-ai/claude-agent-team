@@ -28,8 +28,10 @@ def config():
 def test_factory_creates_all_agents(config):
     factory = AgentFactory(config)
     agents = factory.create_all()
-    # 9 agents: PRD, user_story, BE, FE, code_reviewer, devops, tester, research, content.
-    assert len(agents) == 9
+    # 15 agents after the phase-AE expansion (added architecture_reviewer,
+    # security_specialist, quality_guardian, ops_heal_agent, self_learning_agent,
+    # project_orchestrator) on top of the original 9.
+    assert len(agents) == 15
     assert "prd_specialist" in agents
     assert "backend_specialist" in agents
 
@@ -76,7 +78,7 @@ def test_registry_register_and_get(config):
     agents = factory.create_all()
     registry = AgentRegistry()
     registry.register_all(agents)
-    assert registry.count == 9
+    assert registry.count == 15
     assert registry.get("prd_specialist") is not None
     assert registry.get("nonexistent") is None
 
@@ -99,7 +101,7 @@ def test_registry_agent_ids(config):
     registry = AgentRegistry()
     registry.register_all(agents)
     ids = registry.agent_ids()
-    assert len(ids) == 9
+    assert len(ids) == 15
     assert "tester_specialist" in ids
 
 
@@ -157,8 +159,8 @@ def test_tool_schemas_for_agent(config):
 def test_tool_list_for_agent(config):
     registry = ToolRegistry(config)
     tools = registry.list_tools_for_agent("devops_specialist")
-    assert "deployment" in tools
-    assert "github_api" in tools
+    # devops_specialist's current tool grants (config/tools.yaml available_to).
+    assert "wait_for_deployment" in tools
 
 
 # ── Input Sanitizer Tests ────────────────────────

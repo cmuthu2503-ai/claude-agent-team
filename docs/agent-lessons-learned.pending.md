@@ -32,11 +32,4 @@ do NOT hand-edit them, and do NOT remove this header.
 
 ---
 
-
-<!-- pending-lesson:start id=L999 request_id=unknown created=2026-06-01T00:38:51Z -->
-## L999 — TEST LESSON (auto-cleanup)
-**Signature:** `TEST_SIG`
-**Cause:** test
-**Fix:** test
-**Observed in:** REQ-TEST (2026-05-25)
-<!-- pending-lesson:end id=L999 -->
+_(queue empty)_

@@ -64,13 +64,20 @@ class _StubExecutor:
         self.inference_geo = None
         self._busy_agents: dict[str, Any] = {}
         self._agents = agents
+        # KB-09: execute() calls _resolve_kb_for_request, which reads
+        # self.kb_subsystem. None → KB grounding skipped (no behaviour change).
+        self.kb_subsystem = None
 
         # Bind the real methods off AgentSystemExecutor so we test the
         # actual code, not a copy of it.
         from src.agents.executor import AgentSystemExecutor
         self._resolve_model_for_agent = AgentSystemExecutor._resolve_model_for_agent.__get__(self)
+        self._resolve_kb_for_request = AgentSystemExecutor._resolve_kb_for_request.__get__(self)
         self.execute = AgentSystemExecutor.execute.__get__(self)
         self._resolve_project_root_for_request = AsyncMock(return_value=None)
+        # KB-20: execute() calls _auto_record_decision after process_task.
+        # Stub it out — provenance recording is not under test here.
+        self._auto_record_decision = AsyncMock(return_value=None)
 
         # Provide a registry-shaped lookup.
         class _Reg:

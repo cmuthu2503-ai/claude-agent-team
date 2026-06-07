@@ -12,6 +12,17 @@ COMPOSE_FILES = [
     "docker-compose.demo.yml",
 ]
 
+# These tests assert on repo-root infra files (compose files, Makefile,
+# Dockerfiles). The backend test container only mounts src/, tests/, config/,
+# etc. — NOT the repo root — so the files are absent here (cwd=/app) and every
+# test would FileNotFoundError. Skip the whole module when run somewhere the
+# infra files aren't present; they pass when run on the host (where the repo
+# root is the cwd).
+pytestmark = pytest.mark.skipif(
+    not Path("docker-compose.yml").exists(),
+    reason="repo-root infra files not mounted in the backend test container; run on the host",
+)
+
 
 @pytest.mark.parametrize("compose_file", COMPOSE_FILES)
 def test_compose_file_exists(compose_file):

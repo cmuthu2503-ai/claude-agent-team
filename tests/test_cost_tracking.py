@@ -20,9 +20,11 @@ async def cost_setup(tmp_path):
 def test_cost_calculation_opus_4_7():
     """Per-token pricing for the single Claude Platform on AWS model."""
     tracker = TokenTracker.__new__(TokenTracker)
-    tracker._pricing = {
+    tracker._catalog = None
+    tracker._fallback_pricing = {
         "claude-opus-4-7": {"input": 16.50, "output": 82.50},
     }
+    tracker._warned_models = set()
     # 1000 input + 2000 output tokens with Opus 4.7 (US-geo) pricing
     cost = tracker.calculate_cost("claude-opus-4-7", 1000, 2000)
     expected = (1000 * 16.50 + 2000 * 82.50) / 1_000_000
@@ -32,10 +34,12 @@ def test_cost_calculation_opus_4_7():
 def test_cost_calculation_legacy_opus_4_6_kept_for_old_rows():
     """Old token_usage rows logged before the Claude Platform on AWS migration still need pricing."""
     tracker = TokenTracker.__new__(TokenTracker)
-    tracker._pricing = {
+    tracker._catalog = None
+    tracker._fallback_pricing = {
         "claude-opus-4-7": {"input": 16.50, "output": 82.50},
         "claude-opus-4-6": {"input": 16.50, "output": 82.50},
     }
+    tracker._warned_models = set()
     cost = tracker.calculate_cost("claude-opus-4-6", 5000, 10000)
     expected = (5000 * 16.50 + 10000 * 82.50) / 1_000_000
     assert abs(cost - expected) < 0.0001
@@ -43,7 +47,9 @@ def test_cost_calculation_legacy_opus_4_6_kept_for_old_rows():
 
 def test_cost_calculation_unknown_model():
     tracker = TokenTracker.__new__(TokenTracker)
-    tracker._pricing = {}
+    tracker._catalog = None
+    tracker._fallback_pricing = {}
+    tracker._warned_models = set()
     cost = tracker.calculate_cost("unknown-model", 1000, 2000)
     assert cost == 0.0
 

@@ -115,7 +115,7 @@ async def test_clean_outputs_combined_gate_passes():
         "quality_report": APPROVED_REPORT,
         "tester_specialist_output": "READY FOR DEPLOYMENT — all tests pass.",
     }
-    result = runner._check_combined_gate(artifacts, "REQ-TEST")
+    result = await runner._check_combined_gate(artifacts, "REQ-TEST")
     assert result["passed"] is True
     assert "quality guardian" in result["reason"].lower()
 
