@@ -4,7 +4,7 @@ import os
 from contextlib import asynccontextmanager, suppress
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.middleware.body_size_limit import BodySizeLimitMiddleware
@@ -36,6 +36,52 @@ from src.utils.secrets import read_secret
 logger = structlog.get_logger()
 
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+
+# Environments where running fake (mock) agents is NEVER acceptable — a missing
+# credential there is a deploy incident, not a reason to silently serve
+# simulated output.
+_MOCK_FORBIDDEN_ENVIRONMENTS = frozenset({"staging", "production"})
+
+
+class MockModeNotAllowedError(RuntimeError):
+    """Raised at startup when the agent system would fall back to MOCK mode
+    (no LLM credentials) but mock mode is not explicitly allowed. Prevents the
+    silent-fake-output footgun: a misconfigured prod/staging deploy fails loudly
+    instead of serving realistic-looking simulated results."""
+
+
+def _env_flag(name: str) -> bool:
+    """Truthy parse for an env flag: 1/true/yes/on (case-insensitive)."""
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def resolve_agent_mode(*, has_client: bool, environment: str, allow_mock: bool) -> str:
+    """Decide the agent execution mode at boot, or refuse to boot.
+
+    - Real LLM client present       → "real_llm" (always).
+    - No client, forbidden env       → raise (staging/production never run fake agents).
+    - No client, mock not opted in   → raise (default-deny the silent fallback).
+    - No client, mock opted in       → "mock" (caller MUST log a loud warning).
+
+    Pure function so the policy is unit-testable without booting the app.
+    """
+    if has_client:
+        return "real_llm"
+    if environment in _MOCK_FORBIDDEN_ENVIRONMENTS:
+        raise MockModeNotAllowedError(
+            f"No LLM credentials configured and ENVIRONMENT={environment!r} forbids "
+            "mock mode. Refusing to boot with fake agents — configure Claude Platform "
+            "on AWS credentials (see docs/setup-claude-platform-on-aws.md)."
+        )
+    if not allow_mock:
+        raise MockModeNotAllowedError(
+            "No LLM credentials configured. The agent system would run in MOCK mode "
+            "(SIMULATED, fake agent output). This is disabled by default to prevent "
+            "silently serving fake results. For local dev / demo / tests, set "
+            "ALLOW_MOCK_MODE=true explicitly. For real execution, configure credentials "
+            "(see docs/setup-claude-platform-on-aws.md)."
+        )
+    return "mock"
 
 
 @asynccontextmanager
@@ -109,11 +155,29 @@ async def lifespan(app: FastAPI):
     # PDB-05's single_agent_call) can reach the executor directly without
     # going through the workflow runner.
     app.state.agent_executor = agent_executor
-    if agent_executor.client:
+    # Decide real-vs-mock at boot, or refuse to boot. Mock mode (fake agent
+    # output) is now OPT-IN: missing credentials hard-fail by default, and are
+    # forbidden outright in staging/production, so a misconfigured deploy can
+    # never silently serve simulated results.
+    agent_mode = resolve_agent_mode(
+        has_client=bool(agent_executor.client),
+        environment=ENVIRONMENT,
+        allow_mock=_env_flag("ALLOW_MOCK_MODE"),
+    )
+    app.state.agent_mode = agent_mode
+    if agent_mode == "real_llm":
         orchestrator.set_agent_executor(agent_executor)
         logger.info("agent_system_connected", mode="real_llm")
     else:
-        logger.info("agent_system_connected", mode="mock")
+        logger.warning(
+            "agent_system_MOCK_MODE_ENABLED",
+            mode="mock",
+            environment=ENVIRONMENT,
+            warning=(
+                "Agents are SIMULATED — ALL outputs are fake. Enabled via "
+                "ALLOW_MOCK_MODE. Do NOT use for real work."
+            ),
+        )
 
     # KB-10 — Knowledge Base subsystem. build_knowledge_subsystem SOFT-FAILS
     # (NFR-007): model fails to load or unreachable Postgres → available=False and
@@ -337,11 +401,14 @@ app.include_router(ws_router)
 
 
 @app.get("/api/v1/health")
-async def health() -> dict:
+async def health(request: Request) -> dict:
+    # Surface the agent execution mode so "mock" can never hide. A client
+    # seeing agent_mode="mock" knows every agent output is simulated.
     return {
         "status": "healthy",
         "version": "0.1.0",
         "environment": ENVIRONMENT,
+        "agent_mode": getattr(request.app.state, "agent_mode", "unknown"),
     }
 
 

@@ -72,6 +72,10 @@ services:
     environment:
       - ENVIRONMENT=development
       - LOG_LEVEL=DEBUG
+      # Allow MOCK agent mode (fake output) when no LLM credentials are set, so
+      # local dev works without Claude Platform on AWS creds. Real creds, if
+      # present, always win. NEVER set this in staging/prod (those hard-fail).
+      - ALLOW_MOCK_MODE=${ALLOW_MOCK_MODE:-true}
       # Claude Platform on AWS — see docs/setup-claude-platform-on-aws.md.
       # ANTHROPIC_AWS_API_KEY and ANTHROPIC_AWS_WORKSPACE_ID come from .env.
       - AWS_REGION=${AWS_REGION:-us-east-1}
