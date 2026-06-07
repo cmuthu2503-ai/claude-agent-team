@@ -24,6 +24,9 @@ services:
       - ENVIRONMENT=demo
       - LOG_LEVEL=INFO
       - SEED_ON_STARTUP=true
+      # The demo runs with SIMULATED agents (no token spend). Mock mode is
+      # explicitly allowed here; real creds, if present, still win.
+      - ALLOW_MOCK_MODE=${ALLOW_MOCK_MODE:-true}
       # Claude Platform on AWS — see docs/setup-claude-platform-on-aws.md.
       # ANTHROPIC_AWS_API_KEY and ANTHROPIC_AWS_WORKSPACE_ID come from .env.demo.
       - AWS_REGION=${AWS_REGION:-us-east-1}
