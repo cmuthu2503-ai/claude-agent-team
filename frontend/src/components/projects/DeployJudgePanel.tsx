@@ -29,7 +29,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
-  Sparkles, AlertTriangle, CheckCircle2, Clock, Loader2,
+  Sparkles, AlertTriangle, CheckCircle2, Loader2,
   GitCommit, FileText, Settings2, RefreshCw,
 } from "lucide-react"
 import { api } from "../../lib/api"

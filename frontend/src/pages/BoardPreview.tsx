@@ -18,9 +18,8 @@
  */
 
 import { useEffect, useRef, useState } from "react"
-import { Link } from "react-router-dom"
 import {
-  X, ChevronDown, ChevronRight, ExternalLink, AlertTriangle,
+  X, ExternalLink, AlertTriangle,
   CheckCircle2, Clock, Bot, GitCommit, Rocket, Move, Minus,
 } from "lucide-react"
 
@@ -970,7 +969,7 @@ function Card({
   )
 }
 
-function StageStrip({ currentStage, status }: { currentStage: WorkflowStage; status: TaskStatus }) {
+function StageStrip({ currentStage }: { currentStage: WorkflowStage; status: TaskStatus }) {
   const currentIdx = STAGES.indexOf(currentStage)
   return (
     <div style={{ display: "flex", gap: 2, fontSize: 9 }}>
