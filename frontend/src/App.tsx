@@ -14,6 +14,8 @@ import { ReleasesPage } from "./pages/Releases"
 import { TeamStatusPage } from "./pages/TeamStatus"
 import { CostDashboardPage } from "./pages/CostDashboard"
 import { UserManagementPage } from "./pages/UserManagement"
+import { LessonsReviewPage } from "./pages/LessonsReview"
+import { KnowledgeBasePage } from "./pages/KnowledgeBase"
 import { MermaidViewerPage } from "./pages/MermaidViewer"
 import { ProjectsPage } from "./pages/Projects"
 import { ProjectDetailPage } from "./pages/ProjectDetail"
@@ -68,6 +70,7 @@ function App() {
                     <Route path="/request/:requestId" element={<RequestDetailPage />} />
                     <Route path="/stories/project/:projectId" element={<ProjectStoryBoardPage />} />
                     <Route path="/stories/:requestId" element={<StoryBoardPage />} />
+                    <Route path="/knowledge" element={<KnowledgeBasePage />} />
                     <Route path="/prompts" element={<PromptStudioPage />} />
                     <Route path="/history" element={<HistoryPage />} />
                     <Route path="/releases" element={<ReleasesPage />} />
@@ -75,6 +78,7 @@ function App() {
                     <Route path="/cost" element={<CostDashboardPage />} />
                     <Route path="/diagrams" element={<MermaidViewerPage />} />
                     <Route path="/users" element={<UserManagementPage />} />
+                    <Route path="/lessons" element={<LessonsReviewPage />} />
                     {/* Standalone preview page — pick your click-to-drill behavior
                         before we wire the real Build Board / Command Center. */}
                     <Route path="/preview/board" element={<BoardPreviewPage />} />

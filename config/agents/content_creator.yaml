@@ -267,6 +267,23 @@ responsibilities:
 tools:
   - web_search
   - web_scrape
+  - knowledge_search
+  - knowledge_get
+  - knowledge_cite
+  - record_decision
+  - recall_memory
+
+# KB-17 — Knowledge Base retrieval. Content must be ON-BRAND and grounded in
+# THIS application's materials. `scope: auto` (§5.1): for a project task, FACTS
+# (brand, domain, prior research) come strictly from the app's own namespace;
+# the platform KB contributes CRAFT (tone, structure, format) only — never a
+# citeable claim. Project-less tasks degrade to platform-only. Citation-or-flag.
+retrieval:
+  mode: hybrid
+  scope: auto
+  forced_top_k: 5
+  craft_top_k: 3
+  max_searches: 8
 
 outputs:
   - name: "Content Artifact"

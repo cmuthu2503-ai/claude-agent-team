@@ -234,6 +234,11 @@ class Orchestrator(AgentExecutor):
                 if self._agent_executor is not None else None
             ),
             events=self.events,
+            # AET-21 — thread the parsed thresholds.yaml dict through so
+            # the security gate (_check_security_gate) can read the
+            # `security_max_severity_to_block` cutoff. None-safe; helper
+            # falls back to DEFAULT_MAX_SEVERITY when config is missing.
+            thresholds=config.thresholds if hasattr(config, "thresholds") else None,
         )
         self._agent_executor: Any = None  # Set by agent system in Phase 3
         # Background tasks keyed by request_id so cancel() can find and kill a
@@ -254,13 +259,26 @@ class Orchestrator(AgentExecutor):
         self._research_publisher = ResearchPublisher()
 
     def set_agent_executor(self, executor: Any) -> None:
-        """Inject the real agent executor (set during Phase 3 agent system init)."""
+        """Inject the real agent executor (set during Phase 3 agent system init).
+
+        PAM-15: borrow the executor's loaded ``ModelCatalog`` for the
+        orchestrator's TokenTracker so workflow-runner costs are priced
+        from ``config/models.yaml`` (per-model entries) instead of the
+        legacy ``config/thresholds.yaml`` block. Both trackers now share
+        the same pricing source — eliminates drift where a new model
+        in the catalog reported $0 on workflow dispatches while
+        single_agent_call (executor's tracker) priced correctly.
+        """
         self._agent_executor = executor
+        catalog = getattr(executor, "model_catalog", None)
+        if catalog is not None and getattr(self, "_token_tracker", None) is not None:
+            self._token_tracker._catalog = catalog
 
     async def submit(self, description: str, task_type: str = "feature_request",
                      priority: str = "medium", created_by: str = "",
                      project_id: str | None = None,
-                     source_task_id: str | None = None) -> Request:
+                     source_task_id: str | None = None,
+                     bucket_ids: list[str] | None = None) -> Request:
         request_id = f"REQ-{uuid.uuid4().hex[:6].upper()}"
 
         # PM-11 — project assignment. Default to the immutable Unassigned
@@ -284,6 +302,7 @@ class Orchestrator(AgentExecutor):
             created_by=created_by,
             project_id=project_id,
             source_task_id=source_task_id,  # PDB-23 — back-link for project-mode Story Board
+            bucket_ids=bucket_ids or [],    # KB-09/KB-10 — grounding scope
         )
         await self.state.create_request(request)
         await self.events.emit("request.created", {
@@ -484,8 +503,9 @@ class Orchestrator(AgentExecutor):
                     "escalation_reason": result["escalation_reason"][:300],
                 })
                 logger.warning("request_escalated_failed", request_id=request_id, cycles=rework_cycles)
-                # Fire self-learning analysis silently in the background — never awaited
-                asyncio.create_task(self._trigger_self_learning(request_id))
+                # Self-learning analysis fires via the events.on() handler
+                # registered in src/main.py (AET-11). The request.failed
+                # emit above triggers it — no inline call needed here.
             else:
                 # Check if any subtasks had errors
                 subtasks = await self.state.get_subtasks_for_request(request_id)
@@ -500,8 +520,8 @@ class Orchestrator(AgentExecutor):
                         "request_id": request_id,
                         "error": f"Agent failures: {', '.join(failed_agents)}",
                     })
-                    # Fire self-learning analysis silently in the background
-                    asyncio.create_task(self._trigger_self_learning(request_id))
+                    # Self-learning analysis fires via the events.on()
+                    # handler registered in src/main.py (AET-11).
                 else:
                     fresh_request.status = RequestStatus.COMPLETED
                     fresh_request.completed_at = datetime.utcnow()
@@ -518,64 +538,15 @@ class Orchestrator(AgentExecutor):
             await self.events.emit("request.failed", {
                 "request_id": request_id, "error": str(e),
             })
-            # Fire self-learning analysis silently in the background
-            asyncio.create_task(self._trigger_self_learning(request_id))
+            # Self-learning analysis fires via the events.on() handler
+            # registered in src/main.py (AET-11).
 
-    async def _trigger_self_learning(self, request_id: str) -> None:
-        """Fire the self_learning_agent asynchronously after a request failure.
-
-        This method is always called via ``asyncio.create_task(...)`` so it
-        never blocks the caller.  Any exception is caught and logged — the
-        self-learning analysis must never raise to the event loop's exception
-        handler (which would appear as an uncaught background-task error in
-        the frontend).
-
-        Emits one of two events after the agent completes:
-        - ``lessons.added``          — a new lesson was appended to the doc
-        - ``lessons.no_new_pattern`` — no new failure pattern was identified
-        """
-        try:
-            logger.info("self_learning_triggered", request_id=request_id)
-            inputs = {
-                "request_id": request_id,
-                "trigger": "request_failure",
-                "description": (
-                    f"Analyse the failure of request {request_id} and "
-                    "append a new lesson to docs/agent-lessons-learned.md if a "
-                    "new failure pattern is found."
-                ),
-            }
-            result = await self.execute_agent("self_learning_agent", request_id, inputs)
-            output_text: str = result.get(f"self_learning_agent_output", "") or ""
-
-            # Parse outcome from the agent's output text to emit the right event.
-            upper = output_text.upper()
-            if "LESSON L" in upper and "APPENDED" in upper:
-                # Extract lesson ID if present (e.g. "Lesson L23 appended")
-                import re as _re
-                match = _re.search(r"LESSON (L\d+)", upper)
-                lesson_id = match.group(1).upper() if match else "L?"
-                await self.events.emit("lessons.added", {
-                    "request_id": request_id,
-                    "lesson_id": lesson_id,
-                })
-                logger.info("self_learning_lesson_added", request_id=request_id, lesson_id=lesson_id)
-            else:
-                await self.events.emit("lessons.no_new_pattern", {
-                    "request_id": request_id,
-                })
-                logger.info("self_learning_no_new_pattern", request_id=request_id)
-
-            logger.info("self_learning_completed", request_id=request_id)
-        except Exception as exc:  # noqa: BLE001
-            # Deliberately broad: the self-learning hook must never crash the
-            # platform, even if the agent config is missing or the lessons file
-            # is unwritable.
-            logger.warning(
-                "self_learning_failed",
-                request_id=request_id,
-                error=str(exc),
-            )
+    # AET-11 — Self-learning runs via an EventEmitter handler registered
+    # in src/main.py (src/core/self_learning_trigger.py). The handler
+    # listens for request.failed events emitted above, builds a structured
+    # failure context, and fires the agent via single_agent_call (no
+    # Request/Subtask noise on the failure's audit log).
+    # The previous inline `_trigger_self_learning` method was removed.
 
     async def trigger_ops_monitor(self, request_id: str, deployment_id: str) -> None:
         """Fire the ops_heal_agent asynchronously after a deployment completes.

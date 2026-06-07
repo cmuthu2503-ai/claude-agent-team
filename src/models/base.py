@@ -86,6 +86,11 @@ class Request(BaseModel):
     priority: TaskPriority = TaskPriority.MEDIUM
     status: RequestStatus = RequestStatus.RECEIVED
     tags: list[str] = Field(default_factory=list)
+    # KB-09 — Knowledge Bucket(s) this request's agents are grounded in.
+    # Selected at submit (frozen mock Screen 04). The executor injects these
+    # into the retrieval scope; agents retrieve ONLY within them. Empty =
+    # platform knowledge only (whole kb_platform namespace).
+    bucket_ids: list[str] = Field(default_factory=list)
     # Parent project. Defaults to the immutable Unassigned project at the
     # API layer when not supplied; see docs/prd-projects-feature.md.
     project_id: str | None = None
@@ -205,6 +210,11 @@ class User(BaseModel):
     role: UserRole = UserRole.DEVELOPER
     is_active: bool = True
     must_change_password: bool = False
+    # KB-29 — knowledge-base curator capability. Orthogonal to ``role``: a list
+    # of scopes this user may curate (approve/retire docs, promote memory→KB).
+    # Values: "platform" (the kb_platform corpus), a project_id (that app), or
+    # "*" (all). Empty = not a curator. Admins are implicit curators everywhere.
+    kb_curator_scopes: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     last_login_at: datetime | None = None
 
@@ -635,6 +645,68 @@ class DeploymentState(BaseModel):
     risk: str = ""               # low | medium | high
 
 
+# ── Deploy Health Probes (AET-23 — Phase AE-1 ops_heal_agent) ────────────
+
+
+class DeployHealthProbe(BaseModel):
+    """One health snapshot for a single deploy/environment, written
+    every 60s by the supervisor's background probe loop (AET-24).
+
+    APPEND-ONLY time-series — never mutated after insert. The
+    ops_heal_agent reads recent rows through slo_check (AET-25) and
+    anomaly_detect (AET-26) to decide whether to fire auto_rollback
+    (AET-27).
+
+    The denormalised top-level columns are the ones rolling-window
+    queries scan on every probe cycle (response_time_ms percentiles,
+    error_rate, restart spikes). Anything richer goes into
+    raw_metrics_json so we don't have to migrate when adding new
+    SLOs — schema-on-read.
+    """
+
+    probe_id: str
+    deploy_id: str
+    env: str  # development | staging | production | demo
+    recorded_at: datetime = Field(default_factory=datetime.utcnow)
+    response_time_ms: int | None = None
+    error_rate_5m: float | None = None  # fraction (0.0-1.0), NOT percent
+    http_status: int | None = None
+    restart_count: int = 0
+    raw_metrics: dict[str, Any] = Field(default_factory=dict)
+
+
+class RollbackRequest(BaseModel):
+    """AET-29 — ops_heal_agent → supervisor hand-off for a queued
+    rollback. Inserted by ``auto_rollback`` tool inside the backend
+    container; consumed by the supervisor host process which performs
+    the actual git revert + redeploy.
+
+    Status lifecycle::
+
+        pending     → queued by the agent, supervisor hasn't started yet
+        in_flight   → supervisor picked it up; running git revert
+        completed   → supervisor revert succeeded
+        failed      → revert errored (see error_message)
+        rejected    → supervisor declined (env unknown, etc.)
+
+    Idempotency: ``auto_rollback`` MUST NOT insert a second pending /
+    in_flight row for the same env. Once a row reaches a terminal
+    state, a fresh request is allowed.
+    """
+
+    request_id: str
+    deploy_id: str
+    env: str
+    status: str = "pending"  # see lifecycle above
+    reason: str = ""
+    requested_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    rollback_sha: str = ""
+    error_message: str | None = None
+    requested_by: str = "ops_heal_agent"
+
+
 # ── Deployment Models ────────────────────────────
 
 
@@ -694,6 +766,14 @@ class TokenUsage(BaseModel):
     cost_usd: float
     recorded_at: datetime = Field(default_factory=datetime.utcnow)
     project_artifact_id: str | None = None
+    # Direct project linkage. For workflow-runner calls (which have a
+    # request_id) it's also derivable via request → project, but storing
+    # it here lets the cost dashboard filter by project in O(1) without
+    # the OR-of-subqueries shape. Populated by the orchestrator's token
+    # tracker and by single_agent_call (BPD generators pass their
+    # project_id directly). NULL only for pre-migration rows or for
+    # platform-level (no-project) calls.
+    project_id: str | None = None
 
 
 class AgentTrace(BaseModel):

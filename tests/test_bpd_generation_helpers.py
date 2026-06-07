@@ -27,6 +27,7 @@ from src.api.routes.projects import (
     _build_task_generation_prompt,
     _check_truncation,
     _extract_json_array,
+    _extract_relevant_api_endpoints,
     _normalize_epic_dicts,
     _normalize_feature_dicts,
     _normalize_task_emission_dicts,
@@ -305,6 +306,7 @@ def test_feature_prompt_includes_sibling_epic_titles() -> None:
         epic=epic,
         sibling_epic_titles=["Authentication", "Dashboard", "Billing"],
         prd_excerpt="",
+        api_spec_content="",
         review_comments="",
         previous_features=None,
     )
@@ -322,6 +324,8 @@ def test_task_prompt_includes_sibling_feature_titles() -> None:
         feature=feature,
         epic=epic,
         sibling_feature_titles=["Login flow", "Password reset", "Session mgmt"],
+        prd_content="",
+        api_spec_content="",
         review_comments="",
         previous_tasks=None,
     )
@@ -351,9 +355,135 @@ def test_task_prompt_revision_includes_previous_tasks() -> None:
     )]
     prompt = _build_task_generation_prompt(
         feature=feature, epic=epic, sibling_feature_titles=[],
+        prd_content="", api_spec_content="",
         review_comments="Split T-old into 2",
         previous_tasks=prev,
     )
     assert "REVISING" in prompt
     assert "OldTask" in prompt
     assert "Split T-old into 2" in prompt
+
+
+# ── BPD-48 / BPD-49 — API spec + PRD enrichment in Pass 2 / Pass 3 ────────
+
+
+_OPENAPI_SAMPLE = """openapi: 3.0.0
+info:
+  title: AgentTeam API
+paths:
+  /api/v1/auth/login:
+    post:
+      summary: Authenticate a user and return a JWT
+      tags: [authentication]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                username: {type: string}
+                password: {type: string}
+      responses:
+        '200': {description: Token issued}
+        '401': {description: Bad credentials}
+  /api/v1/dashboard/metrics:
+    get:
+      summary: Return the dashboard rollup metrics
+      tags: [dashboard]
+      responses:
+        '200': {description: OK}
+  /api/v1/billing/invoices:
+    get:
+      summary: List billing invoices for the current account
+      tags: [billing]
+      responses:
+        '200': {description: OK}
+components:
+  schemas: {}
+"""
+
+
+def test_extract_relevant_api_endpoints_filters_by_hint() -> None:
+    """BPD-49 chunking heuristic: only blocks matching hint keywords
+    survive the filter."""
+    result = _extract_relevant_api_endpoints(_OPENAPI_SAMPLE, "Authentication login flow")
+    assert "/api/v1/auth/login" in result
+    # Dashboard + billing endpoints filtered out — their tokens don't
+    # overlap with the auth hint.
+    assert "/api/v1/dashboard/metrics" not in result
+    assert "/api/v1/billing/invoices" not in result
+
+
+def test_extract_relevant_api_endpoints_no_match_fallback() -> None:
+    """When no path block matches the hint, fall back to the first 6 KB
+    of the spec so the agent still has SOME context."""
+    result = _extract_relevant_api_endpoints(_OPENAPI_SAMPLE, "Totally unrelated nonsense")
+    # Falls back to a prefix that includes the openapi header
+    assert "openapi:" in result
+
+
+def test_extract_relevant_api_endpoints_empty_spec() -> None:
+    assert _extract_relevant_api_endpoints("", "anything") == ""
+
+
+def test_feature_prompt_injects_api_spec_block() -> None:
+    """Pass-2 prompt MUST include a fenced YAML API spec block when
+    api_spec_content is provided — gives the agent concrete endpoint
+    shapes so generated features don't invent endpoints (BPD-48)."""
+    epic = _make_epic("Authentication")
+    prompt = _build_feature_generation_prompt(
+        epic=epic,
+        sibling_epic_titles=["Authentication", "Dashboard"],
+        prd_excerpt="",
+        api_spec_content=_OPENAPI_SAMPLE,
+        review_comments="",
+        previous_features=None,
+    )
+    assert "API Specification (endpoints relevant to this epic)" in prompt
+    assert "```yaml" in prompt
+    # The auth endpoint is scoped-in by the chunker; dashboard/billing aren't
+    assert "/api/v1/auth/login" in prompt
+    assert "Features SHOULD line up with these endpoints" in prompt
+
+
+def test_feature_prompt_no_api_spec_block_when_empty() -> None:
+    """Empty api_spec_content → no block. Belt-and-suspenders: the
+    backend gate also refuses to reach this path without a finalized
+    spec, but the helper itself must still be safe to call with ''."""
+    epic = _make_epic("Authentication")
+    prompt = _build_feature_generation_prompt(
+        epic=epic,
+        sibling_epic_titles=[],
+        prd_excerpt="",
+        api_spec_content="",
+        review_comments="",
+        previous_features=None,
+    )
+    assert "API Specification" not in prompt
+
+
+def test_task_prompt_injects_prd_and_api_spec_blocks() -> None:
+    """Pass-3 prompt MUST include BOTH the PRD reference and the
+    scoped API spec block (BPD-49). Without both, the agent picks
+    primary_file paths and writes acceptance_test wording without
+    product context or concrete endpoints — exactly the gap this
+    enrichment closes."""
+    feature = _make_feature("Login flow")
+    epic = _make_epic("Authentication")
+    prd = "## PRD\n\nThe system implements username+password authentication via JWT."
+    prompt = _build_task_generation_prompt(
+        feature=feature,
+        epic=epic,
+        sibling_feature_titles=["Login flow", "Password reset"],
+        prd_content=prd,
+        api_spec_content=_OPENAPI_SAMPLE,
+        review_comments="",
+        previous_tasks=None,
+    )
+    # PRD reference block
+    assert "PRD reference (product context for this feature)" in prompt
+    assert "username+password authentication via JWT" in prompt
+    # Scoped API spec block — login endpoint included, billing excluded
+    assert "API Specification (endpoints relevant to this feature)" in prompt
+    assert "/api/v1/auth/login" in prompt
+    assert "/api/v1/billing/invoices" not in prompt
+    assert "MUST reference these endpoints" in prompt

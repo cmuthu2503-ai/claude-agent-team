@@ -1,10 +1,13 @@
 """Tool registry — loads tools, validates permissions, provides schemas for LLM."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from src.config.loader import ConfigLoader
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = structlog.get_logger()
 
@@ -71,22 +74,27 @@ class ToolRegistry:
         self,
         tool_name: str,
         agent_id: str,
-        params: dict,
+        params: dict[str, Any],
         *,
         project_root: "Path | None" = None,
+        kb_scope: Any = None,
     ) -> str:
         """Execute a tool, checking permissions first.
 
-        ``project_root`` (when provided) is threaded into the tool's
-        ``execute()`` as a keyword arg. Tools that care about filesystem
-        scope (file_read / file_write / search_replace) use it as the
-        effective project root for path resolution AND for the
-        path-traversal guard, so a per-project agent task can't scribble
-        into the platform tree. Tools that ignore it (web_search,
-        wait_for_deployment, etc.) just don't bind the kwarg —
-        ``inspect.signature`` would catch a mismatch loudly during
-        development, but in practice every tool's ``execute()`` is
-        defined with ``**kwargs`` or an explicit ``project_root=None``.
+        Per-call **context kwargs** are threaded into the tool's
+        ``execute()`` ONLY when its signature accepts them (or it takes
+        ``**kwargs``). Cheap ``inspect`` at call time keeps legacy
+        single-arg tools working:
+
+        - ``project_root`` — the effective filesystem root for path
+          resolution + the traversal guard (file_read / file_write /
+          search_replace), so a per-project agent task can't scribble into
+          the platform tree.
+        - ``kb_scope`` (KB-08) — the knowledge grounding scope (namespace +
+          bucket_ids + agent_id + request_id) the executor injected from the
+          Request. ``knowledge_search`` / ``knowledge_get`` retrieve ONLY
+          within it. The agent never supplies scope in its params, so it
+          cannot widen beyond what the Request granted (FR-023).
         """
         if not self.is_permitted(tool_name, agent_id):
             raise ToolPermissionError(
@@ -95,20 +103,26 @@ class ToolRegistry:
         impl = self._implementations.get(tool_name)
         if not impl:
             return f"Tool '{tool_name}' has no implementation registered"
-        # Forward project_root only to tools that accept it. Cheap inspection
-        # at call time prevents a TypeError on tools whose execute() still
-        # uses the legacy single-arg signature.
+
         import inspect
+        context = {"project_root": project_root, "kb_scope": kb_scope}
         try:
             sig = inspect.signature(impl.execute)
-            if "project_root" in sig.parameters or any(
+            has_varkw = any(
                 p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-            ):
-                return await impl.execute(params, project_root=project_root)
+            )
+            if has_varkw:
+                accepted = context
+            else:
+                accepted = {k: v for k, v in context.items() if k in sig.parameters}
+            if accepted:
+                result = await impl.execute(params, **accepted)
+                return result if isinstance(result, str) else str(result)
         except (TypeError, ValueError):
-            # Couldn't introspect — fall through to the legacy path.
+            # Couldn't introspect — fall through to the legacy single-arg path.
             pass
-        return await impl.execute(params)
+        result = await impl.execute(params)
+        return result if isinstance(result, str) else str(result)
 
     def list_tools(self) -> list[str]:
         return list(self._tools.keys())

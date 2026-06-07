@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime
+from typing import Any
 
 from src.models.base import (
     AcceptanceCriterion,
@@ -704,6 +705,30 @@ class StateStore(ABC):
 
     @abstractmethod
     async def update_agent_trace(self, trace: AgentTrace) -> None: ...
+
+    # ── Agent model overrides (PAM-10) ──────────
+    # Layer 2 of ModelResolver's 5-layer chain. Optional in spirit —
+    # the resolver tolerates a state_store=None executor — but
+    # required on the abstract surface so any future StateStore impl
+    # (in-memory, Postgres, etc.) has to provide it. None as the
+    # return value of `get_*` means "no override set."
+
+    @abstractmethod
+    async def get_agent_model_override(self, agent_id: str) -> str | None: ...
+
+    @abstractmethod
+    async def set_agent_model_override(
+        self, agent_id: str, model_id: str, updated_by: str = "system",
+    ) -> None: ...
+
+    @abstractmethod
+    async def delete_agent_model_override(self, agent_id: str) -> bool: ...
+
+    @abstractmethod
+    async def list_agent_model_overrides(self) -> list[dict[str, Any]]: ...
+
+    @abstractmethod
+    async def clear_all_agent_model_overrides(self) -> int: ...
 
     # ── Lifecycle ────────────────────────────────
 

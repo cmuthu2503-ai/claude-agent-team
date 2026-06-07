@@ -7,9 +7,9 @@
 
 | Field | Value |
 |-------|-------|
-| Document Version | 3.13 |
+| Document Version | 3.17 |
 | Created Date | 2026-04-04 |
-| Last Updated | 2026-05-22 |
+| Last Updated | 2026-05-28 |
 | Status | Draft |
 | Product Owner | Chandramouli |
 
@@ -38,6 +38,13 @@ known revision are marked "—".
 | 6.6 | &nbsp;&nbsp;[Prompt Studio](#66-prompt-studio) | 2026-04-08 |
 | 6.7 | &nbsp;&nbsp;[Project Management](#67-project-management) | **2026-05-17** |
 | 6.8 | &nbsp;&nbsp;[Build Plan Decomposition (Epic → Feature → Task)](#68-build-plan-decomposition--epic--feature--task) | **2026-05-22** |
+| 6.9 | &nbsp;&nbsp;[Agentic Engineering Enhancements (Phase AE)](#69-agentic-engineering-enhancements-phase-ae) | **2026-05-24** |
+| 6.9.1 | &nbsp;&nbsp;&nbsp;&nbsp;[Security Agent — Stage 4](#691-security-agent--stage-4) | **2026-05-24** |
+| 6.9.2 | &nbsp;&nbsp;&nbsp;&nbsp;[Self-Learning Agent — Lessons Automation](#692-self-learning-agent--lessons-automation) | **2026-05-24** |
+| 6.9.3 | &nbsp;&nbsp;&nbsp;&nbsp;[Quality Guardian Agent — Stage 5 Upgrade](#693-quality-guardian-agent--stage-5-upgrade) | **2026-05-24** |
+| 6.9.4 | &nbsp;&nbsp;&nbsp;&nbsp;[Ops/Heal Agent — Stage 7](#694-opsheal-agent--stage-7) | **2026-05-24** |
+| 6.9.5 | &nbsp;&nbsp;&nbsp;&nbsp;[Architecture Review Agent](#695-architecture-review-agent) | **2026-05-24** |
+| 6.9.6 | &nbsp;&nbsp;&nbsp;&nbsp;[Phase AE YAML Conformance Requirements](#696-phase-ae-yaml-conformance-requirements) | **2026-05-25** |
 | 7 | [Task Management System](#7-task-management-system) — Categories, deployment supervisor (host process), judge LLM, rollback, cross-platform reliability, stable Compose naming | 2026-04-04 |
 | 8 | [Demo Creation](#8-demo-creation) | 2026-04-04 |
 | 9 | [Edge Cases & Risk Mitigation](#9-edge-cases--risk-mitigation) | 2026-04-04 |
@@ -90,6 +97,15 @@ so a reader doesn't get blindsided by stale paragraphs in later sections:
 - **What did NOT change.** Agent roster (9 agents). Workflow DAGs. Story
   Board Kanban layout. Cost dashboard. Auth model. GitHub Trees-API
   publishing. Research/Content pipelines.
+- **Agentic Engineering Enhancements proposed (Section 6.9 — Phase AE).**
+  Five new agents added to the roadmap after mapping the platform against the
+  *Agentic Engineering — AI-Orchestrated, Trusted, Autonomous, Intelligent*
+  framework. Three full pipeline stages are currently uncovered: Stage 4
+  (Security), Stage 5 (Quality Gate), and Stage 7 (Operate & Heal). Two
+  additional platform-specific agents address the manual self-learning loop and
+  architectural drift. Delivery is phased: AE-1 `security_specialist` + AE-2
+  `self_learning_agent` first (highest ROI), then AE-3 `quality_guardian` + AE-4
+  `ops_heal_agent`, then AE-5 `architecture_reviewer`. Details: §6.9.
 
 ---
 
@@ -164,7 +180,9 @@ The agent team is a **hierarchical, configuration-driven system** consisting of 
                                └────────────────────────┘
 ```
 
-### 3.3 Agent Roster (8 Agents)
+### 3.3 Agent Roster (10 Production Agents + 5 Planned — Phase AE)
+
+**Production agents (currently deployed):**
 
 | # | Agent ID | Role | Team | Reports To | Delegates To |
 |---|----------|------|------|------------|-------------|
@@ -176,6 +194,18 @@ The agent team is a **hierarchical, configuration-driven system** consisting of 
 | 6 | `frontend_specialist` | **Frontend Specialist** | development | code_reviewer | — |
 | 7 | `devops_specialist` | **DevOps Specialist** (Delivery Lead) | delivery | engineering_lead | tester_specialist |
 | 8 | `tester_specialist` | **Tester Specialist** | delivery | devops_specialist | — |
+| 9 | `research_specialist` | **Research Specialist** | research | — | — |
+| 10 | `content_creator` | **Content Creator** | content | — | — |
+
+**Phase AE planned agents** (see §6.9 for full requirements):
+
+| Phase | Agent ID | Role | Team | Reports To | Pipeline Stage Closed |
+|-------|----------|------|------|------------|-----------------------|
+| AE-1 | `security_specialist` | Security Specialist | delivery | devops_specialist | Stage 4 — Security |
+| AE-2 | `self_learning_agent` | Self-Learning Agent | engineering | project_orchestrator | Post-processing hook |
+| AE-3 | `quality_guardian` | Quality Guardian | delivery | devops_specialist | Stage 5 — Quality Gate |
+| AE-4 | `ops_heal_agent` | Ops / Heal Agent | delivery | devops_specialist | Stage 7 — Operate & Heal |
+| AE-5 | `architecture_reviewer` | Architecture Reviewer | development | code_reviewer | Pre-commit arch gate |
 
 ### Multi-Team Architecture
 
@@ -275,6 +305,55 @@ The workflow engine replaces the original linear pipeline with parallel executio
                     └──────────────────┘
 ```
 
+**Enhanced pipeline — after Phase AE agents are deployed** (see §6.9):
+
+```
+                    ┌──────────────────┐
+                    │   Requirements    │  prd_specialist + user_story_author
+                    └────────┬─────────┘
+                             │
+                    ┌────────▼─────────┐
+                ┌───┤    Development    ├───┐  backend_specialist ‖ frontend_specialist
+                │   └──────────────────┘   │
+                ▼                          ▼
+    ┌──────────────────┐       ┌──────────────────────┐
+    │  Code Reviewer    │       │  Architecture Review  │  ← NEW (AE-5)
+    │  (correctness)    │       │  (layer boundaries,   │
+    └────────┬─────────┘       │  route registration,  │
+             │                 │  Pydantic v2 patterns) │
+             └────────┬────────┘
+                      │
+             ┌────────▼─────────┐
+             │    Security       │  ← NEW (AE-1): SAST · dep scan · secrets · OWASP
+             │  specialist       │  Gate: no critical vulns, no secrets
+             └────────┬─────────┘
+                      │
+             ┌────────▼─────────┐
+             │  Quality Guardian │  ← NEW (AE-3): BE↔FE contract · traceability
+             │                   │  matrix · lessons compliance · risk rating
+             └────────┬─────────┘
+                      │
+             ┌────────▼─────────┐
+             │    Testing        │  tester_specialist
+             └────────┬─────────┘
+                      │
+             ┌────────▼─────────┐
+             │   code_commit     │  GitHub Trees API
+             └────────┬─────────┘
+                      │
+             ┌────────▼─────────┐
+             │    Deployment     │  devops_specialist + supervisor
+             └────────┬─────────┘
+                      │
+             ┌────────▼─────────┐
+             │  Ops / Heal       │  ← NEW (AE-4): post-deploy monitoring,
+             │  (async, 10 min)  │  auto-restart, anomaly detection, escalate
+             └──────────────────┘
+
+Post-terminal failure hook (async, not in DAG):
+  [max rework | rollback | sec fail] → self_learning_agent (AE-2) → agent-lessons-learned.md
+```
+
 **Other available workflows** (defined in `config/workflows.yaml`):
 
 | Workflow | Trigger | Stages | Notes |
@@ -303,10 +382,21 @@ All agents, teams, workflows, tools, and thresholds are defined in YAML configur
 
 The system supports these expansions through YAML-only changes:
 
+**Near-term (Phase AE — see §6.9 for full requirements):**
+
+| Agent | Team Placement | Phase | Status |
+|-------|---------------|-------|--------|
+| `security_specialist` | Delivery | AE-1 | 📋 Planned |
+| `self_learning_agent` | Engineering | AE-2 | 📋 Planned |
+| `quality_guardian` | Delivery | AE-3 | 📋 Planned |
+| `ops_heal_agent` | Delivery | AE-4 | 📋 Planned |
+| `architecture_reviewer` | Development | AE-5 | 📋 Planned |
+
+**Longer-term (YAML-only additions once Phase AE is complete):**
+
 | Future Agent | Team Placement | Config Changes Required |
 |---|---|---|
 | Database Specialist | Development | 1 new agent YAML + update team + lead delegation |
-| Security Lead + Engineer | New: Security Team | 2 new agent YAMLs + new team + Eng. Lead delegation |
 | UX Designer | New: Design Team | 1 new agent YAML + new team + Eng. Lead delegation |
 | Performance Engineer | Delivery | 1 new agent YAML + update team + lead delegation |
 | Technical Writer | Planning | 1 new agent YAML + update team + lead delegation |
@@ -404,6 +494,63 @@ The system supports these expansions through YAML-only changes:
 | TS-004 | Regression Testing | Run regression suites before each deployment to catch regressions |
 | TS-005 | Test Reporting | Generate test reports with pass/fail counts, coverage metrics, and trends |
 | TS-006 | Demo Testing | Execute weekly demo tests and report results (see Section 8.2) |
+
+### 4.9 Security Specialist — Detailed Responsibilities *(Phase AE-1)*
+
+| ID | Responsibility | Description |
+|----|---------------|-------------|
+| SEC-R-001 | SAST Scanning | Run `bandit` (Python) and `eslint-plugin-security` (TypeScript) against all generated files; block on HIGH/CRITICAL findings |
+| SEC-R-002 | Dependency Audit | Run `safety check` and `npm audit`; block on any CVE with CVSS ≥ 7.0 |
+| SEC-R-003 | Secrets Detection | Run `detect-secrets` across all committed files; zero-tolerance policy — any detected secret/API key = automatic FAIL |
+| SEC-R-004 | OWASP Top-10 Review | Perform LLM-driven review of generated code logic for injection, broken auth, SSRF, XSS, CSRF, and insecure deserialization |
+| SEC-R-005 | CVE Verification | Use `web_search` to verify CVE status for specific library versions flagged by dependency scans |
+| SEC-R-006 | Security Reporting | Produce a structured security report (scan summary table + per-finding details + overall PASS/FAIL verdict) |
+| SEC-R-007 | Pipeline Gate | Hold `code_commit` until PASS verdict is issued; route back to development on FAIL with specific fix instructions |
+
+### 4.10 Self-Learning Agent — Detailed Responsibilities *(Phase AE-2)*
+
+| ID | Responsibility | Description |
+|----|---------------|-------------|
+| SLA-R-001 | Failure Analysis | Analyze the full agent output trail for any request that hit max rework cycles, deployment rollback, or security gate failure |
+| SLA-R-002 | Pattern Extraction | Extract the root-cause failure pattern (signature, cause, fix) from the request history |
+| SLA-R-003 | Deduplication | Read existing `docs/agent-lessons-learned.md` L01–LNN entries; if pattern is already covered, append an `[Update YYYY-MM-DD]` note rather than a duplicate section |
+| SLA-R-004 | Lesson Authoring | Append well-formed `## L<NN>` lessons following the canonical format (Signature, Cause, Fix, Observed-in) |
+| SLA-R-005 | Commit | Commit the updated doc to GitHub via the Trees API with message `chore: add lesson L<NN> — <title> [observed in REQ-XXX]` |
+| SLA-R-006 | Non-blocking | Operate entirely asynchronously — never block or affect the outcome of the request that triggered it |
+
+### 4.11 Quality Guardian — Detailed Responsibilities *(Phase AE-3)*
+
+| ID | Responsibility | Description |
+|----|---------------|-------------|
+| QG-R-001 | API Contract Check | Compare backend route definitions / Pydantic models against frontend TypeScript API call signatures; flag schema mismatches as CRITICAL |
+| QG-R-002 | Traceability Matrix | For every PRD REQ-XXX item, verify at least one test case in the test report traces back to it; gaps flagged as HIGH |
+| QG-R-003 | Lessons Compliance | Verify that agent outputs do not exhibit patterns already documented in `agent-lessons-learned.md` |
+| QG-R-004 | Performance Budget | Flag N+1 query patterns (sequential awaits in loops), missing pagination on list endpoints, and un-memoized list renders |
+| QG-R-005 | Risk Rating | Output `low/medium/high` risk rating consumed by the deployment supervisor's judge prompt to calibrate deploy strategy |
+| QG-R-006 | Cross-agent Consistency | Validate that user story acceptance criteria map to actual test cases and to actual code paths |
+
+### 4.12 Ops/Heal Agent — Detailed Responsibilities *(Phase AE-4)*
+
+| ID | Responsibility | Description |
+|----|---------------|-------------|
+| OPS-R-001 | Post-Deploy Burst | Poll `/api/v1/health` at 30 s, 2 m, 5 m, and 10 m after deployment; record health envelope at each interval |
+| OPS-R-002 | Container Watch | Monitor `docker ps` for `(unhealthy)` or `(Restarting)` states; escalate on 2+ restarts within the post-deploy window |
+| OPS-R-003 | Error Rate Analysis | Compare `request.status = FAILED` count in the 10 minutes before vs. after deployment; flag >2× increase |
+| OPS-R-004 | Auto-Remediation | On transient unhealthy state (single restart), trigger `docker compose restart <service>` autonomously and re-poll |
+| OPS-R-005 | Escalation | On persistent failure (3+ restarts or health failing at 10 m), emit `deployment.rollback_requested` event for supervisor |
+| OPS-R-006 | Cost Anomaly | Compare avg tokens/request for last 10 against 20-request baseline; flag >3× spike as potential agent runaway |
+| OPS-R-007 | Heartbeat Mode | After the 10-minute burst window, run lightweight health + error-rate checks every 30 minutes |
+
+### 4.13 Architecture Reviewer — Detailed Responsibilities *(Phase AE-5)*
+
+| ID | Responsibility | Description |
+|----|---------------|-------------|
+| AR-R-001 | Layer Boundary Enforcement | Verify no route file imports SQLite/aiosqlite directly — all DB access must route through `StateStore` |
+| AR-R-002 | Endpoint Registration | Confirm every new FastAPI handler in `src/api/routes/` has a matching `app.include_router()` call in `src/main.py` |
+| AR-R-003 | Frontend Router | Confirm every new page component in `frontend/src/pages/` has a matching `<Route>` entry in `App.tsx` |
+| AR-R-004 | Pydantic v2 Compliance | Flag deprecated v1 patterns (`@validator`, `orm_mode`, `.dict()`) and enforce v2 equivalents |
+| AR-R-005 | Circular Import Detection | Trace import chains in generated Python files; flag circular dependencies |
+| AR-R-006 | Config-system Compliance | Verify any new agent/tool/threshold referenced in code has a matching YAML definition |
 
 ---
 
@@ -999,6 +1146,421 @@ Detailed design and rationale: [`docs/prd-build-plan-decomposition.md`](prd-buil
 - No GitHub-issue mirroring of epics/features (the Build Board IS the planning surface)
 - No per-epic GitHub branch / PR strategy (still trunk-based via the supervisor); a future enhancement could create a branch per epic for staging review
 
+#### 6.8.5 Generation prerequisites (Phase F · v3.14)
+
+All three passes (epics / features / atomic tasks) require **both** a
+finalized PRD AND a finalized API Specification before they will run.
+Earlier versions treated the API Spec as optional reference material —
+the agent would silently proceed with PRD only when no spec was
+present. The output looked plausible but the generated tasks invented
+endpoints and schema fields that didn't match any real surface area,
+which then failed at code-write time when the agent tried to wire up
+imports against non-existent paths.
+
+| Pass | PRD required | API Spec required | Returns on missing |
+|------|--------------|---------------------|--------------------|
+| Pass 1 (Epics) | Finalized | Finalized | 409 `{"error": "prd_not_finalized" \| "api_spec_not_finalized", "hint": ...}` |
+| Pass 2 (Features) | Finalized | Finalized | same |
+| Pass 3 (Atomic Tasks) | Finalized | Finalized | same |
+| Pass 2 + Pass 3 prompts | Excerpt injected | Scoped excerpt injected | — |
+
+**Pass 2 prompt enrichment (BPD-48).** The feature-generation prompt
+now includes a `## API Specification (endpoints relevant to this epic)`
+section containing the OpenAPI path blocks whose keywords overlap with
+the epic's title + description. The agent is instructed: "Features
+SHOULD line up with these endpoints. Don't invent new ones."
+
+**Pass 3 prompt enrichment (BPD-49).** The task-generation prompt
+adds BOTH a PRD reference (capped at 6 KB excerpt) AND a scoped API
+spec block. Wording: "primary_file paths and acceptance_test wording
+MUST reference these endpoints (not invented ones)."
+
+**Chunking heuristic.** A full API spec can run 30-60 KB. Injecting
+the whole thing into every Pass-2 / Pass-3 prompt blows the model's
+context budget when a project has 30+ features × 5 tasks. The helper
+`_extract_relevant_api_endpoints(spec, hint_text)`:
+
+1. Splits the spec into OpenAPI path blocks.
+2. Scores each block by token-overlap with the hint text (epic title
+   + description, or feature title + description).
+3. Keeps blocks with score ≥ 1, capped at 12.
+4. Falls back to the first 6 KB of the spec when no block matches —
+   better to send something than to ship a context-blind prompt.
+
+Stoplist words (`the`, `and`, `for`, `with`, `data`, `form`, etc.)
+are stripped from the hint to avoid spurious matches on every block.
+
+**Frontend gate (BPD-50 / BPD-51).** When PRD or API Spec is missing
+or only in draft:
+
+- The `BuildPlanGenerator` step buttons (Generate Epics / Features /
+  Tasks) and the mega "Approve All & Run All Three Passes" button
+  are visually disabled with a `Finalize the PRD and API Specification
+  before generating epics, features, or tasks` tooltip + a warning
+  banner explaining the gate.
+- The `BuildPlanView` per-row `+ Features` and `+ Tasks` chips are
+  disabled with the same tooltip — prevents sidestepping the
+  top-level gate via the per-row buttons in the tree below.
+
+---
+
+### 6.9 Agentic Engineering Enhancements (Phase AE)
+
+**Status as of 2026-05-28: Phase AE SHIPPED.** All 5 per-agent sub-phases plus 5 of 6 cross-cutting tasks are complete (33 of 42 AE tasks closed; only the full-pipeline smoke AET-42 remains). The numbered subsections below preserve the original requirements as written; the **Shipped Status** column on each table reflects the actual landed state. Original requirement IDs (SEC-/SLA-/QG-/OPS-/AR-) are unchanged so PRD-↔-YAML cross-references stay valid.
+
+**Background.** This section documents requirements for five new agents that close pipeline coverage gaps identified by mapping the platform against the *Agentic Engineering — AI-Orchestrated, Trusted, Autonomous, Intelligent* framework. The framework mandates 7 pipeline stages; the original 10-agent platform covered Stages 1–3 and Stage 6. Phase AE closed Stages 4, 5, 7 and added two platform-specific agents.
+
+**Framework alignment (post-AE):**
+
+| Stage | Framework Agent | Original State | Shipped Status |
+|-------|----------------|----------------|----------------|
+| 1. Plan & Design | Requirements Agent | ✅ prd_specialist + user_story_author | ✅ unchanged |
+| 2. Code | Code Agent | ✅ backend + frontend specialist | ✅ unchanged |
+| 3. Test | Test Agent | ✅ tester_specialist | ✅ unchanged |
+| 4. Security | Security Agent | 🔴 **None** | ✅ §6.9.1 `security_specialist` SHIPPED (AET-15..22) |
+| 5. Quality Gate | Quality Guardian | 🟡 code_reviewer (partial) | ✅ §6.9.3 `quality_guardian` SHIPPED (AET-01..08) |
+| 6. Deploy | Release Agent | ✅ devops_specialist + supervisor | ✅ unchanged |
+| 7. Operate & Heal | Ops Agent | 🔴 **None** | ✅ §6.9.4 `ops_heal_agent` SHIPPED (AET-23..32) |
+
+**Additional platform-specific agents:**
+
+| Agent | Rationale | Shipped Status |
+|-------|-----------|----------------|
+| `self_learning_agent` (§6.9.2) | Automates the lessons-learned self-improvement loop — the highest-leverage investment because each lesson compounds across all future requests | ✅ SHIPPED (AET-09..14) with pending-review gate (AET-13) so auto-generated lessons require human approval before entering canonical doc |
+| `architecture_reviewer` (§6.9.5) | Catches layer-boundary violations and missing registrations before `code_commit`; complements `code_reviewer` which focuses on logic correctness | ✅ SHIPPED (AET-33..36) with audit-driven prompt tuning + `arch_review_block_severity` threshold |
+
+**Delivery phasing (actual vs estimated):**
+
+| Phase | Agent | Status | Tasks | Notes |
+|-------|-------|--------|-------|-------|
+| AE-1 | `ops_heal_agent` | ✅ SHIPPED | AET-23..32 (10/10) | 4 tools (`health_probe`, `slo_check`, `anomaly_detect`, `auto_rollback`) + supervisor probe loop + per-env SLOs (`config/slo.yaml`) + EventEmitter hook + E2E smoke |
+| AE-2 | `self_learning_agent` | ✅ SHIPPED | AET-09..14 (6/6) | `lessons_writer` with jaccard dedup, EventEmitter hook on `request.failed`, pending-review gate, defense-in-depth prompt-level dedup |
+| AE-3 | `quality_guardian` | ✅ SHIPPED | AET-01..08 (8/8) | Declarative rule catalog (`config/quality-rules.yaml`, 13 rules) + `policy_check` tool + structured workflow gate + frontend chip |
+| AE-4 | `security_specialist` | ✅ SHIPPED | AET-15..22 (8/8) | 4 focused tools (`sast_scan`, `dependency_audit`, `secret_scan`, `pen_test_simple`) + `security_max_severity_to_block` threshold + structured (non-LLM) workflow gate |
+| AE-5 | `architecture_reviewer` | ✅ SHIPPED | AET-33..36 (4/4) | Audit-driven prompt tuning + `arch_review_block_severity` threshold + 21-test smoke suite |
+| Cross-cutting | UI, docs, smoke | 5/6 SHIPPED | AET-37..42 | AET-42 (full-pipeline smoke — definition of done) is the one open task |
+
+**New tools shipped** (all in `config/tools.yaml`, granted to the named agent only):
+
+| Tool | Implementation | Available To |
+|------|----------------|--------------|
+| `policy_check` | `src/tools/policy_check.py` — Pydantic-validated rule evaluator over `config/quality-rules.yaml` | `quality_guardian` |
+| `lessons_writer` | `src/tools/lessons_writer.py` — read/append with jaccard-similarity dedup + pending-review gate (AET-13) | `self_learning_agent` |
+| `sast_scan` | `src/tools/sast_scan.py` — bandit (Python) + eslint+security (JS/TS) with unified severity | `security_specialist` |
+| `dependency_audit` | `src/tools/dependency_audit.py` — pip-audit + npm audit, bucketed by severity | `security_specialist` |
+| `secret_scan` | `src/tools/secret_scan.py` — regex catalog (13 patterns) + Shannon-entropy filter, pre-commit on agent emissions | `security_specialist` |
+| `pen_test_simple` | `src/tools/pen_test_simple.py` — OpenAPI-driven black-box probe (AUTH/INJ/IDOR/DOS) | `security_specialist` |
+| `health_probe` | `src/tools/health_probe.py` — single-shot HTTP probe aligned with supervisor probe semantics | `ops_heal_agent` |
+| `slo_check` | `src/tools/slo_check.py` — rolling-window SLO evaluator, loads `config/slo.yaml` with per-env overrides | `ops_heal_agent` |
+| `anomaly_detect` | `src/tools/anomaly_detect.py` — z-score with anti-self-poison baseline exclusion + per-metric MIN_SIGMA floor | `ops_heal_agent` |
+| `auto_rollback` | `src/tools/auto_rollback.py` — idempotent rollback queue (`rollback_requests` table); supervisor consumes | `ops_heal_agent` |
+| `ops_check` | `src/tools/ops_check.py` — legacy live-probe (health + disk + memory + logs); retained alongside the 4 new tools | `ops_heal_agent` |
+
+---
+
+#### 6.9.1 Security Agent — Stage 4
+
+**Problem.** Every `code_commit` today ships code with zero automated security scanning. The existing `code_reviewer` can look up CVEs via `web_search` but has no structured security gate. One undetected critical CVE or a hard-coded secret in generated code reaching production costs ~50–100× more to remediate than catching it here.
+
+**Solution.** A dedicated `security_specialist` that runs as a new `security` stage between `testing` and `code_commit` in the `feature_development` and `bug_fix` workflows. The agent blocks the commit on any critical finding and routes back to development with specific fix instructions.
+
+**Scanning scope:**
+
+| Scan Type | Tool | Target | Blocks Commit On |
+|-----------|------|--------|-----------------|
+| SAST — Python | `bandit` (via `code_exec`) | All `src/**/*.py` in the changeset | HIGH or CRITICAL severity |
+| SAST — TypeScript | `eslint-plugin-security` (via `code_exec`) | All `frontend/src/**/*.ts[x]` | ERROR level |
+| Dependency audit — Python | `safety check` (via `code_exec`) | `requirements.txt` / `pyproject.toml` | Any CVE with CVSS ≥ 7.0 |
+| Dependency audit — JS | `npm audit` (via `code_exec`) | `package.json` | High or Critical severity |
+| Secrets detection | `detect-secrets` (via `code_exec`) | All committed files | Any pattern match |
+| OWASP Top-10 LLM review | Agent self (Claude) | Generated code logic | CRITICAL finding |
+| CVE lookup | `web_search` | Library versions flagged by dep scan | Confirmed CVE with available fix |
+
+**Core requirements:**
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| SEC-001 | New agent `security_specialist` defined in `config/agents/security_specialist.yaml`; `team: delivery`, `reports_to: devops_specialist`, `model: claude-opus-4-7` | Critical |
+| SEC-002 | New `security` stage added to `feature_development` workflow DAG between `testing` and `code_commit`; `on_fail: development` | Critical |
+| SEC-003 | New `security` stage added to `bug_fix` workflow between `review_and_test` and `code_commit` | Critical |
+| SEC-004 | `security` stage has two required quality gates: `no_critical_vulnerabilities` and `no_secrets_detected` | Critical |
+| SEC-005 | Agent runs SAST scans via `security_scan` tool on all Python and TypeScript files in the changeset | Critical |
+| SEC-006 | Agent runs dependency scans; blocks on any Python CVE with CVSS ≥ 7.0 or any JS High/Critical advisory | Critical |
+| SEC-007 | Any detected secret / API key pattern in generated code = automatic `FAIL` verdict regardless of other findings | Critical |
+| SEC-008 | Agent performs LLM-driven OWASP Top-10 review covering: Injection, Broken Auth, SSRF, Insecure Deserialization, XSS, CSRF, Insecure Direct Object References | High |
+| SEC-009 | Agent uses `web_search` to confirm CVE status for specific library versions flagged by dependency scans | High |
+| SEC-010 | Findings categorized: `CRITICAL` (blocks commit), `HIGH` (blocks commit), `MEDIUM` (warning, does not block), `LOW` (informational) | High |
+| SEC-011 | `PASS` verdict required before `code_commit` stage executes; `FAIL` triggers `on_fail: development` with structured rework instructions | Critical |
+| SEC-012 | Security report stored as document type `security_report` in the `documents` table, linked to `request_id` | High |
+| SEC-013 | New `security_scan` tool entry in `config/tools.yaml` — wraps bandit, safety, npm audit, detect-secrets; `available_to: [security_specialist]` only | Critical |
+| SEC-014 | Agent is added to `_LESSONS_CONSUMER_AGENTS` in `src/agents/base.py` — receives `agent-lessons-learned.md` at every invocation | High |
+| SEC-015 | `max_iterations: 15` — sufficient for running all scan types and verifying CVE details via web search | Medium |
+
+**Security report output format:**
+
+```markdown
+## Security Scan Report
+
+### Scan Summary
+| Scan | Status | Findings | Commit Blocked? |
+|------|--------|----------|----------------|
+| SAST — Python (bandit) | ✅ PASS | 0 critical, 1 low | No |
+| SAST — TypeScript (eslint-security) | ✅ PASS | 0 errors | No |
+| Dependency — Python (safety) | ✅ PASS | 0 CVEs ≥ 7.0 | No |
+| Dependency — JS (npm audit) | ❌ FAIL | CVE-2024-XXXX in lodash 4.17.20 (CVSS 7.5) | Yes |
+| Secrets Detection | ✅ PASS | 0 patterns | No |
+| OWASP Top-10 Review | ✅ PASS | No critical patterns | No |
+
+### Detailed Findings
+#### HIGH: CVE-2024-XXXX — lodash 4.17.20 (Prototype Pollution)
+- **File:** `frontend/package.json`
+- **Fix:** Upgrade lodash to ≥ 4.17.21
+- **CVSS:** 7.5 · [NVD reference]
+
+### Verdict: ❌ FAIL — 1 HIGH dependency vulnerability. Fix required before commit.
+```
+
+**Future enhancements:**
+
+| ID | Enhancement | Priority |
+|----|-------------|----------|
+| AE-SEC-F1 | DAST scanning via OWASP ZAP against the running staging container (requires ops_heal_agent operational first) | Medium |
+| AE-SEC-F2 | Container image scanning (Trivy) on the built Docker image before staging deploy | Medium |
+| AE-SEC-F3 | Security findings surfaced as a dedicated tab on the Story Board / Request Detail page | Medium |
+| AE-SEC-F4 | Supply chain integrity check — verify `requirements.txt` and `package-lock.json` hash consistency | Low |
+
+---
+
+#### 6.9.2 Self-Learning Agent — Lessons Automation
+
+**Problem.** The `docs/agent-lessons-learned.md` self-learning loop — injected at runtime into every code-writing agent's system prompt — currently requires **manual human intervention** to add new lessons. When a new failure pattern emerges, it recurs in subsequent requests until a human notices, diagnoses, and manually appends a section. The average lag between a novel failure and a recorded lesson is unknown and unbounded.
+
+**This is the highest-leverage agent in Phase AE.** Every lesson compound-improves all future requests. The runtime injection mechanism (`_build_system_prompt` in `src/agents/base.py`) already reads the doc on every invocation — the only missing piece is an agent that writes to it automatically.
+
+**Trigger conditions:**
+
+| Trigger | Detection Mechanism | Analysis Scope |
+|---------|--------------------|----|
+| Max rework cycles hit | `request.rework_cycles >= MAX_REWORK_CYCLES` on terminal `FAILED` | Full pipeline output trail |
+| Deployment rollback | `deployment_states.current_step = 'rolled_back'` | Deployment + pre-commit outputs |
+| Security gate failed (→ FAILED) | `security_report.verdict = FAIL` + request terminal `FAILED` | Security + code outputs |
+| Repeated signature | Same error signature seen in 2+ requests within 7 days | Cross-request pattern |
+
+**Core requirements:**
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| SLA-001 | New agent `self_learning_agent` defined in `config/agents/self_learning_agent.yaml`; `team: engineering`, `reports_to: project_orchestrator` | Critical |
+| SLA-002 | Agent triggered by a new orchestrator post-processing hook — fires asynchronously after any terminal failure event, never blocks or affects the originating request's outcome | Critical |
+| SLA-003 | Agent reads the full agent output trail for the triggering request via `file_read` on the documents table (PRD, user stories, code, review report, test report, security report) | Critical |
+| SLA-004 | New `lessons_writer` tool in `config/tools.yaml` — a scoped `file_write` that accepts ONLY `docs/agent-lessons-learned.md` as the target path; any other path is rejected at the tool layer | Critical |
+| SLA-005 | Before appending, agent reads all existing L01–LNN sections; if the new pattern is already covered, appends `[Update YYYY-MM-DD]: also observed in REQ-XXX — <one-line note>` to the existing entry; does NOT create a duplicate section | Critical |
+| SLA-006 | New lessons follow the canonical format exactly: `## L<NN> — <one-line title>` with four sub-sections: **Signature**, **Cause**, **Fix**, **Observed in** | Critical |
+| SLA-007 | After appending, agent commits `docs/agent-lessons-learned.md` via `git_operations` with message `chore: add lesson L<NN> — <title> [observed in REQ-XXX]` | High |
+| SLA-008 | Agent is explicitly **excluded** from `_LESSONS_CONSUMER_AGENTS` — it writes the lessons doc; consuming it would create circular self-referential prompts | Critical |
+| SLA-009 | Agent emits a `lessons.added` event via EventEmitter: `{lesson_id, request_id, title, timestamp}`; surfaced in the UI as a subtle notification on the Command Center | Medium |
+| SLA-010 | `LESSONS_DRY_RUN=true` env var activates dry-run mode: agent performs full analysis and logs the proposed lesson to stdout but does NOT write to the file or commit; useful for validating lesson quality without polluting the doc | Medium |
+| SLA-011 | If no genuine new pattern is found (all signatures already covered), agent emits `lessons.no_new_pattern` event and exits cleanly — does not append anything | High |
+| SLA-012 | Agent operation is idempotent: if triggered twice for the same request (e.g., supervisor restart), the deduplication check (SLA-005) prevents duplicate entries | High |
+
+**Business impact estimate:** With ~10 requests/day and a ~20% rework rate, adding 1 lesson that reduces a recurrent failure by 50% saves ~1 rework cycle/day → **~$0.50–$1.50/day in LLM costs**, compounding as the lesson library grows and more patterns are covered.
+
+**Future enhancements:**
+
+| ID | Enhancement | Priority |
+|----|-------------|----------|
+| AE-SLA-F1 | Per-agent routing — single-agent failure patterns appended directly to that agent's YAML `system_prompt` section rather than the global doc | Medium |
+| AE-SLA-F2 | Lesson effectiveness tracking — after a lesson is added, compare rework rate for the same failure class in subsequent weeks; deprecate lessons that don't reduce failures after 30 days | Medium |
+| AE-SLA-F3 | Lesson approval UI — surface the proposed lesson for user approval before committing (for high-stakes or ambiguous patterns) | Low |
+
+---
+
+#### 6.9.3 Quality Guardian Agent — Stage 5 Upgrade
+
+**Problem.** The `code_reviewer` reviews individual files for logical correctness but cannot detect cross-agent inconsistencies: a frontend calling an endpoint that the backend never defined; a tester who skipped three PRD requirements; an agent that repeated a known failure pattern from `agent-lessons-learned.md`. These silent cross-cutting gaps ship to production undetected. Stage 5 (Quality Gate) in the Agentic Engineering framework requires an agent that **supervises the collective output of all agents**, not just individual files.
+
+**Solution.** A `quality_guardian` agent that runs as a parallel stage alongside `code_reviewer`, receives all agent outputs simultaneously, and issues a cross-cutting quality verdict with a risk rating that feeds the deployment supervisor's judge.
+
+**Differentiation from `code_reviewer`:**
+
+| Dimension | `code_reviewer` today | `quality_guardian` adds |
+|-----------|-----------------------|------------------------|
+| Scope | File-by-file logic correctness | Cross-agent consistency |
+| API contract (BE ↔ FE) | ❌ Not checked | ✅ Schema mismatch detection |
+| Requirements traceability | Spot-check REQ-XXX | ✅ Full matrix: every REQ-XXX → code path → test case |
+| Lessons-learned compliance | ❌ | ✅ Checks outputs against known failure signatures |
+| Performance anti-patterns | ❌ | ✅ N+1 queries, missing pagination, un-memoized renders |
+| Risk rating | ❌ | ✅ `low/medium/high` → consumed by supervisor judge |
+
+**Core requirements:**
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| QG-001 | New agent `quality_guardian` defined in `config/agents/quality_guardian.yaml`; `team: delivery`, `reports_to: devops_specialist` | Critical |
+| QG-002 | Runs as a parallel sub-stage alongside `code_reviewer` in the `review` stage of `feature_development`; both outputs required before `testing` proceeds | High |
+| QG-003 | Agent inputs: all outputs from prd_specialist, user_story_author, backend_specialist, frontend_specialist, tester_specialist, and (if available) security_specialist | Critical |
+| QG-004 | **API contract check:** compares backend FastAPI route response models and Pydantic schemas against TypeScript `fetch`/TanStack Query call signatures in frontend; flags field name, type, or path mismatches as CRITICAL | Critical |
+| QG-005 | **Traceability matrix:** for every REQ-XXX in the PRD, verifies at least one test case in the test report traces to it (via "Traces To: US-XXX" linkage); gaps flagged as HIGH | High |
+| QG-006 | **Lessons compliance:** reads `docs/agent-lessons-learned.md` and checks whether any known failure signatures (L01–LNN Signature fields) appear in the current outputs | High |
+| QG-007 | **Performance budget:** flags sequential `await` calls inside a loop (N+1 pattern), list endpoints missing `limit`/`offset` pagination, and React list-rendering components missing `React.memo` or `useCallback` | Medium |
+| QG-008 | **Risk rating:** computes `low / medium / high` based on finding severity; stored on the `quality_report` document and injected into the deployment supervisor judge's context at deploy time | High |
+| QG-009 | Verdict: `APPROVED` (no critical/high findings) or `ESCALATED` (critical/high found → triggers `on_fail: development` rework with findings package) | Critical |
+| QG-010 | Quality report stored as document type `quality_report` in the `documents` table | High |
+| QG-011 | Deployment supervisor judge prompt extended with `quality_report.risk` field: `high` risk → `deploy_staging_only`; any unresolved CRITICAL finding → `hold` | High |
+| QG-012 | Agent added to `_LESSONS_CONSUMER_AGENTS` | High |
+
+**Future enhancements:**
+
+| ID | Enhancement | Priority |
+|----|-------------|----------|
+| AE-QG-F1 | Integrate `quality_guardian` risk score into the Story Board pipeline bar — risk level shown as a colour-coded chip on the Quality Gate stage dot | Medium |
+| AE-QG-F2 | Trend dashboard: track risk ratings over time (are we shipping riskier code week-on-week?) | Low |
+
+---
+
+#### 6.9.4 Ops/Heal Agent — Stage 7
+
+**Problem.** After `devops_specialist` records `DEPLOYED TO PRODUCTION`, there is zero automated post-deployment monitoring. Degraded containers, silent error-rate spikes, memory leaks, or connection pool exhaustion are discovered only when a human notices or the frontend shows errors. The Agentic Engineering framework's Stage 7 requires agents that **monitor, detect, self-heal, and optimize** — not just deploy and walk away.
+
+**Solution.** An `ops_heal_agent` that is triggered by the deployment supervisor upon a `completed` terminal state. It runs a 10-minute intensive post-deploy burst, then shifts to a 30-minute heartbeat. It autonomously remediates recoverable failures and escalates non-recoverable ones back to the supervisor's rollback flow.
+
+**Core requirements:**
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| OPS-001 | New agent `ops_heal_agent` defined in `config/agents/ops_heal_agent.yaml`; `team: delivery`, `reports_to: devops_specialist` | Critical |
+| OPS-002 | Agent triggered by supervisor's `completed` terminal state via a new `deployment.completed` event hook; NOT a workflow DAG stage — runs as an async background monitor | Critical |
+| OPS-003 | **Post-deploy burst:** polls `/api/v1/health` at 30 s, 2 m, 5 m, and 10 m post-deploy; records health envelope (status, latency ms, component states) at each interval | Critical |
+| OPS-004 | **Container health watch:** reads `docker ps` via `ops_check`; detects `(unhealthy)` or `(Restarting)` states within the burst window | Critical |
+| OPS-005 | **Error-rate delta:** queries the `events` table for `request.status = FAILED` count in the 10 minutes before vs. 10 minutes after deployment; >2× increase = anomaly | High |
+| OPS-006 | **Auto-remediation (tier 1 — transient):** on first unhealthy container detection, autonomously runs `docker compose restart <service>` via `ops_check` and re-polls; logs as `ops.self_heal` event | High |
+| OPS-007 | **Escalation (tier 2 — persistent):** on 3+ container restarts OR health endpoint still failing at the 10-minute mark, emits `deployment.rollback_requested` event; supervisor picks it up and executes the existing rollback flow (git revert + rebuild) | Critical |
+| OPS-008 | **Cost/token anomaly:** compares avg tokens/request for the last 10 requests against the 20-request baseline; flags >3× spike as potential prompt injection or agent runaway; emits `ops.cost_anomaly` event | High |
+| OPS-009 | **Heartbeat mode:** after the 10-minute burst, transitions to lightweight heartbeat (health endpoint + error rate only, no container watch) at 30-minute intervals | Medium |
+| OPS-010 | New `ops_check` tool in `config/tools.yaml` — wraps health endpoint polling (`urllib.request`), `docker ps` read, container log tail, and `docker compose restart <service>`; `available_to: [ops_heal_agent]` only | Critical |
+| OPS-011 | All ops events stored in `events` table with `event_type` prefix `ops.*`: `ops.health_check`, `ops.anomaly_detected`, `ops.self_heal`, `ops.cost_anomaly`, `ops.rollback_requested` | High |
+| OPS-012 | New **System Health** status pill on the Command Center page (🟢 Healthy / 🟡 Degraded / 🔴 Critical), derived from the most recent `ops.health_check` event — updated without page reload via WebSocket | Medium |
+| OPS-013 | Agent added to `_LESSONS_CONSUMER_AGENTS` | Medium |
+
+**Future enhancements:**
+
+| ID | Enhancement | Priority |
+|----|-------------|----------|
+| AE-OPS-F1 | Post-deploy DAST pass (integrate with security_specialist against the running staging container) | Medium |
+| AE-OPS-F2 | P95 latency comparison before/after deployment using health endpoint timing | Medium |
+| AE-OPS-F3 | Notification channel (Slack / email) when ops_heal_agent escalates to rollback | High |
+| AE-OPS-F4 | Weekly ops summary report: uptime %, self-heal event count, anomalies detected, cost trend | Medium |
+
+---
+
+#### 6.9.5 Architecture Review Agent
+
+**Problem.** Generated code can gradually drift from the platform's documented architecture. Production examples observed: a route directly importing `aiosqlite` instead of going through `StateStore`; a new API endpoint defined but never registered in `src/main.py`; a new page component built but absent from `App.tsx`; deprecated Pydantic v1 patterns in a v2 codebase. The `code_reviewer` misses these because it reviews logic correctness, not structural compliance with the layered architecture.
+
+**Solution.** An `architecture_reviewer` agent that runs in parallel with `code_reviewer` inside the `review` stage. It is read-only (uses `file_read` and `code_analysis` only), has no write access, and checks strictly against the architectural rules codified in `docs/architecture.md` and `CLAUDE.md`.
+
+**Core requirements:**
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| AR-001 | New agent `architecture_reviewer` defined in `config/agents/architecture_reviewer.yaml`; `team: development`, `reports_to: code_reviewer` | Critical |
+| AR-002 | Runs in parallel with `code_reviewer` in the `review` stage of `feature_development`; both must pass before `testing` proceeds | High |
+| AR-003 | **Layer boundary:** no file in `src/api/routes/` may directly import `sqlite3`, `aiosqlite`, or any DB driver — all DB access must pass through `src/state/base.py::StateStore`; violation = CRITICAL | Critical |
+| AR-004 | **Endpoint registration:** any new `@router.get/post/put/delete` handler in `src/api/routes/` must have a matching `app.include_router()` call in `src/main.py`; missing = CRITICAL | Critical |
+| AR-005 | **Frontend router:** any new component in `frontend/src/pages/` must have a `<Route path="..." element={<Component />} />` entry in `frontend/src/App.tsx`; missing = CRITICAL | Critical |
+| AR-006 | **Pydantic v2 compliance:** flags `@validator` (use `@field_validator`), `orm_mode = True` in `Config` (use `model_config = ConfigDict(from_attributes=True)`), `.dict()` calls (use `.model_dump()`) | High |
+| AR-007 | **Circular import detection:** traces `import` chains in generated Python files; flags A→B→A cycles | High |
+| AR-008 | **Config-system compliance:** any agent_id, tool name, or threshold key referenced in source code must have a matching definition in the corresponding YAML config file; undefined references = HIGH | High |
+| AR-009 | Tools: `file_read` and `code_analysis` only — agent has no write access (read-only by design) | Critical |
+| AR-010 | Verdict: `APPROVED` (no critical findings) or `ARCH_VIOLATION` (critical found → rework with specific structural fix instructions — e.g., "register the route in src/main.py at line X") | Critical |
+| AR-011 | Architecture findings merged into the combined quality gate evaluation alongside `code_reviewer` results | High |
+| AR-012 | Agent added to `_LESSONS_CONSUMER_AGENTS` | Medium |
+
+**Future enhancements:**
+
+| ID | Enhancement | Priority |
+|----|-------------|----------|
+| AE-AR-F1 | Auto-detect new architectural patterns from `architecture.md` changes so the agent's rules stay current without YAML edits | Medium |
+| AE-AR-F2 | Flag StateStore methods called without `await` (sync/async mismatch in Python async codebase) | Medium |
+| AE-AR-F3 | Bundle size gate — flag frontend pages that import a library not in the approved `package.json` dependency list | Low |
+
+---
+
+#### 6.9.6 Phase AE YAML Conformance Requirements
+
+An alignment review between the Phase AE task list and the canonical YAML schema (`config/agents/_template.yaml` + all 10 production agent files) identified **7 gaps** that would produce config-validator failures, runtime `KeyError`/`ToolNotPermittedError` exceptions, or inconsistencies that confuse future developers. Each gap is documented here as an explicit requirement so every Phase AE agent YAML can be verified before it is merged.
+
+> **Reference pattern:** `config/agents/backend_specialist.yaml` is the most complete example of all required conventions. Read it first before writing any new agent YAML.
+
+**Requirements:**
+
+| ID | Field / Convention | Requirement | Consequence if Missed |
+|----|-------------------|-------------|----------------------|
+| YAML-001 | `delegation:` block | **Required in every agent YAML**, even leaf agents that delegate to nobody. Minimum content: `can_delegate_to: []` and `max_concurrent_tasks: 3` | Config loader raises `KeyError` at startup |
+| YAML-002 | `quality_gates:` block | **Required in every agent YAML.** Agents that own no gates use `quality_gates: []` (explicit empty list — not omitted). Gates enforced by a workflow stage go in `config/workflows.yaml`, not here | Omitted key returns `None` instead of `[]`; workflow runner's gate-evaluation loop crashes |
+| YAML-003 | `metadata:` block | **Required.** Must contain `created: "YYYY-MM-DD"` and `version: "1.0"` | Specified by `_template.yaml`; missing block causes validator warning and inconsistent config dumps |
+| YAML-004 | Responsibility ID format | Use **`PREFIX-NNN`** (e.g., `SEC-001`, `OPS-001`, `AR-001`). Do **not** copy the `-R-` infix from PRD requirement tables (`SEC-R-001`). The PRD requirement notation and the agent YAML responsibility register are separate systems | Mismatched IDs break human traceability and log-parsing tooling |
+| YAML-005 | `outputs:` syntax | Use **YAML block-list style**: `- name: "..."` on its own indented line, then `  format: ...`. Do not use the flow-dict shorthand `[{name: "...", format: ...}]` — it is syntactically valid but inconsistent with all 10 existing agents and error-prone when adding a second output | Silent style divergence; confuses junior developers extending the list |
+| YAML-006 | System prompt section headers | Use these **four headers in order**: `PROJECT CONTEXT:` → `YOUR OUTPUT FORMAT — follow this exactly:` → `LESSONS FROM PRIOR FAILURES — APPLY THESE AUTOMATICALLY:` → `RULES:`. Add `WEB TOOLS:` for agents that have `web_search`/`web_scrape`. These headers are the structural contract that the runtime lesson-injection mechanism and rework-feedback loops depend on | Lesson injection silently mis-aligns; rework instructions land in wrong prompt section |
+| YAML-007 | `self_learning_agent` tools | Do **not** include `git_operations` in `self_learning_agent`'s `tools:` list. The agent reads failure context via `file_read` and writes via `lessons_writer`; git history is not needed. Additionally, `git_operations.available_to` in `config/tools.yaml` does not list `self_learning_agent` | `ToolNotPermittedError` raised on first lesson-writing invocation |
+
+**Post-creation verification (run after writing each new agent YAML):**
+
+```bash
+# 1. Config schema passes
+docker compose exec backend python -m src.config.validator
+
+# 2. All three mandatory blocks are present
+grep -E "^delegation:|^quality_gates:|^metadata:" config/agents/<agent_id>.yaml
+
+# 3. No -R- infix in responsibility IDs
+grep "  id:" config/agents/<agent_id>.yaml
+
+# 4. outputs uses block-list style (should NOT show [{)
+grep "outputs:" config/agents/<agent_id>.yaml
+```
+
+**Responsibility ID mapping for Phase AE agents:**
+
+| Agent | YAML `responsibilities:` ID range | PRD §4 section (descriptions) |
+|-------|----------------------------------|-------------------------------|
+| `security_specialist` | `SEC-001` – `SEC-007` | §4.9 |
+| `self_learning_agent` | `SLA-001` – `SLA-007` (SLA-007 added in AET-12 for prompt-level dedup decision) | §4.10 |
+| `quality_guardian` | `QG-001` – `QG-006` | §4.11 |
+| `ops_heal_agent` | `OPS-001` – `OPS-009` (OPS-006..009 added in AET-30 for the 4 new AE-1 tools) | §4.12 |
+| `architecture_reviewer` | `AR-001` – `AR-007` (AR-007 added in AET-34 for the trivial-change fast path) | §4.13 |
+
+**Tool permissions per Phase AE agent (AET-41 — actual landed grants):**
+
+Each Phase AE agent's `tools:` list in its YAML file MUST match the `available_to:` grant in `config/tools.yaml` (mismatch raises `ToolNotPermittedError` at first invocation). The table below documents the as-shipped state.
+
+| Agent | YAML `tools:` list | Where granted (`config/tools.yaml`) |
+|-------|--------------------|-------------------------------------|
+| `quality_guardian` | `file_read`, `code_analysis`, `web_search`, `policy_check` | `policy_check.available_to: [quality_guardian]`; `code_analysis` grant added in AET-41 (was missing); `file_read` + `web_search` granted `'all'` |
+| `self_learning_agent` | `lessons_writer`, `file_read` | `lessons_writer.available_to: [self_learning_agent]`; `file_read` is `'all'` |
+| `security_specialist` | `secret_scan`, `sast_scan`, `dependency_audit`, `pen_test_simple`, `web_search`, `web_scrape` | All four AE-4 tools `available_to: [security_specialist]`. Note: the legacy monolithic `security_scan` tool is retained in the registry but the agent no longer references it (AET-19 swap). |
+| `ops_heal_agent` | `ops_check`, `slo_check`, `anomaly_detect`, `health_probe`, `auto_rollback`, `file_read` | All five ops tools `available_to: [ops_heal_agent]`; `file_read` is `'all'` |
+| `architecture_reviewer` | `file_read`, `code_analysis` | `code_analysis` grant added in AET-41 (was missing — a real YAML-007 class bug the verification snippet caught); `file_read` granted `'all'` |
+
+**Permission-mismatch verification (run when changing any AE agent's tools):**
+
+```bash
+# Confirm every tool the agent lists is granted to it in tools.yaml
+docker compose exec backend python -c "
+import yaml
+catalog = yaml.safe_load(open('/app/config/tools.yaml'))['tools']
+for f in ('quality_guardian', 'self_learning_agent', 'security_specialist',
+          'ops_heal_agent', 'architecture_reviewer'):
+    agent = yaml.safe_load(open(f'/app/config/agents/{f}.yaml'))
+    for t in agent['tools']:
+        grants = catalog.get(t, {}).get('available_to', [])
+        if 'all' not in grants and f not in grants:
+            print(f'MISMATCH: {f} → {t} (granted to: {grants})')
+"
+```
+
+A clean run prints nothing. Any output is a YAML-007 class bug — the grant lists drifted from the agent's tool roster.
+
 ---
 
 ## 7. Task Management System
@@ -1561,3 +2123,7 @@ All thresholds are configurable in `config/thresholds.yaml`. Default values:
 | 3.10 | 2026-05-17 | Chandramouli | Section 6.7 Project Management — expanded v1 scope. Every previously-out-of-scope create-form field moved INTO v1: color (PRJ-009), icon (PRJ-010), tags (PRJ-011), lead user (PRJ-012), repo URL (PRJ-013), target date (PRJ-014), default team (PRJ-015), templates with starter checklist (PRJ-016, PRJ-017). PA-002/003 updated to describe expanded form behavior. PUI-001/003 updated to display new fields. Non-Goals list pruned to true v2 items. Detail in docs/prd-projects-feature.md v1.1. |
 | 3.11 | 2026-05-17 | Chandramouli | Project Management feature **shipped** (43/50 tasks done, 4 deferred for v2). Backend: projects table + 5 CRUD endpoints + `/projects/templates`, Unassigned seed + 13-request backfill, project_id on Request, archived-project submission rejection, RBAC (any user create/edit; admin-only archive/delete/lead-reassign). Frontend: Projects list page (/projects), Project detail with rollup stats + Next Steps from template checklist, CreateProjectModal with all 10 v1 fields, required Project dropdown on New Request form, Project chips surfaced on Command Center, History (+filter), RequestDetail, StoryBoard breadcrumb, CostDashboard (+filter). Module-level project cache with WebSocket invalidation on `project.*` events. Bugs found and fixed during smoke test: GET /requests/{id} response was missing project_id; App.tsx didn't register /projects routes despite importing the pages; CostDashboard "Today"/"This Month" cards weren't scoped by project_id filter. Deferred to v2: OpenAPI typegen (PM-19), TanStack Query hooks (PM-20), CreateProjectModal Vitest suite (PM-40), backend project store tests (PM-18). |
 | 3.12 | 2026-05-18 | Chandramouli | Project-driven Build feature **shipped** (all 50 PDB tasks done across 5 phases). Adds a stage-gated, human-in-the-loop authoring flow inside every project: write a brief → generate a PRD via the existing `prd_specialist` agent → edit & finalize → generate a task list via `user_story_author` (one-shot fenced-JSON output, regex markdown fallback) → edit & finalize → dispatch tasks (each becomes a Request via the existing orchestrator path with the new `source_task_id` back-link) → chat with the new `project_orchestrator` agent (6 tools: list/dispatch/cancel/modify/add task + get_project_status) → watch progress on the new project-mode Story Board at `/stories/project/:id`. New tables: `project_artifacts`, `project_tasks`, `build_session_messages`. New columns: `requests.source_task_id`, `token_usage.project_artifact_id`. New executor entrypoint: `single_agent_call()` (no Request, no workflow, no events). New EventEmitter `on(handler)` hook drives the PDB-25 `request.status_changed → project_tasks.task_status` mapper. New WS event types: `project.prd_generated`, `project.prd_finalized`, `project.tasks_finalized`, `project.build.message`. Cost dashboard scoping extended to UNION on artifact_id. Bugs caught + fixed during smoke: agent_id was `prd_author` in route but `prd_specialist` in YAML; executor.agent_executor wasn't on app.state at boot; tool-use loop needed manual orchestrator handle passed to `run_chat_turn` (closure pattern). Detailed PRD: docs/prd-project-driven-build.md v1.0. |
+| 3.17 | 2026-05-28 | Chandramouli | **Phase AE SHIPPED — completion summary (AET-39 + AET-41).** §6.9 reframed from "planned requirements" to "shipped status" with Framework Alignment + Delivery Phasing tables showing actual landed tasks (AE-1 ops_heal_agent 10/10, AE-2 self_learning 6/6, AE-3 quality_guardian 8/8, AE-4 security_specialist 8/8, AE-5 architecture_reviewer 4/4; cross-cutting 5/6, only AET-42 full-pipeline smoke open). New tools table covers all 10 AE tools shipped (was 3 planned). §6.9.6 extended with: (a) Responsibility ID range updates reflecting new IDs added during implementation (SLA-007, OPS-006..009, AR-007); (b) new "Tool permissions per Phase AE agent" sub-table documenting actual landed `tools:` lists and where each is granted in `config/tools.yaml`; (c) bash one-liner to verify no agent→tool grant mismatches. Document version bumped to 3.17. |
+| 3.16 | 2026-05-25 | Chandramouli | **Phase AE YAML Conformance Requirements (§6.9.6)** — added new subsection documenting 7 YAML schema gaps identified during alignment review: missing `delegation:` block (YAML-001), missing `quality_gates:` block (YAML-002), missing `metadata:` block (YAML-003), wrong responsibility ID format `SEC-R-NNN` vs correct `SEC-NNN` (YAML-004), wrong `outputs:` flow-dict syntax (YAML-005), missing system prompt section headers (YAML-006), and `git_operations` tool access error for `self_learning_agent` (YAML-007). Includes post-creation verification bash snippet and responsibility ID mapping table. TOC updated with §6.9.6 entry. Document version bumped to 3.16. |
+| 3.15 | 2026-05-24 | Chandramouli | **Agentic Engineering Enhancements (Phase AE)** — added new Section 6.9 with requirements for five new agents: `security_specialist` (§6.9.1 — Stage 4, 15 requirements SEC-001–015), `self_learning_agent` (§6.9.2 — Lessons Automation, 12 requirements SLA-001–012), `quality_guardian` (§6.9.3 — Stage 5, 12 requirements QG-001–012), `ops_heal_agent` (§6.9.4 — Stage 7, 13 requirements OPS-001–013), `architecture_reviewer` (§6.9.5 — arch gate, 12 requirements AR-001–012). Also updated: Section 0 (Phase AE bullet), Section 3.3 (roster extended to 10 production + 5 planned agents), Section 3.5 (enhanced pipeline diagram showing new stages), Section 3.7 (Phase AE agents separated from long-term future growth), Section 4 (new responsibilities tables 4.9–4.13). Three new tools scoped: `security_scan`, `lessons_writer`, `ops_check`. Document version bumped to 3.15. |
+| 3.14 | 2026-05-23 | Chandramouli | **Phase F · Generation hardening** shipped (BPD-46…53, 8 tasks). New §6.8.5 documents the hard gate: all three BPD passes (epics / features / atomic tasks) now require **both** PRD AND API Spec to be finalized before they will run — was previously PRD-only-required with API Spec silently optional, which let the agent invent endpoints that didn't exist. Backend: 409 `{error: prd_not_finalized\|api_spec_not_finalized, hint: ...}` on all three generator endpoints. Prompt enrichment: Pass 2 (features) now includes a scoped API spec block; Pass 3 (atomic tasks) now includes BOTH a PRD excerpt AND a scoped API spec block. New helper `_extract_relevant_api_endpoints(spec, hint_text)` token-scores OpenAPI path blocks against the hint (epic or feature title+description) and returns the top 12 — keeps multi-feature prompts under context budget without losing relevance. Frontend: `BuildPlanGenerator` step buttons + mega button + `BuildPlanView` per-row `+ Features` / `+ Tasks` chips disabled with a warning banner + tooltip when either artifact is missing. Tests: 5 new cases in `test_bpd_generation_helpers.py` cover the chunking heuristic + the new prompt blocks (31 helper tests pass; 41 existing BPD tests still pass). Cost-attribution fix from earlier today (project_id column on token_usage + migration) shipped alongside but not under a Phase letter since it was a bug fix not a planned feature. |

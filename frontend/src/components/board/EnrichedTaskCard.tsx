@@ -20,9 +20,21 @@
  */
 
 import {
-  AlertTriangle, CheckCircle2, Clock, Bot, Rocket,
+  AlertTriangle, CheckCircle2, Clock, Bot, Rocket, Link as LinkIcon,
 } from "lucide-react"
 import type { CardData, WorkflowStage, TaskStatus } from "./types"
+
+// BPD-32 — "unfulfilled blocker" predicate. A depends_on entry is
+// blocking when its status hasn't reached deployed/completed. Pulled
+// out of the JSX so the parent chips row can decide whether to show
+// the chain icon without re-walking the array.
+function _unfulfilledBlockers(
+  blockers: Array<{ task_id: string; title: string; status: string }> | undefined,
+): Array<{ task_id: string; title: string; status: string }> {
+  if (!blockers || blockers.length === 0) return []
+  const TERMINAL_OK = new Set(["deployed", "completed"])
+  return blockers.filter((b) => !TERMINAL_OK.has(b.status))
+}
 
 const STAGES: WorkflowStage[] = [
   "prd", "stories", "development", "review", "testing", "code_commit", "deploy",
@@ -39,9 +51,13 @@ interface Props {
   /** Called when the user clicks "Retry" on a failed card. Optional —
    * not all hosts (Command Center) currently support retry. */
   onRetry?: () => void
+  /** BPD-33 — fired when the user clicks the epic chip. Receives the
+   * card's epic_id. Hosts that want to open an epic-detail popup wire
+   * this; others omit it and the chip becomes plain visual. */
+  onEpicClick?: (epicId: string) => void
 }
 
-export function EnrichedTaskCard({ card, isSelected, onClick, onRetry }: Props) {
+export function EnrichedTaskCard({ card, isSelected, onClick, onRetry, onEpicClick }: Props) {
   const priorityColor =
     card.priority === "high"   ? "var(--danger)"
     : card.priority === "low"  ? "var(--text-muted)"
@@ -88,6 +104,122 @@ export function EnrichedTaskCard({ card, isSelected, onClick, onRetry }: Props) 
         )}
         {card.title}
       </div>
+
+      {/* BPD-32 — parent epic + feature chips, plus a chain icon when
+          unfulfilled depends_on blockers exist. Renders only when the
+          surface populates card.bpd (ProjectStoryBoard does; the
+          Command Center recent-requests list does not — gracefully
+          omitted). The chain icon is small and inline so it doesn't
+          push the card height around when blockers clear. */}
+      {card.bpd && (card.bpd.epic_title || card.bpd.feature_title
+        || (card.bpd.depends_on && card.bpd.depends_on.length > 0)) && (
+        <div
+          data-testid="card-parent-chips"
+          style={{
+            display: "flex", flexWrap: "wrap", alignItems: "center",
+            gap: 4, marginTop: 2,
+          }}
+        >
+          {card.bpd.epic_title && (() => {
+            const clickable = !!(onEpicClick && card.bpd?.epic_id)
+            return (
+              <span
+                data-testid="epic-chip"
+                role={clickable ? "button" : undefined}
+                tabIndex={clickable ? 0 : undefined}
+                title={
+                  clickable
+                    ? `Epic: ${card.bpd.epic_title} — click to open details`
+                    : `Epic: ${card.bpd.epic_title}`
+                }
+                onClick={
+                  clickable
+                    ? (e) => {
+                        // Don't bubble to the card's outer onClick
+                        // (which selects the TASK), and prevent the
+                        // <button> click handler from swallowing it.
+                        e.stopPropagation()
+                        e.preventDefault()
+                        onEpicClick!(card.bpd!.epic_id!)
+                      }
+                    : undefined
+                }
+                onKeyDown={
+                  clickable
+                    ? (e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.stopPropagation()
+                          e.preventDefault()
+                          onEpicClick!(card.bpd!.epic_id!)
+                        }
+                      }
+                    : undefined
+                }
+                style={{
+                  fontSize: 9, fontWeight: 600,
+                  padding: "1px 6px",
+                  borderRadius: 3,
+                  background: "var(--accent-subtle, rgba(99,102,241,0.12))",
+                  color: "var(--accent)",
+                  fontFamily: "var(--font-mono)",
+                  maxWidth: 130,
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  cursor: clickable ? "pointer" : "default",
+                  textDecoration: clickable ? "underline dotted" : "none",
+                  textUnderlineOffset: 2,
+                }}
+              >
+                E · {card.bpd.epic_title}
+              </span>
+            )
+          })()}
+          {card.bpd.feature_title && (
+            <span
+              data-testid="feature-chip"
+              title={`Feature: ${card.bpd.feature_title}`}
+              style={{
+                fontSize: 9, fontWeight: 600,
+                padding: "1px 6px",
+                borderRadius: 3,
+                background: "var(--bg-hover)",
+                color: "var(--text-secondary)",
+                fontFamily: "var(--font-mono)",
+                maxWidth: 130,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}
+            >
+              F · {card.bpd.feature_title}
+            </span>
+          )}
+          {(() => {
+            const blockers = _unfulfilledBlockers(card.bpd.depends_on)
+            if (blockers.length === 0) return null
+            const tip = blockers
+              .map((b) => `· ${b.task_id} (${b.status}): ${b.title}`)
+              .join("\n")
+            return (
+              <span
+                data-testid="blocked-chain"
+                title={`Blocked by ${blockers.length} unfulfilled dep${
+                  blockers.length > 1 ? "s" : ""
+                }:\n${tip}`}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 2,
+                  fontSize: 9, fontWeight: 600,
+                  padding: "1px 5px",
+                  borderRadius: 3,
+                  background: "var(--warning-subtle, rgba(245,158,11,0.15))",
+                  color: "var(--warning, #f59e0b)",
+                  fontFamily: "var(--font-mono)",
+                }}
+              >
+                <LinkIcon size={9} />
+                {blockers.length}
+              </span>
+            )
+          })()}
+        </div>
+      )}
 
       {/* Live status block — only when not in pure-backlog state */}
       {isInFlightOrDone(card.status) && (

@@ -62,6 +62,8 @@ tools:
       - code_reviewer
       - backend_specialist
       - frontend_specialist
+      - quality_guardian       # AET-41 — listed in agent YAML; grant was missing
+      - architecture_reviewer  # AET-41 — listed in agent YAML; grant was missing
 
   coverage_report:
     description: "Generate and read code coverage reports"
@@ -136,8 +138,110 @@ tools:
     available_to:
       - ops_heal_agent
 
+  slo_check:
+    description: "AET-25/AET-28 — rolling-window SLO evaluator. Reads recent deploy_health rows (written by the supervisor probe loop AET-24) for a given env and computes verdict against per-env SLOs loaded from config/slo.yaml: availability, p95/p99 latency, error_rate_5m, restart_burst. Verdicts: PASS (all SLOs met), DEGRADED (severity=degraded SLO failed — alert), BREACH (severity=breach SLO failed; default availability — auto_rollback trigger), INSUFFICIENT_DATA (fewer than min_samples probes; agent must not act). Per-env targets in slo.yaml — production tightens; development loosens."
+    category: infrastructure
+    available_to:
+      - ops_heal_agent
+
+  health_probe:
+    description: "AET-26 — single-shot HTTP GET against a deploy URL. Returns {ok, response_time_ms, http_status, error?, body_preview}. 5s default timeout (max 30s). Use after an intervention to confirm recovery without waiting for the supervisor's next 60s probe tick. http_status=0 means unreachable — treat as 'still down', not 'probe failed'. Same probe semantics the supervisor's background loop uses, so results are apples-to-apples comparable."
+    category: infrastructure
+    available_to:
+      - ops_heal_agent
+
+  anomaly_detect:
+    description: "AET-27 — z-score anomaly detector over deploy_health probes. For a given env, compares the current 5min window against the rolling 1hr baseline (excluding the current 5min to prevent self-masking). Flags any metric (response_time_ms, error_rate_5m, restart_count) whose deviation exceeds ±2σ (env-tunable via ANOMALY_SIGMA_THRESHOLD). Returns {verdict: OK | ANOMALY | INSUFFICIENT_DATA, alerts[]}. Complementary to slo_check — anomaly_detect catches drift before it crosses a fixed SLO target. Insufficient baseline (<10 samples) → INSUFFICIENT_DATA, never alert from cold state."
+    category: infrastructure
+    available_to:
+      - ops_heal_agent
+
+  auto_rollback:
+    description: "AET-29 — queue a rollback request for the supervisor when an SLO breach has been SUSTAINED for at least 5 minutes (env-tunable via AUTO_ROLLBACK_SUSTAIN_MINUTES). Idempotent — returns status='already_in_flight' if a pending or in_flight rollback already exists for the env. Only WRITES to rollback_requests; the actual git revert + redeploy runs on the supervisor host. Use AFTER slo_check returns BREACH; never call blindly on a single bad probe. Verdicts: queued, already_in_flight, breach_not_sustained, insufficient_data, error."
+    category: infrastructure
+    available_to:
+      - ops_heal_agent
+
+  sast_scan:
+    description: "AET-15 — language-aware static-analysis scan. Invokes bandit (Python) on .py files in the input list and eslint with the security plugin (JS/TS) on .js/.jsx/.ts/.tsx files. Returns a unified list of {severity, file, line, rule_id, message, snippet, tool} findings + verdict='BLOCK' when any severity is high/critical, 'PASS' otherwise. Missing back-ends (e.g. eslint in the backend container) are SKIPPED, not errored — the agent receives a per-tool status so it knows which leg ran."
+    category: security
+    available_to:
+      - security_specialist
+
+  dependency_audit:
+    description: "AET-16 — supply-chain CVE audit. Invokes pip-audit (Python deps) and npm audit (frontend deps), normalises both to the unified bucket shape {by_severity: {critical, high, moderate, low}}. Each vulnerability dict has ecosystem, package, installed version, vulnerability_id (GHSA/CVE), severity, and fix_versions. verdict='BLOCK' when any critical or high CVE is present."
+    category: security
+    available_to:
+      - security_specialist
+
+  secret_scan:
+    description: "AET-17 — pre-`code_commit` secret scanner. Runs on the agent's IN-MEMORY emissions (list of {file_path, content} dicts) BEFORE the workflow materialises them to disk or pushes them to a branch. Two-layer detection: (1) regex catalog of known credential shapes — AWS access/secret keys, Anthropic AWS workspace IDs (wks_…), Anthropic API keys (sk-ant-…), GitHub PATs (classic + fine-grained), Slack tokens, PEM private-key headers, JWT triples, Google/Stripe/PyPI/npm tokens, generic 32+ hex digests; (2) Shannon-entropy filter (≥20 chars, ≥4.0 bits/char) for high-randomness tokens that escape the regex. Matched values are redacted (first 4 + last 4 chars) before returning so the response itself never echoes the secret. verdict='BLOCK' on any finding. Honors `pragma: allowlist secret` line markers and skips lock/build files."
+    category: security
+    available_to:
+      - security_specialist
+
+  pen_test_simple:
+    description: "AET-18 — black-box probe against a running base_url, driven by the project's finalized OpenAPI spec (inline dict, file path, or URL — defaults to {base_url}/api/v1/openapi.json). Four probe families: AUTH-001 (missing-auth on endpoints that declare security), AUTH-002 (garbage Bearer token), INJ-001 (SQL injection via query params with leaked-error detection), INJ-002 (NoSQL operator pass-through), IDOR-001 (adjacent-id bumping on GET endpoints with integer path params), DOS-001 (1 MB JSON body on POST/PUT). Returns {verdict, findings[], endpoints_probed, summary}. verdict='SKIPPED' when no spec or base_url; 'BLOCK' on any high/critical finding; 'PASS' otherwise. Use staging URL, never production."
+    category: security
+    available_to:
+      - security_specialist
+
   policy_check:
     description: "Evaluate the declarative quality rule catalog (config/quality-rules.yaml) against a batch of agent emissions. Each emission is {target_path, content, agent_id, tool_name, rework_cycle}. Returns {verdict, violations[], summary{}}. verdict='BLOCK' when any enforce-severity rule fires (workflow halts at quality_guardian_approval gate); 'PASS_WITH_WARNINGS' when only warn-severity rules fire (workflow advances with annotated quality_report); 'PASS' when nothing fires. Each violation carries rule_id, rationale, fix_hint, and a snippet of the matched content so the next rework cycle has actionable guidance."
     category: quality
     available_to:
       - quality_guardian
+
+  # ── KB-08 — Agentic Knowledge Base tools ───────────────────────────────
+  # Retrieval is hard-scoped to the buckets the Request grounds the task in;
+  # the agent supplies only `query` / `doc_id` and cannot widen the scope
+  # (the executor injects kb_scope via the registry — FR-023).
+  knowledge_search:
+    description: "Search the knowledge base for relevant grounded information. Hybrid (vector + keyword) retrieval, reranked, returning ranked snippets with citation ids [KB#chunk_id] and source doc titles. Automatically scoped to the bucket(s) this task is grounded in — you cannot choose the scope. Input: {query, top_k?}. Cite sources as [KB#<chunk_id>]; if a claim can't be grounded in the results, flag it rather than asserting from memory."
+    category: knowledge
+    available_to:
+      - research_specialist
+      - content_creator
+      - architecture_reviewer
+      - prd_specialist
+      - code_reviewer
+
+  knowledge_get:
+    description: "Fetch the full text of a knowledge-base document by its doc_id (from a knowledge_search result) for deeper context. Scoped to the task's namespace — out-of-scope doc_ids are refused. Input: {doc_id}."
+    category: knowledge
+    available_to:
+      - research_specialist
+      - content_creator
+      - architecture_reviewer
+      - prd_specialist
+      - code_reviewer
+
+  record_decision:
+    description: "Record your conclusion + the sources it rests on into the append-only decision ledger (provenance). Call once you've reached a substantive conclusion; pass the [KB#id] chunk ids you actually relied on. The request/agent/project are injected — you can't spoof whose decision it is. Input: {summary, cited_chunk_ids?}."
+    category: knowledge
+    available_to:
+      - research_specialist
+      - content_creator
+      - architecture_reviewer
+      - prd_specialist
+      - code_reviewer
+
+  knowledge_cite:
+    description: "Cite the knowledge chunk(s) that back a substantive claim. Pass the [KB#id] ids from knowledge_search results; records the citation (audit/grounding report) and returns footnotes. ONLY Knowledge is citeable — memory/recall ids, fabricated ids, and chunks outside this task's scope are rejected. Input: {chunk_ids}."
+    category: knowledge
+    available_to:
+      - research_specialist
+      - content_creator
+      - architecture_reviewer
+      - prd_specialist
+      - code_reviewer
+
+  recall_memory:
+    description: "Recall this application's PAST EXPERIENCE — prior attempts, outcomes, discussions (episodic memory in mem_project_<id>). Use it to avoid repeating mistakes or reconstruct what happened earlier. Results are UNVETTED context tagged [MEMORY] and are NEVER citeable as fact — inform your reasoning only; cite knowledge_search results instead. Scoped to this task's app — you can't recall another app's memory. Optional time filters: 'days' (last N days), 'as_of' (point-in-time). Input: {query, days?, as_of?, top_k?}."
+    category: knowledge
+    available_to:
+      - research_specialist
+      - content_creator
+      - architecture_reviewer
+      - prd_specialist
+      - code_reviewer

@@ -978,6 +978,105 @@ app.include_router(widgets.router, prefix="/api/v1/widgets", tags=["widgets"])
 
 ---
 
+## L23 — Single source of truth for cross-layer labels
+
+**Signature:** Two layers compute "the same" human-readable string
+independently. They look the same when first written. They drift the
+moment someone updates one without the other. The user sees the
+inconsistency before any test does, because nothing tests prose.
+
+**Concrete instance (2026-05-25, BPD task generation label):**
+
+Two surfaces displayed the activity label for an in-flight BPD Pass 3
+LLM call. Both were "correct" in isolation:
+
+| Surface | Source | What it showed |
+|---|---|---|
+| BuildPlanView's `BUSY · …` chip on the feature row | `frontend/.../BuildPlanView.tsx` `generateTasks` handler | `"Generating tasks"` (hardcoded) |
+| Active Agents feed card on `/team` | `src/api/routes/projects.py` → `executor.single_agent_call(label=...)` | `f"BPD Pass 3 · Generating Atomic Tasks for {feature.title[:40]}"` |
+
+Different strings, same underlying operation, two screens visible at
+once. The user spotted it immediately: "is the logic hardcoded?"
+
+The two strings were written months apart in unrelated PRs. Nothing
+linked them. There's no test that asserts label parity because labels
+are display prose, not contract.
+
+**The fix took 2 lines.** Frontend handler now constructs the same
+descriptor the backend would:
+
+```ts
+// Before — drifts the second one side is updated
+startBusy(featureId, "Generating tasks")
+
+// After — matches the backend's single_agent_call(label=...) by construction
+startBusy(featureId, `BPD Pass 3 · Generating Atomic Tasks for ${featureTitle.slice(0, 40)}`)
+```
+
+**What to do when you see this pattern:**
+
+1. **When ONE layer first writes a user-visible label**, decide
+   immediately: is this string going to appear in MORE than one
+   place? If yes, pick a single source of truth before shipping:
+   - **API as truth**: backend includes the rendered label in its
+     response (`meta.label`); frontend just displays `response.meta.label`.
+     Pro: zero drift, zero new code on the frontend. Con: requires
+     a new response field.
+   - **Shared helper as truth**: both layers call the same pure
+     function. Frontend imports a `buildBPDLabel(pass, title)`
+     helper; backend imports the same helper. Pro: typed, testable,
+     no API change. Con: requires sharing code across the
+     Python/TypeScript boundary (usually via a code-gen step or
+     a hand-mirrored utility).
+   - **Template-by-convention**: both layers follow a documented
+     template string format. Pro: simplest. Con: relies on humans
+     reading the docs. This is what L21's fix used as the pragmatic
+     short-term option; longer term option 1 or 2 wins.
+
+2. **When you UPDATE a label**, grep for the string before assuming
+   you've changed it everywhere:
+   - `git grep "BPD Pass 3 · Generating"` finds all variants
+   - If the grep returns multiple files in different languages
+     (`.py` + `.tsx`), the L21 risk is live — fix the parity before
+     shipping the change
+
+3. **When you find a drift**, prefer the more-descriptive form. The
+   reader's worst experience is a context-free `"Working"`. The
+   second-worst is two contradicting descriptive strings. The best
+   is one specific string everywhere.
+
+**Why nothing automatic caught this:**
+
+- Type system: both `string`. Can't differentiate.
+- Tests: existed for the data flow (does `feature_id` make it to the
+  DB?) but not for the label content. Asserting `"the chip shows the
+  same prose as the feed"` requires either an integration test that
+  starts both layers and reads pixels, or a static check that diffs
+  the two label-construction sites. Neither was in place.
+- Lint: no way to flag "this string template might exist elsewhere".
+
+The structural fix (option 1 or 2 above) would have caught this
+because the second site wouldn't have been able to drift —
+it'd have referenced the same source.
+
+**Related lessons:**
+
+- **L20 (verify wire format)**: same family of "two layers, one
+  truth gap". L20 was about a serializer dropping a field on the
+  wire; L21 is about two serializers writing the same field
+  differently. The same defensive instinct — "before you blame
+  caching, look at what the API actually carries" — applies.
+- **L11 (whole-file scan)**: when you change a label, scan the
+  WHOLE codebase, not just the file you're working in. The drift
+  here would have been spotted at update time if the dev had
+  grepped for the prefix.
+
+**Observed: 2026-05-25. The BPD Pass 3 row chip vs Active Agents
+feed label diverged for at least 2 days before a user reported the
+mismatch.**
+
+---
+
 ## How to add a new lesson
 
 When a new failure pattern is observed in production:
@@ -1096,3 +1195,288 @@ When a new failure pattern is observed in production:
   the third option is the API serializer in the middle. Also includes
   a useMemo dev-warning pattern that converts the future occurrence
   of this class into a single console line.
+- **2026-05-25 (cross-layer label drift)** — Added L21 (single source
+  of truth for cross-layer labels). The BPD Pass 3 activity label
+  diverged between two visible surfaces: the row's `BUSY · …` chip
+  said `"Generating tasks"` (frontend hardcoded) while the Active
+  Agents feed said `"BPD Pass 3 · Generating Atomic Tasks for <feature>"`
+  (backend `single_agent_call(label=...)`). Both screens visible
+  at once. User spotted it before any test did. Short-term fix: 2-line
+  template alignment in the frontend handler. Long-term: pass the
+  label from the backend response (`meta.label`) or share a helper
+  so the two layers can't drift by construction. The lesson includes
+  three structural options (API-as-truth / shared-helper / template-
+  by-convention) ranked by drift resistance, plus a grep recipe for
+  catching multi-language label sites at update time.
+
+
+---
+
+## L24 — Per-process inflight guard for fire-and-forget event handlers
+
+**Signature:** Event handler does `asyncio.create_task(_run_in_background())`;
+the event fires repeatedly during a sustained incident; each invocation
+kicks off ANOTHER background task; the same expensive action (LLM call,
+rollback queue insert, file write) runs N times in parallel.
+
+**Cause:** The EventEmitter pattern fans every event to every handler. If
+the handler returns immediately (the right call for broadcast pipeline
+throughput) and spawns a background task, the handler is re-entered before
+that task completes. Without a guard, the system DDOSes itself: the
+`self_learning_agent` runs 3× on a single failure because the orchestrator
+emits `request.failed` from three code paths; the `ops_heal_handler` queues
+multiple `auto_rollback` calls during one outage because the sweeper keeps
+emitting `deploy_health.anomaly_detected` while metrics stay bad.
+
+**Fix — module-level inflight set keyed by the relevant scope:**
+
+```python
+_INFLIGHT: set[str] = set()  # module-level, per-process
+
+async def _handler(event_type, data):
+    if event_type != MY_EVENT:
+        return
+    key = data["request_id"]  # or env, or whatever scope makes sense
+    if key in _INFLIGHT:
+        logger.debug("handler_skipped_inflight", key=key)
+        return
+
+    async def _run():
+        _INFLIGHT.add(key)
+        try:
+            await do_expensive_work(...)
+        finally:
+            _INFLIGHT.discard(key)  # MUST be in finally
+
+    asyncio.create_task(_run())
+```
+
+Three places shipping today use this pattern:
+`src/core/self_learning_trigger.py::_INFLIGHT_REQUESTS` (keyed by
+request_id), `src/core/ops_heal_handler.py::_INFLIGHT` (keyed by env),
+and `src/tools/auto_rollback.py` defends in depth via a DB query rather
+than an in-memory set (the AET-29 idempotency check), because the rollback
+queue persists across process restarts where an in-memory set wouldn't.
+
+**Trade-off:** an in-memory set doesn't survive a backend restart. For
+short-running handlers (≤60s) that's fine — a restart is its own reset
+signal. For multi-minute work or anything that MUST be idempotent across
+restarts (rollbacks, payments, deletions), back the guard with a DB row.
+Both approaches are valid; pick by lifetime.
+
+**Observed in:** AET-11 (self_learning), AET-29 (auto_rollback DB-backed
+idempotency), AET-31 (ops_heal_handler in-memory guard).
+
+
+---
+
+## L25 — INSUFFICIENT_DATA is a verdict, not a failure
+
+**Signature:** A rolling-window decision tool (SLO check, anomaly detector,
+rate-limiter) computes its metric on N=2 samples right after a cold start.
+The math is statistically meaningless but the tool returns a "real" answer
+— BREACH on availability=0% (because both probes happened to be the cold
+start), or OK on baseline of two samples. A downstream consumer
+auto-rollbacks the env that just came up clean. The system now flaps
+on every restart.
+
+**Cause:** Treating "below threshold" and "not enough data to know"
+as the same code path. Z-scores on 2 baseline samples are pure noise.
+Percentiles on 1 latency are the latency itself. Availability on 3
+probes can swing from 100% to 33% on a single bad sample.
+
+**Fix — explicit INSUFFICIENT_DATA verdict + a min_samples floor
+enforced BEFORE evaluation:**
+
+| Tool | min_samples | Verdict on shortage |
+|---|---|---|
+| `slo_check` (AET-28) | 3 (per env, from slo.yaml) | `INSUFFICIENT_DATA`, never `BREACH` |
+| `anomaly_detect` (AET-27) | 10 baseline + 2 current | `INSUFFICIENT_DATA`, no alerts emitted |
+| `auto_rollback` (AET-29) | 5 in the sustain window | `insufficient_data`, no queue insert |
+| `ops_heal_handler` (AET-31) | reads above verdicts | maps `INSUFFICIENT_DATA` → `ops.alert.fired` with `severity=insufficient_data`, NEVER rollback |
+
+The downstream handler MUST also know what `INSUFFICIENT_DATA` means in
+its context. Mapping it to "neutral / do nothing" in one consumer and
+"alert with a self-healing prognosis" in another is correct — both are
+fine; what's wrong is collapsing it to PASS or FAIL.
+
+**Tunables matter.** Pick `min_samples` based on probe cadence:
+60s probes × 3 = 3min of data; 10s probes × 10 = ~100s. Too low =
+false positives during cold starts; too high = real outages
+go undetected for minutes.
+
+**Observed in:** AE-1 ops tools (AET-25 through AET-31).
+
+
+---
+
+## L26 — Z-score baselines must EXCLUDE the current window
+
+**Signature:** A z-score anomaly detector compares "current 5min mean"
+against "rolling 1hr baseline" where the baseline includes the current
+5min. A sustained anomaly slowly poisons its own baseline: at minute
+5 the deviation is large, at minute 30 the baseline has crept toward
+the bad value and deviation shrinks, by minute 60 the alert
+self-extinguishes — exactly when the incident is most established.
+
+**Cause:** Convenience. "Rolling 1hr" is easier to express than "rolling
+1hr excluding the current 5min." The window-arithmetic looks correct on
+paper because the current sample is a small fraction of 60min of history.
+But statistical drift doesn't care about your intuition: a sustained
++3σ deviation that lasts 30min will fully poison the baseline of any
+detector that doesn't carve out an exclusion zone.
+
+**Fix — partition probes into two non-overlapping windows:**
+
+```python
+now = datetime.utcnow()
+baseline_since = now - timedelta(minutes=BASELINE_WINDOW_M)  # 60
+current_since  = now - timedelta(minutes=CURRENT_WINDOW_M)   # 5
+
+probes = state.list_probes(env, since=baseline_since)
+baseline_probes = [p for p in probes if p.recorded_at < current_since]
+current_probes  = [p for p in probes if p.recorded_at >= current_since]
+
+# Compute mean/stddev from baseline_probes ONLY. current is the test set.
+```
+
+The test that pins this contract is
+`tests/test_ops_tools_smoke.py::test_anomaly_detect_excludes_current_from_baseline`
+— seeds 20 baseline probes at 100ms + 5 current at 500ms; without the
+exclusion guard the baseline would drift toward 180ms and the deviation
+would shrink to nothing. With the guard, baseline stays at ~100ms and
+the 4σ deviation correctly stays visible.
+
+**Companion guard: MIN_SIGMA floor.** Even with exclusion, a perfectly
+flat baseline (sigma → 0) divides by zero. Cap σ at a per-metric floor
+(`response_time_ms`: 1.0, `error_rate_5m`: 0.001) so a 1ms wobble against
+a 100ms perfectly-flat baseline produces deviation=1.0σ (sub-threshold),
+not deviation=∞ (false alert).
+
+**Observed in:** AET-27 (anomaly_detect implementation).
+
+
+---
+
+## L27 — Deterministic gate decisions beat LLM self-judgment
+
+**Signature:** A workflow gate emits "Verdict: PASS" or "Verdict: FAIL"
+in prose. The downstream runner parses the prose, gets it right 95% of
+the time, blocks the workflow when an unfortunate sentence happens to
+contain "fail" inside another word. Or worse: the LLM hallucinates a
+PASS verdict on an objectively failing input because it was trained
+to be helpful.
+
+**Cause:** Using the agent's prose as the gate input lets natural-language
+ambiguity decide whether a build merges. The agent has all the data
+it needs to make a deterministic call — but we're throwing that data
+away and asking the LLM to summarize, then asking the runner to parse
+the summary.
+
+**Fix — structured emission, deterministic verdict:**
+
+Three paths shipping today follow this pattern:
+
+1. **AE-3 (quality_guardian, AET-06):** the agent calls `policy_check`
+   which returns `{verdict, violations[]}` as JSON. The runner uses
+   `verdict` directly. The prose Verdict line is for humans; the gate
+   doesn't read it.
+
+2. **AE-4 (security_specialist, AET-21):** the agent emits a fenced
+   JSON block (tag `security-report-json`) containing the union of
+   its tools' structured outputs. The runner parses that JSON and
+   applies `security_threshold.is_blocking()` per finding. Falls back
+   to prose parsing for back-compat but logs
+   `security_report_no_json_block` so operators can spot drift.
+
+3. **AE-1 (ops_heal_handler, AET-31):** the handler runs the
+   slo_check → auto_rollback decision tree ITSELF, deterministically,
+   not by asking the LLM. Completes in <100ms vs ~30s for an LLM call,
+   which matters when a real outage is happening.
+
+**Three benefits worth the upfront work:**
+
+- **Testable** — a JSON schema can be asserted against; a prose
+  Verdict line can't be (you would be testing a regex).
+- **Fast** — gate decision is microseconds vs seconds.
+- **Auditable** — the structured payload goes into events and DB
+  rows; an operator can reconstruct WHY a build blocked from cold
+  data, without re-running the agent.
+
+**When NOT to use this:** for gates whose decision genuinely
+requires prose understanding (e.g. "is this commit message
+acceptable" — there is no schema). For everything else, if the
+decision can be a pure function of structured input, it SHOULD be.
+
+**Observed in:** AET-06, AET-21, AET-31.
+
+
+---
+
+## L28 — Background asyncio tasks need clean shutdown in FastAPI lifespan
+
+**Signature:** A FastAPI lifespan spawns a background task
+(`asyncio.create_task(...)`) but doesn't track or cancel it. On
+shutdown the task gets garbage-collected mid-await; pytest reports
+`Task was destroyed but it is pending!`; production sees half-written
+DB rows on hot restart; tests intermittently leak file handles.
+
+**Cause:** `asyncio.create_task()` returns a handle the caller must hold.
+If nothing holds the handle, Python may GC the task at any moment. Even
+when something holds it, the lifespan's `yield` returns without canceling
+it — so the runtime tears down the event loop with the task still
+in-flight. Awaiting your own running task in shutdown can deadlock,
+so the naive `await task` doesn't work either.
+
+**Fix — store on `app.state`, cancel + await on shutdown:**
+
+```python
+@asynccontextmanager
+async def lifespan(app):
+    # startup …
+    app.state.my_task = asyncio.create_task(
+        my_loop(),
+        name="my_background_loop",  # named for ps / debugger introspection
+    )
+    yield
+    # Shutdown
+    t = getattr(app.state, "my_task", None)
+    if t is not None and not t.done():
+        t.cancel()
+        try:
+            await t
+        except (asyncio.CancelledError, Exception):
+            pass  # cancellation + last-iteration exceptions are expected
+    # close DB etc …
+```
+
+The pattern ships in `src/main.py::lifespan` for the AET-31 anomaly
+sweeper. Four ingredients are required:
+
+| # | Ingredient | Why |
+|---|---|---|
+| 1 | Stash the handle on `app.state.<name>_task` | Survives lifespan scope; visible to tests via `app.state` |
+| 2 | Pass `name=` to `create_task` | Lets `ps`, `py-spy`, and asyncio's debug mode show what's running |
+| 3 | `t.cancel()` THEN `await t` | Cancel sends CancelledError into the task; await drains it |
+| 4 | `except (CancelledError, Exception)` | Cancellation IS an exception; one final-iteration crash shouldn't fail shutdown |
+
+**Inner loop shape that cooperates with cancellation:**
+
+```python
+async def my_loop():
+    await asyncio.sleep(STARTUP_DELAY)
+    while True:
+        try:
+            await do_one_pass()
+        except Exception as e:
+            logger.warning("loop_pass_error", error=str(e))
+        await asyncio.sleep(INTERVAL_S)  # this is the cancel point
+```
+
+`asyncio.sleep` is a cancellation point; `try/except Exception` inside
+the loop catches per-iteration crashes without breaking the loop AND
+without swallowing `CancelledError` (which is `BaseException`, not
+`Exception`). That last detail matters: `except Exception` lets cancel
+propagate; `except BaseException` would deadlock the shutdown.
+
+**Observed in:** AET-31 (anomaly sweeper lifespan integration).

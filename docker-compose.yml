@@ -44,6 +44,9 @@ services:
       # Any worktree-local doc edits won't be visible to the running container;
       # commit them to a branch first to make them accessible.
       - C:/ai-projects/claude-agent-team/docs:/app/docs
+      # KB-06 — CLAUDE.md (conventions) mounted read-only so the platform-corpus
+      # reindex can ingest it into the "Platform" knowledge bucket.
+      - C:/ai-projects/claude-agent-team/CLAUDE.md:/app/CLAUDE.md:ro
       # PM-finalize feature — when a user clicks "Finalize PRD" or "Finalize
       # Tasks" we write the markdown to C:/ai-projects/<ProjectName>/docs/
       # on the host. The backend writes through this mount; inside the
@@ -60,6 +63,10 @@ services:
       - ./data:/app/data
       - agent-team-reports:/app/reports
       - agent-team-backups:/app/backups
+      # KB-13a — fastembed ONNX model cache. The local embedding model
+      # (~130 MB) downloads once from HuggingFace and persists here, so
+      # restarts don't re-download. Survives across worktrees (named volume).
+      - agent-team-fastembed:/app/.fastembed_cache
     env_file:
       - .env
     environment:
@@ -68,14 +75,56 @@ services:
       # Claude Platform on AWS — see docs/setup-claude-platform-on-aws.md.
       # ANTHROPIC_AWS_API_KEY and ANTHROPIC_AWS_WORKSPACE_ID come from .env.
       - AWS_REGION=${AWS_REGION:-us-east-1}
+      # KB-01 — Knowledge Base datastore. Backend reaches Postgres at the
+      # service hostname `postgres` on dev-net. Defaults match the postgres
+      # service below; override in .env.
+      - KB_PG_HOST=${KB_PG_HOST:-postgres}
+      - KB_PG_PORT=${KB_PG_PORT:-5432}
+      - KB_PG_USER=${KB_PG_USER:-agentteam}
+      - KB_PG_PASSWORD=${KB_PG_PASSWORD:-change-me-in-dev}
+      - KB_PG_DB=${KB_PG_DB:-agentteam_kb}
+      # KB-13a — local embedding model cache dir (persisted on the
+      # agent-team-fastembed volume).
+      - FASTEMBED_CACHE_PATH=/app/.fastembed_cache
     networks:
       - dev-net
+    # KB-01 — wait for Postgres to accept connections before boot. The backend
+    # still degrades gracefully if the KB is unavailable at runtime (NFR-007),
+    # but ordering the dependency avoids a noisy first boot.
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
       interval: 30s
       timeout: 5s
       start_period: 10s
       retries: 3
+
+  # ── KB-01 — Knowledge Base datastore: PostgreSQL 16 + pgvector ──────────
+  # Single container; pgvector is an extension INSIDE Postgres, not a separate
+  # service. Holds the agentic KB (kb_documents/kb_chunks/decision_ledger) and
+  # vector embeddings. Data persists in a NAMED volume (not a host bind mount):
+  # unlike the SQLite file, nothing on the host needs to read Postgres directly,
+  # and bind-mounting PG's data dir to a Windows path causes permission/locking
+  # grief. The platform's own state stays on SQLite (./data) — this is additive.
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agent-team-postgres
+    environment:
+      - POSTGRES_USER=${KB_PG_USER:-agentteam}
+      - POSTGRES_PASSWORD=${KB_PG_PASSWORD:-change-me-in-dev}
+      - POSTGRES_DB=${KB_PG_DB:-agentteam_kb}
+    volumes:
+      - agent-team-pgdata:/var/lib/postgresql/data
+    networks:
+      - dev-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KB_PG_USER:-agentteam} -d ${KB_PG_DB:-agentteam_kb}"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
 
   frontend:
     build:
@@ -110,6 +159,8 @@ volumes:
   # agent-team-data is now bind-mounted to ./data (see backend.volumes above)
   agent-team-reports:
   agent-team-backups:
+  agent-team-pgdata:   # KB-01 — Postgres + pgvector data (named volume)
+  agent-team-fastembed:  # KB-13a — local embedding model cache (fastembed ONNX)
 
 networks:
   dev-net:

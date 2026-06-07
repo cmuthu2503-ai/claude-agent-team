@@ -15,7 +15,9 @@ from src.models.base import (
     ArtifactStatus,
     BuildMessage,
     DeployDecision,
+    DeployHealthProbe,
     DeploymentState,
+    RollbackRequest,
     Document,
     Artifact,
     Deployment,
@@ -41,6 +43,23 @@ from src.models.base import (
     UserRole,
 )
 from src.state.base import StateStore
+
+
+def _load_curator_scopes(row: Any) -> list[str]:
+    """KB-29 — parse a user row's ``kb_curator_scopes`` JSON, tolerating an
+    older row read before the column migration applied."""
+    try:
+        raw = row["kb_curator_scopes"]
+    except (KeyError, IndexError):
+        return []
+    if not raw:
+        return []
+    try:
+        val = json.loads(raw)
+        return [str(s) for s in val] if isinstance(val, list) else []
+    except (ValueError, TypeError):
+        return []
+
 
 SCHEMA_SQL = """
 -- Requests & Subtasks
@@ -131,6 +150,7 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL DEFAULT 'developer',
     is_active BOOLEAN DEFAULT 1,
     must_change_password BOOLEAN DEFAULT 0,
+    kb_curator_scopes TEXT NOT NULL DEFAULT '[]',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_login_at TIMESTAMP
 );
@@ -253,6 +273,100 @@ CREATE TABLE IF NOT EXISTS deployment_states (
 
 CREATE INDEX IF NOT EXISTS idx_deployment_states_request ON deployment_states(request_id);
 CREATE INDEX IF NOT EXISTS idx_deployment_states_step ON deployment_states(current_step);
+
+-- AET-23 — Deploy Health Probes (Phase AE-1 ops_heal_agent foundation)
+--
+-- Written every 60s by the supervisor's background asyncio loop
+-- (AET-24) for every deploy in `running` state. Each row is one
+-- snapshot of a single environment's live health. The ops_heal_agent
+-- reads recent rows via slo_check (AET-25) + anomaly_detect (AET-26)
+-- to decide whether to fire auto_rollback (AET-27).
+--
+-- Why a separate table from deployments / deployment_states:
+--   - deployments    = once per deploy lifecycle event (created at
+--                      deploy time, mutated at terminal state)
+--   - deployment_states = supervisor state machine row, also lifecycle
+--   - deploy_health  = APPEND-ONLY time-series, many rows per deploy.
+--                      Schema and lifetime are different — keeping
+--                      them separate avoids hot-row contention on
+--                      deployment_states during probe writes.
+--
+-- recorded_at is the probe TIMESTAMP, not insert time, so backfills
+-- from a paused/restarted supervisor land at their true time.
+--
+-- raw_metrics_json holds whatever the probe collected (HTTP timing
+-- breakdown, per-container CPU/RAM, GC stats, …) so future SLOs can
+-- query historical raw data without a schema migration. The top-level
+-- columns are denormalised projections used by the hot paths
+-- (slo_check rolling-window queries, the live Ops Console chart in
+-- AET-28). When in doubt, add to raw_metrics_json first; promote to
+-- a column only when a query needs an index on it.
+CREATE TABLE IF NOT EXISTS deploy_health (
+    probe_id TEXT PRIMARY KEY,
+    deploy_id TEXT NOT NULL,
+    env TEXT NOT NULL,                   -- 'development' | 'staging' | 'production' | 'demo'
+    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    response_time_ms INTEGER,            -- p50 of probe's HTTP samples in the 60s window
+    error_rate_5m REAL,                  -- fraction (0.0-1.0) over rolling 5m, NOT percent
+    http_status INTEGER,                 -- status of the synthetic health-check call
+    restart_count INTEGER DEFAULT 0,     -- container restarts in the last 5m
+    raw_metrics_json TEXT DEFAULT '{}'   -- escape hatch — schema-on-read
+);
+
+-- Hot index for the rolling-window scans slo_check and anomaly_detect
+-- run on every probe cycle: "last 5m / 15m of rows for env=X". A
+-- (env, recorded_at DESC) covering index lets the planner serve them
+-- without touching the table heap. Without this, a multi-day demo
+-- environment with ~1440 rows/day would do a full table scan every
+-- 60s.
+CREATE INDEX IF NOT EXISTS idx_deploy_health_env_recorded
+    ON deploy_health(env, recorded_at DESC);
+
+-- Secondary index — Ops Console (AET-28) needs to render "all probes
+-- for THIS deploy" when an operator drills into a single rollout.
+-- Smaller cardinality than env so it doesn't compete with the hot
+-- index above.
+CREATE INDEX IF NOT EXISTS idx_deploy_health_deploy
+    ON deploy_health(deploy_id, recorded_at DESC);
+
+-- AET-29 — Rollback request queue (Phase AE-1 ops_heal_agent)
+--
+-- The ops_heal_agent fires `auto_rollback` after observing a
+-- sustained SLO breach. The tool runs inside the backend container;
+-- the actual `git revert + docker compose up -d` work runs on the
+-- HOST via the supervisor. This table is the hand-off — the agent
+-- inserts a `pending` row, the supervisor polls for it, executes
+-- the rollback, then transitions status to `completed` / `failed`.
+--
+-- Idempotency contract (the auto_rollback tool relies on it):
+--   - At most one row with status='pending' or 'in_flight' per env
+--     at any moment. The tool checks this BEFORE inserting and
+--     returns 'already_in_flight' instead of queuing a duplicate.
+--   - Once a row reaches a terminal state ('completed', 'failed',
+--     'rejected') a new pending row is allowed — that's the
+--     correct behaviour if the env breaches again after recovery.
+--
+-- We don't use a UNIQUE constraint to enforce the at-most-one rule
+-- because partial-status uniqueness is fiddly in SQLite. The tool's
+-- explicit query is clearer and easier to test.
+CREATE TABLE IF NOT EXISTS rollback_requests (
+    request_id TEXT PRIMARY KEY,
+    deploy_id TEXT NOT NULL,
+    env TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending | in_flight | completed | failed | rejected
+    reason TEXT DEFAULT '',                    -- caller-supplied (typically slo_check.summary)
+    requested_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    rollback_sha TEXT DEFAULT '',              -- target commit the supervisor reverted to
+    error_message TEXT,
+    requested_by TEXT DEFAULT 'ops_heal_agent' -- audit trail: agent or human
+);
+
+-- Hot index for the supervisor's "give me the next pending row"
+-- query AND the auto_rollback tool's idempotency check.
+CREATE INDEX IF NOT EXISTS idx_rollback_requests_env_status
+    ON rollback_requests(env, status);
 
 -- Documents (Knowledge Base)
 CREATE TABLE IF NOT EXISTS documents (
@@ -487,6 +601,26 @@ CREATE TABLE IF NOT EXISTS deploy_decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_deploy_decisions_project_status
   ON deploy_decisions(project_id, status, created_at);
+
+-- PAM-09 — per-agent model override.
+-- Layer 2 of ModelResolver's 5-layer precedence chain. Each row says
+-- "for agent X, run on model Y instead of the YAML/env/catalog default."
+-- The agent_id column is the PRIMARY KEY so there's at most one
+-- override per agent — set wins by upsert, clear by delete.
+-- ``model_id`` is the catalog id (config/models.yaml key), not a
+-- vendor model string — the resolver validates it against
+-- ``ModelCatalog.has()`` before honouring it. The PUT route at
+-- /api/v1/agents/{id}/model also rejects unknown ids up front.
+-- No FK on agent_id because agents live in YAML, not a SQL table.
+CREATE TABLE IF NOT EXISTS agent_model_overrides (
+    agent_id TEXT PRIMARY KEY,
+    model_id TEXT NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- updated_by is the user_id from the JWT (or 'system' for
+    -- programmatic writes). Used by the audit log on the Team
+    -- Status overrides panel.
+    updated_by TEXT NOT NULL DEFAULT 'system'
+);
 """
 
 
@@ -693,6 +827,16 @@ class SQLiteStateStore(StateStore):
             "UPDATE token_usage SET project_id = ("
             "  SELECT project_id FROM requests WHERE requests.request_id = token_usage.request_id"
             ") WHERE project_id IS NULL AND request_id != ''",
+            # KB-09/KB-10 — per-request Knowledge Base grounding scope. JSON
+            # array of kb_bucket ids the user selected on submit; agents are
+            # hard-sealed to these buckets for retrieval. Empty '[]' = platform
+            # knowledge only (no app buckets). Nullable-safe via _safe_get.
+            "ALTER TABLE requests ADD COLUMN bucket_ids TEXT NOT NULL DEFAULT '[]'",
+            # KB-29 — per-user knowledge-base curator scopes (JSON array of
+            # "platform" | project_id | "*"). Empty default keeps existing
+            # users non-curators; admins/developers are implicit curators in
+            # the app layer regardless of this column.
+            "ALTER TABLE users ADD COLUMN kb_curator_scopes TEXT NOT NULL DEFAULT '[]'",
         ]
         for stmt in migrations:
             try:
@@ -749,8 +893,8 @@ class SQLiteStateStore(StateStore):
                (request_id, description, task_type, priority, status, tags,
                 created_by, created_at, estimated_cost_usd, provider,
                 published_files, commit_sha, commit_url, project_id,
-                source_task_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                source_task_id, bucket_ids)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 request.request_id,
                 request.description,
@@ -767,6 +911,7 @@ class SQLiteStateStore(StateStore):
                 request.commit_url,
                 request.project_id,
                 request.source_task_id,
+                json.dumps(request.bucket_ids),
             ),
         )
         await db.commit()
@@ -904,7 +1049,19 @@ class SQLiteStateStore(StateStore):
             code_commit_error=_safe_get("code_commit_error"),
             project_id=_safe_get("project_id"),
             source_task_id=_safe_get("source_task_id"),
+            bucket_ids=self._load_json_list(_safe_get("bucket_ids")),
         )
+
+    @staticmethod
+    def _load_json_list(raw: Any) -> list[str]:
+        """Parse a JSON-array column into a list[str]; tolerate NULL/garbage."""
+        if not raw:
+            return []
+        try:
+            val = json.loads(raw)
+            return [str(x) for x in val] if isinstance(val, list) else []
+        except Exception:
+            return []
 
     # ── Subtasks ─────────────────────────────────
 
@@ -969,6 +1126,24 @@ class SQLiteStateStore(StateStore):
         ) as cursor:
             rows = await cursor.fetchall()
         return [self._row_to_subtask(r) for r in rows]
+
+    async def count_subtasks_by_agent(self) -> dict[str, int]:
+        """AET-37 — returns {agent_id: total_subtasks_ever} for every
+        agent that has run at least one subtask in this DB. Agents
+        with no historical subtasks are absent from the dict; the
+        caller defaults to 0. Powers the SCAFFOLD badge on Team Status
+        — distinguishes 'configured + never invoked' (cosmetic) from
+        'configured + actually running work' (functional).
+
+        Counts ALL statuses (pending / in_progress / completed / failed),
+        not just completed, so a still-running scaffold-busting first
+        invocation flips the badge off immediately."""
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT agent_id, COUNT(*) AS n FROM subtasks GROUP BY agent_id"
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return {r["agent_id"]: r["n"] for r in rows}
 
     def _row_to_subtask(self, row: aiosqlite.Row) -> Subtask:
         return Subtask(
@@ -1334,8 +1509,8 @@ class SQLiteStateStore(StateStore):
         await db.execute(
             """INSERT INTO users
                (user_id, username, email, password_hash, role, is_active,
-                must_change_password, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                must_change_password, kb_curator_scopes, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 user.user_id,
                 user.username,
@@ -1344,6 +1519,7 @@ class SQLiteStateStore(StateStore):
                 user.role,
                 user.is_active,
                 user.must_change_password,
+                json.dumps(user.kb_curator_scopes or []),
                 user.created_at.isoformat(),
             ),
         )
@@ -1365,6 +1541,7 @@ class SQLiteStateStore(StateStore):
             role=UserRole(row["role"]),
             is_active=bool(row["is_active"]),
             must_change_password=bool(row["must_change_password"]),
+            kb_curator_scopes=_load_curator_scopes(row),
             created_at=datetime.fromisoformat(row["created_at"]),
             last_login_at=(
                 datetime.fromisoformat(row["last_login_at"]) if row["last_login_at"] else None
@@ -1385,6 +1562,7 @@ class SQLiteStateStore(StateStore):
             role=UserRole(row["role"]),
             is_active=bool(row["is_active"]),
             must_change_password=bool(row["must_change_password"]),
+            kb_curator_scopes=_load_curator_scopes(row),
             created_at=datetime.fromisoformat(row["created_at"]),
             last_login_at=(
                 datetime.fromisoformat(row["last_login_at"]) if row["last_login_at"] else None
@@ -1403,6 +1581,7 @@ class SQLiteStateStore(StateStore):
                 role=UserRole(r["role"]),
                 is_active=bool(r["is_active"]),
                 must_change_password=bool(r["must_change_password"]),
+                kb_curator_scopes=_load_curator_scopes(r),
                 created_at=datetime.fromisoformat(r["created_at"]),
                 last_login_at=(
                     datetime.fromisoformat(r["last_login_at"]) if r["last_login_at"] else None
@@ -1415,12 +1594,13 @@ class SQLiteStateStore(StateStore):
         db = await self._get_db()
         await db.execute(
             """UPDATE users SET email=?, role=?, is_active=?,
-               must_change_password=?, last_login_at=? WHERE user_id=?""",
+               must_change_password=?, kb_curator_scopes=?, last_login_at=? WHERE user_id=?""",
             (
                 user.email,
                 user.role,
                 user.is_active,
                 user.must_change_password,
+                json.dumps(user.kb_curator_scopes or []),
                 user.last_login_at.isoformat() if user.last_login_at else None,
                 user.user_id,
             ),
@@ -2916,6 +3096,143 @@ class SQLiteStateStore(StateStore):
         )
         await db.commit()
 
+    async def finalize_epic_subtree(self, epic_id: str) -> dict[str, int]:
+        """Flip one epic + every feature under it + every task under those
+        features to ``list_status='finalized'``.
+
+        Per-row alternative to the project-wide ``finalize_epic_list``.
+        Lets the user incrementally lock in epics as they review them —
+        epic A goes finalized, epic B stays draft, regenerate is still
+        safe on B alone.
+
+        Idempotent: rows already finalized stay finalized. Archived rows
+        are not touched (they'd otherwise un-archive themselves which
+        would corrupt history).
+
+        Returns counts so the caller can surface what was just locked.
+        """
+        db = await self._get_db()
+        now_iso = datetime.utcnow().isoformat()
+        # Epic
+        cur = await db.execute(
+            "UPDATE epics SET list_status=?, updated_at=? "
+            "WHERE epic_id=? AND list_status=?",
+            (str(ArtifactStatus.FINALIZED), now_iso, epic_id,
+             str(ArtifactStatus.DRAFT)),
+        )
+        epics_n = cur.rowcount or 0
+        # Features under it
+        cur = await db.execute(
+            "UPDATE features SET list_status=?, updated_at=? "
+            "WHERE epic_id=? AND list_status=?",
+            (str(ArtifactStatus.FINALIZED), now_iso, epic_id,
+             str(ArtifactStatus.DRAFT)),
+        )
+        features_n = cur.rowcount or 0
+        # Tasks under those features
+        cur = await db.execute(
+            "UPDATE project_tasks SET list_status=?, updated_at=? "
+            "WHERE feature_id IN (SELECT feature_id FROM features WHERE epic_id=?) "
+            "AND list_status=?",
+            (str(ArtifactStatus.FINALIZED), now_iso, epic_id,
+             str(ArtifactStatus.DRAFT)),
+        )
+        tasks_n = cur.rowcount or 0
+        await db.commit()
+        return {"epics": epics_n, "features": features_n, "tasks": tasks_n}
+
+    async def finalize_feature_subtree(self, feature_id: str) -> dict[str, int]:
+        """Flip one feature + every task under it to ``list_status='finalized'``.
+
+        Same pattern as ``finalize_epic_subtree`` but scoped one level
+        deeper. The parent epic is NOT auto-finalized — finalizing a
+        feature doesn't imply the surrounding epic structure is locked.
+        """
+        db = await self._get_db()
+        now_iso = datetime.utcnow().isoformat()
+        cur = await db.execute(
+            "UPDATE features SET list_status=?, updated_at=? "
+            "WHERE feature_id=? AND list_status=?",
+            (str(ArtifactStatus.FINALIZED), now_iso, feature_id,
+             str(ArtifactStatus.DRAFT)),
+        )
+        features_n = cur.rowcount or 0
+        cur = await db.execute(
+            "UPDATE project_tasks SET list_status=?, updated_at=? "
+            "WHERE feature_id=? AND list_status=?",
+            (str(ArtifactStatus.FINALIZED), now_iso, feature_id,
+             str(ArtifactStatus.DRAFT)),
+        )
+        tasks_n = cur.rowcount or 0
+        await db.commit()
+        return {"features": features_n, "tasks": tasks_n}
+
+    async def unfinalize_epic_subtree(self, epic_id: str) -> dict[str, int]:
+        """Flip one epic + every feature under it + every task under those
+        features from ``finalized`` BACK to ``draft``.
+
+        Inverse of ``finalize_epic_subtree``. Lets the user undo an
+        accidental finalize click without going through the archive +
+        regenerate dance — which would lose the actual generated content.
+
+        Only touches rows currently in ``finalized``. Archived rows stay
+        archived (they were intentionally retired and shouldn't bounce
+        back to draft).
+
+        Returns counts of rows actually flipped so the UI can show what
+        was unlocked. Idempotent: already-draft rows are skipped.
+        """
+        db = await self._get_db()
+        now_iso = datetime.utcnow().isoformat()
+        cur = await db.execute(
+            "UPDATE epics SET list_status=?, updated_at=? "
+            "WHERE epic_id=? AND list_status=?",
+            (str(ArtifactStatus.DRAFT), now_iso, epic_id,
+             str(ArtifactStatus.FINALIZED)),
+        )
+        epics_n = cur.rowcount or 0
+        cur = await db.execute(
+            "UPDATE features SET list_status=?, updated_at=? "
+            "WHERE epic_id=? AND list_status=?",
+            (str(ArtifactStatus.DRAFT), now_iso, epic_id,
+             str(ArtifactStatus.FINALIZED)),
+        )
+        features_n = cur.rowcount or 0
+        cur = await db.execute(
+            "UPDATE project_tasks SET list_status=?, updated_at=? "
+            "WHERE feature_id IN (SELECT feature_id FROM features WHERE epic_id=?) "
+            "AND list_status=?",
+            (str(ArtifactStatus.DRAFT), now_iso, epic_id,
+             str(ArtifactStatus.FINALIZED)),
+        )
+        tasks_n = cur.rowcount or 0
+        await db.commit()
+        return {"epics": epics_n, "features": features_n, "tasks": tasks_n}
+
+    async def unfinalize_feature_subtree(self, feature_id: str) -> dict[str, int]:
+        """Flip one feature + its tasks from ``finalized`` back to ``draft``.
+        Inverse of ``finalize_feature_subtree``. Doesn't touch the
+        parent epic — a feature can be unlocked back to draft while
+        its surrounding epic stays finalized."""
+        db = await self._get_db()
+        now_iso = datetime.utcnow().isoformat()
+        cur = await db.execute(
+            "UPDATE features SET list_status=?, updated_at=? "
+            "WHERE feature_id=? AND list_status=?",
+            (str(ArtifactStatus.DRAFT), now_iso, feature_id,
+             str(ArtifactStatus.FINALIZED)),
+        )
+        features_n = cur.rowcount or 0
+        cur = await db.execute(
+            "UPDATE project_tasks SET list_status=?, updated_at=? "
+            "WHERE feature_id=? AND list_status=?",
+            (str(ArtifactStatus.DRAFT), now_iso, feature_id,
+             str(ArtifactStatus.FINALIZED)),
+        )
+        tasks_n = cur.rowcount or 0
+        await db.commit()
+        return {"features": features_n, "tasks": tasks_n}
+
     async def archive_epic_list(
         self, project_id: str, list_version: int
     ) -> None:
@@ -3504,3 +3821,293 @@ class SQLiteStateStore(StateStore):
             strategy_reasoning=_safe_get("strategy_reasoning") or "",
             risk=_safe_get("risk") or "",
         )
+
+    # ── Deploy Health Probes (AET-23) ──────────────────────────────
+
+    async def insert_deploy_health_probe(self, probe: DeployHealthProbe) -> None:
+        """Append a single probe row. Idempotent on probe_id (PRIMARY
+        KEY) via INSERT OR IGNORE — protects against the supervisor
+        retrying a write after a transient disk error without producing
+        duplicate samples that would skew the rolling-window averages."""
+        db = await self._get_db()
+        await db.execute(
+            """INSERT OR IGNORE INTO deploy_health
+               (probe_id, deploy_id, env, recorded_at,
+                response_time_ms, error_rate_5m, http_status,
+                restart_count, raw_metrics_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                probe.probe_id,
+                probe.deploy_id,
+                probe.env,
+                probe.recorded_at.isoformat(),
+                probe.response_time_ms,
+                probe.error_rate_5m,
+                probe.http_status,
+                probe.restart_count,
+                json.dumps(probe.raw_metrics or {}),
+            ),
+        )
+        await db.commit()
+
+    async def list_deploy_health_probes(
+        self,
+        env: str | None = None,
+        deploy_id: str | None = None,
+        since: datetime | None = None,
+        limit: int = 500,
+    ) -> list[DeployHealthProbe]:
+        """Rolling-window read for slo_check + anomaly_detect + the
+        Ops Console chart. At least one of ``env`` or ``deploy_id``
+        SHOULD be set or the query degenerates to a full-table scan
+        (still correct, just slow on a multi-day demo db). ``since``
+        is the lower bound on recorded_at; ``limit`` caps the result
+        set so a runaway caller can't pull megabytes of probes."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if env:
+            clauses.append("env = ?")
+            params.append(env)
+        if deploy_id:
+            clauses.append("deploy_id = ?")
+            params.append(deploy_id)
+        if since:
+            clauses.append("recorded_at >= ?")
+            params.append(since.isoformat())
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+
+        db = await self._get_db()
+        async with db.execute(
+            f"""SELECT probe_id, deploy_id, env, recorded_at,
+                       response_time_ms, error_rate_5m, http_status,
+                       restart_count, raw_metrics_json
+                FROM deploy_health
+                {where}
+                ORDER BY recorded_at DESC
+                LIMIT ?""",
+            (*params, limit),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_deploy_health_probe(r) for r in rows]
+
+    # ── Rollback Requests (AET-29) ─────────────────────────────────
+
+    async def get_in_flight_rollback_for_env(
+        self, env: str,
+    ) -> RollbackRequest | None:
+        """Idempotency primitive for auto_rollback. Returns the
+        most recent rollback request whose status is still pending
+        or in_flight for *env*; None when no rollback is active.
+        Tool callers query this BEFORE inserting to ensure at most
+        one in-flight rollback per env."""
+        db = await self._get_db()
+        async with db.execute(
+            """SELECT * FROM rollback_requests
+               WHERE env = ? AND status IN ('pending', 'in_flight')
+               ORDER BY requested_at DESC LIMIT 1""",
+            (env,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return self._row_to_rollback_request(row) if row else None
+
+    async def insert_rollback_request(self, req: RollbackRequest) -> None:
+        """Insert a new rollback request. The tool is responsible for
+        the idempotency check via ``get_in_flight_rollback_for_env``
+        BEFORE calling this — this method is intentionally a thin
+        insert so the caller can react to a conflict without us
+        swallowing the signal."""
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO rollback_requests
+               (request_id, deploy_id, env, status, reason,
+                requested_at, started_at, completed_at,
+                rollback_sha, error_message, requested_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                req.request_id,
+                req.deploy_id,
+                req.env,
+                req.status,
+                req.reason,
+                req.requested_at.isoformat(),
+                req.started_at.isoformat() if req.started_at else None,
+                req.completed_at.isoformat() if req.completed_at else None,
+                req.rollback_sha,
+                req.error_message,
+                req.requested_by,
+            ),
+        )
+        await db.commit()
+
+    async def update_rollback_request_status(
+        self, request_id: str, status: str,
+        rollback_sha: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        """Supervisor-side transition. Pending → in_flight when the
+        revert starts; in_flight → completed/failed when it finishes.
+        Updates `started_at` / `completed_at` based on the target status."""
+        db = await self._get_db()
+        now = datetime.utcnow().isoformat()
+        set_clauses = ["status = ?"]
+        params: list[Any] = [status]
+        if status == "in_flight":
+            set_clauses.append("started_at = ?")
+            params.append(now)
+        elif status in ("completed", "failed", "rejected"):
+            set_clauses.append("completed_at = ?")
+            params.append(now)
+        if rollback_sha is not None:
+            set_clauses.append("rollback_sha = ?")
+            params.append(rollback_sha)
+        if error_message is not None:
+            set_clauses.append("error_message = ?")
+            params.append(error_message)
+        params.append(request_id)
+        await db.execute(
+            f"UPDATE rollback_requests SET {', '.join(set_clauses)} "
+            f"WHERE request_id = ?",
+            params,
+        )
+        await db.commit()
+
+    async def list_pending_rollback_requests(self) -> list[RollbackRequest]:
+        """Supervisor-side pickup query. Returns all pending requests
+        ordered oldest-first so the supervisor processes the queue
+        FIFO."""
+        db = await self._get_db()
+        async with db.execute(
+            """SELECT * FROM rollback_requests
+               WHERE status = 'pending'
+               ORDER BY requested_at ASC"""
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_rollback_request(r) for r in rows]
+
+    def _row_to_rollback_request(self, row: aiosqlite.Row) -> RollbackRequest:
+        return RollbackRequest(
+            request_id=row["request_id"],
+            deploy_id=row["deploy_id"],
+            env=row["env"],
+            status=row["status"],
+            reason=row["reason"] or "",
+            requested_at=datetime.fromisoformat(row["requested_at"]),
+            started_at=(
+                datetime.fromisoformat(row["started_at"])
+                if row["started_at"] else None
+            ),
+            completed_at=(
+                datetime.fromisoformat(row["completed_at"])
+                if row["completed_at"] else None
+            ),
+            rollback_sha=row["rollback_sha"] or "",
+            error_message=row["error_message"],
+            requested_by=row["requested_by"] or "ops_heal_agent",
+        )
+
+    def _row_to_deploy_health_probe(self, row: aiosqlite.Row) -> DeployHealthProbe:
+        return DeployHealthProbe(
+            probe_id=row["probe_id"],
+            deploy_id=row["deploy_id"],
+            env=row["env"],
+            recorded_at=datetime.fromisoformat(row["recorded_at"]),
+            response_time_ms=row["response_time_ms"],
+            error_rate_5m=row["error_rate_5m"],
+            http_status=row["http_status"],
+            restart_count=row["restart_count"] or 0,
+            raw_metrics=(
+                json.loads(row["raw_metrics_json"])
+                if row["raw_metrics_json"] else {}
+            ),
+        )
+
+    # ── PAM-10 — agent_model_overrides CRUD ─────────────────────────────
+    # Layer 2 of ModelResolver's precedence chain. Each method is a
+    # single statement and intentionally tiny — the table has no FKs
+    # and no JSON columns, so there's no row → dataclass dance.
+
+    async def get_agent_model_override(self, agent_id: str) -> str | None:
+        """Return the operator-set model id for *agent_id*, or None if
+        no override exists. Called per agent invocation by
+        ``ModelResolver.resolve``; MUST be fast and side-effect-free."""
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT model_id FROM agent_model_overrides WHERE agent_id = ?",
+            (agent_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return row["model_id"] if row else None
+
+    async def set_agent_model_override(
+        self,
+        agent_id: str,
+        model_id: str,
+        updated_by: str = "system",
+    ) -> None:
+        """Upsert the override for *agent_id*. Caller (the
+        /api/v1/agents/{id}/model PUT route) is responsible for
+        validating that ``model_id`` exists in the catalog — the
+        resolver does its own membership check too, so a bad value
+        here would just be skipped at dispatch time, not crash.
+        ``updated_by`` is the user_id from the JWT (or 'system')."""
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO agent_model_overrides (agent_id, model_id, updated_at, updated_by)
+               VALUES (?, ?, CURRENT_TIMESTAMP, ?)
+               ON CONFLICT(agent_id) DO UPDATE SET
+                   model_id = excluded.model_id,
+                   updated_at = CURRENT_TIMESTAMP,
+                   updated_by = excluded.updated_by""",
+            (agent_id, model_id, updated_by),
+        )
+        await db.commit()
+
+    async def delete_agent_model_override(self, agent_id: str) -> bool:
+        """Remove the override. Returns True if a row existed (and was
+        deleted), False if there was nothing to remove. The /agents/{id}/model
+        DELETE route uses this to report 404 vs 204."""
+        db = await self._get_db()
+        cursor = await db.execute(
+            "DELETE FROM agent_model_overrides WHERE agent_id = ?",
+            (agent_id,),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+    async def list_agent_model_overrides(self) -> list[dict[str, Any]]:
+        """All current overrides — used by the Team Status overrides
+        panel to render the active set. Returns plain dicts (not a
+        dataclass) since the table is so small (4 columns) that wrapping
+        it adds no value."""
+        db = await self._get_db()
+        async with db.execute(
+            # rowid DESC as tiebreaker: SQLite's CURRENT_TIMESTAMP has
+            # 1-second resolution, so two overrides set in the same
+            # second would otherwise appear in undefined order. The
+            # implicit rowid increases monotonically per INSERT, so it
+            # disambiguates correctly even when upserts share a second.
+            """SELECT agent_id, model_id, updated_at, updated_by
+               FROM agent_model_overrides
+               ORDER BY updated_at DESC, rowid DESC"""
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [
+            {
+                "agent_id": r["agent_id"],
+                "model_id": r["model_id"],
+                "updated_at": r["updated_at"],
+                "updated_by": r["updated_by"],
+            }
+            for r in rows
+        ]
+
+    async def clear_all_agent_model_overrides(self) -> int:
+        """Wipe every override at once. Returns the number of rows
+        deleted. The Team Status "Reset to defaults" button calls this
+        — typically after an incident where the operator flipped a
+        bunch of agents to a cheaper/faster model and wants the YAML
+        defaults back in one click."""
+        db = await self._get_db()
+        cursor = await db.execute("DELETE FROM agent_model_overrides")
+        await db.commit()
+        return cursor.rowcount

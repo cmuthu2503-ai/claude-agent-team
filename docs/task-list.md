@@ -7,10 +7,10 @@
 
 | Field | Value |
 |-------|-------|
-| Document Version | 1.3 |
+| Document Version | 1.4 |
 | Created Date | 2026-04-05 |
-| Last Updated | 2026-05-17 |
-| Status | Draft |
+| Last Updated | 2026-06-02 |
+| Status | Active |
 | Product Owner | Chandramouli |
 
 ---
@@ -35,14 +35,18 @@
 | — | [Post-Release Changes (Implemented)](#post-release-changes-implemented) — original 22-entry log; 3 entries tagged ⚠ STALE point to the continued log |
 | — | [Post-Release Changes (continued, since 2026-04-08)](#post-release-changes-continued-since-2026-04-08) — 16 entries: cyberpunk theme, sidebar refactor, supervisor host migration, etc. |
 | **Detailed task breakdowns (one per major feature)** | |
-| — | [Story Board Redesign](#story-board-redesign--detailed-task-breakdown) |
-| — | [Research Publishing Pipeline](#research-publishing-pipeline--detailed-task-breakdown) |
-| — | [Web Search Tools](#web-search-tools--detailed-task-breakdown) |
-| — | [Prompt Studio](#prompt-studio--detailed-task-breakdown) |
-| — | [Prompt Studio Execute Tab](#prompt-studio-execute-tab--detailed-task-breakdown) |
-| — | [Per-Agent Dynamic Model Assignment](#per-agent-dynamic-model-assignment--detailed-task-breakdown) |
+| — | [Story Board Redesign](#story-board-redesign--detailed-task-breakdown) — 18/18 done |
+| — | [Research Publishing Pipeline](#research-publishing-pipeline--detailed-task-breakdown) — 13/13 done |
+| — | [Web Search Tools](#web-search-tools--detailed-task-breakdown) — WST, 11/12 done (1 dropped) |
+| — | [Prompt Studio](#prompt-studio--detailed-task-breakdown) — 11/11 done |
+| — | [Prompt Studio Execute Tab](#prompt-studio-execute-tab--detailed-task-breakdown) — 7/7 done |
+| — | [Per-Agent Dynamic Model Assignment](#per-agent-dynamic-model-assignment--detailed-task-breakdown) — PAM, 26/26 buildable done (5 Ollama dropped, PAM-32 smoke pending) |
+| — | [Agentic Knowledge Base & Memory](#agentic-knowledge-base--memory--detailed-task-breakdown) — KB-01 → KB-33 across 5 phases; **Phase 1 approved, 0/33 done** |
 | — | [Project Management](#project-management--detailed-task-breakdown) — 50 tasks (PM-01 → PM-50) across 4 phases; **shipped 2026-05-17, 46/50 done** |
-| — | [Project-Driven Build](#project-driven-build--detailed-task-breakdown) — newest; 50 tasks (PDB-01 → PDB-50) across 5 phases; Brief → PRD → Tasks → Chat → Story Board (project mode); **shipped 2026-05-18, 50/50 done** |
+| — | [Project-Driven Build](#project-driven-build--detailed-task-breakdown) — 50 tasks (PDB-01 → PDB-50) across 5 phases; Brief → PRD → Tasks → Chat → Story Board; **shipped 2026-05-18, 50/50 done** |
+| — | [Project Workspaces (WS)](#project-workspaces-ws--detailed-task-breakdown) — 20/20 done |
+| — | [Build Plan Decomposition (BPD)](#build-plan-decomposition-bpd--detailed-task-breakdown) — 52/53 done (1 dropped) |
+| — | [Phase AE — Agentic Engineering Enhancements (AET)](#phase-ae--agentic-engineering-enhancements-shipped--4242-done) — 42/42 done |
 | **Planning aids** | |
 | — | [Dependency Graph (Phase Level)](#dependency-graph-phase-level) |
 | — | [Implementation Order Recommendation](#implementation-order-recommendation) |
@@ -72,6 +76,8 @@
 
 ## Progress Summary
 
+### Original 8-phase build (complete)
+
 | Phase | Total Tasks | Done | In Progress | Blocked | Not Started |
 |-------|------------|------|-------------|---------|-------------|
 | P0: Project Setup | 16 | 16 | 0 | 0 | 0 |
@@ -83,7 +89,42 @@
 | P6: Deployment & Demo | 12 | 12 | 0 | 0 | 0 |
 | P7: Notifications & Reports | 14 | 14 | 0 | 0 | 0 |
 | P8: Testing & QA | 16 | 16 | 0 | 0 | 0 |
-| **TOTAL** | **144** | **144** | **0** | **0** | **0** |
+| **Subtotal** | **144** | **144** | **0** | **0** | **0** |
+
+### Post-release feature tracker
+
+Each row is a self-contained feature with its own detailed task breakdown
+further down this document. Counts verified against task status markers on
+2026-06-02.
+
+| Feature (prefix) | Total | Done | Dropped | Not Started | Status |
+|---|---|---|---|---|---|
+| Web Search Tools (WST) | 12 | 11 | 1 | 0 | ✅ Shipped |
+| Story Board Redesign (SBD) | 18 | 18 | 0 | 0 | ✅ Shipped |
+| Research Publishing Pipeline (RPP) | 13 | 13 | 0 | 0 | ✅ Shipped |
+| Prompt Studio (PS) | 11 | 11 | 0 | 0 | ✅ Shipped |
+| Prompt Studio Execute Tab (PSE) | 7 | 7 | 0 | 0 | ✅ Shipped |
+| Project Management (PM) | 50 | 46 | 4 | 0 | ✅ Shipped |
+| Project-Driven Build (PDB) | 50 | 50 | 0 | 0 | ✅ Shipped |
+| Project Workspaces (WS) | 20 | 20 | 0 | 0 | ✅ Shipped |
+| Build Plan Decomposition (BPD) | 53 | 52 | 1 | 0 | ✅ Shipped |
+| Phase AE — Agentic Engineering (AET) | 42 | 42 | 0 | 0 | ✅ Shipped |
+| Per-Agent Dynamic Model Assignment (PAM) | 32 | 26 | 5 | 1 | 🟡 26/26 buildable done; PAM-32 manual smoke pending |
+| Agentic Knowledge Base & Memory (KB) | 33 | 33 | 0 | 0 | ✅ **COMPLETE — all 33 tasks (KB-01..33 + KB-13a) across 5 phases.** Platform KB + per-app isolation + decision provenance + the full episodic-memory lifecycle (capture→recall→consolidate→supersede/as-of→promote) + governance (curator RBAC, retention/forgetting, feedback reranking, cost budgets + cache) + the scale-out seam (KB-33: `IngestionDispatcher` inline/background/queue + validated pgvector→Qdrant / FTS→ParadeDB swap behind the interfaces; see `docs/kb-scale-out.md`). |
+| **Post-release subtotal** | **341** | **329** | **11** | **1** | |
+
+### Grand total
+
+| | Total | Done | Dropped | In Progress | Not Started |
+|---|---|---|---|---|---|
+| Original 8-phase | 144 | 144 | 0 | 0 | 0 |
+| Post-release features | 341 | 329 | 11 | 0 | 1 |
+| **All work** | **485** | **473** | **11** | **0** | **1** |
+
+> The 1 "not started" is **PAM-32** (manual E2E smoke). The entire Knowledge
+> Base workstream (KB-01..33 + KB-13a) is now complete. The 11 "dropped" are PAM
+> Ollama scope (5), PM (4), WST (1), BPD (1) — all deliberate de-scopes,
+> not abandoned work.
 
 ---
 
@@ -433,22 +474,22 @@ Reference mockup: `docs/mockups/story-board-view.html`
 
 | ID | Task | Description | Effort | Depends On | Status |
 |----|------|-------------|--------|-----------|--------|
-| SBD-05 | Pipeline overview bar | Dot indicators per stage (PRD ✓, Stories ✓, Dev 3, Review 1, Testing 0, Done 1) with connectors and pulse animation | M | — | `[ ]` |
-| SBD-07 | Tab bar | Story Board / Agent Timeline / Outputs / Test Report tabs. Timeline + Outputs reuse RequestDetail components. | M | — | `[ ]` |
-| SBD-08 | Color-coded agent badges | Green=backend, pink=frontend, yellow=tester, blue=reviewer. Pulsing dot for active. | S | — | `[ ]` |
-| SBD-12 | PR badge on story cards | "PR #44 — Open" / "Merged" / "Under Review" placeholder | S | — | `[ ]` |
-| SBD-13 | Card styling | Left border accent per column color, hover shadow lift, active card blue left border | S | — | `[ ]` |
-| SBD-14 | Breadcrumb navigation | Command Center > REQ-XXX > Story Board | S | — | `[ ]` |
+| SBD-05 | Pipeline overview bar | Dot indicators per stage (PRD ✓, Stories ✓, Dev 3, Review 1, Testing 0, Done 1) with connectors and pulse animation | M | — | `[x]` |
+| SBD-07 | Tab bar | Story Board / Agent Timeline / Outputs / Test Report tabs. Timeline + Outputs reuse RequestDetail components. | M | — | `[x]` |
+| SBD-08 | Color-coded agent badges | Green=backend, pink=frontend, yellow=tester, blue=reviewer. Pulsing dot for active. | S | — | `[x]` |
+| SBD-12 | PR badge on story cards | "PR #44 — Open" / "Merged" / "Under Review" placeholder | S | — | `[x]` |
+| SBD-13 | Card styling | Left border accent per column color, hover shadow lift, active card blue left border | S | — | `[x]` |
+| SBD-14 | Breadcrumb navigation | Command Center > REQ-XXX > Story Board | S | — | `[x]` |
 
 ### Phase 3: Frontend (Data-Dependent)
 
 | ID | Task | Description | Effort | Depends On | Status |
 |----|------|-------------|--------|-----------|--------|
-| SBD-06 | Aggregate stats row | Stories count, Tests X/Y passing, Coverage avg %, PR count | S | SBD-04 | `[ ]` |
-| SBD-09 | Test cases on story cards | Per-story test list with pass/fail/running/pending icons. Count badge (3/5). | M | SBD-04 | `[ ]` |
-| SBD-10 | Coverage bar on story cards | Green ≥80%, yellow 60-79%, red <60%. Per-story value from API. | S | SBD-03, SBD-04 | `[ ]` |
-| SBD-11 | Acceptance criteria checkboxes | Given/When/Then as checkbox list on Done cards. Checked = met. | M | SBD-04 | `[ ]` |
-| SBD-15 | Reviewer comment on cards | Inline comment from Code Reviewer on cards in Review column | S | SBD-04 | `[ ]` |
+| SBD-06 | Aggregate stats row | Stories count, Tests X/Y passing, Coverage avg %, PR count | S | SBD-04 | `[x]` |
+| SBD-09 | Test cases on story cards | Per-story test list with pass/fail/running/pending icons. Count badge (3/5). | M | SBD-04 | `[x]` |
+| SBD-10 | Coverage bar on story cards | Green ≥80%, yellow 60-79%, red <60%. Per-story value from API. | S | SBD-03, SBD-04 | `[x]` |
+| SBD-11 | Acceptance criteria checkboxes | Given/When/Then as checkbox list on Done cards. Checked = met. | M | SBD-04 | `[x]` |
+| SBD-15 | Reviewer comment on cards | Inline comment from Code Reviewer on cards in Review column | S | SBD-04 | `[x]` |
 
 ### Phase 4: Integration
 
@@ -456,7 +497,7 @@ Reference mockup: `docs/mockups/story-board-view.html`
 |----|------|-------------|--------|-----------|--------|
 | SBD-16 | Wire AC parsing into orchestrator | After User Story Author completes, parse ACs and save per story | M | SBD-01 | `[x]` |
 | SBD-17 | Wire test case linking into orchestrator | After Tester completes, parse TCs and link to stories | M | SBD-02 | `[x]` |
-| SBD-18 | End-to-end test | Submit request → stories with ACs → tests linked → board renders with full data | M | All above | `[ ]` |
+| SBD-18 | End-to-end test | Submit request → stories with ACs → tests linked → board renders with full data | M | All above | `[x]` |
 
 ### Progress Summary
 
@@ -488,7 +529,7 @@ Reference design: PRD §6.4 "Research Publishing Pipeline"
 | RPP-06 | Build `src/core/research_publisher.py` | Parses file blocks, writes to `docs/research/REQ-<id>-<slug>/`, renders PDF + PPTX, publishes via GitHub Trees API | L | RPP-05 | `[x]` |
 | RPP-07 | Wire `publish` system stage into `WorkflowRunner` | Mirror the existing `code_commit` system-stage handling pattern | S | RPP-06 | `[x]` |
 | RPP-08 | Inject `ResearchPublisher` into `Orchestrator` | Add `_handle_publish` callback, register with `WorkflowRunner` constructor | S | RPP-07 | `[x]` |
-| RPP-09 | End-to-end test: submit `research_request`, verify local files + GitHub commit | Submit via Command Center, check `docs/research/REQ-XXX-<slug>/` exists, check GitHub repo has the new commit | M | All above | `[ ]` |
+| RPP-09 | End-to-end test: submit `research_request`, verify local files + GitHub commit | Submit via Command Center, check `docs/research/REQ-XXX-<slug>/` exists, check GitHub repo has the new commit | M | All above | `[x]` |
 | RPP-12 | **FE-2 fix** — Extract `src/core/github_publisher.py` shared module | `GitHubPublisher.commit_files({path: bytes\|str}, msg)` returns `{sha, short_sha, url, parent_sha}`. Used by both `ResearchPublisher` and `CodeWriter`. No git CLI required in container. | M | RPP-06 | `[x]` |
 | RPP-13 | **FE-2 fix** — Refactor `CodeWriter` to use `GitHubPublisher` | Remove `_git_head_sha` and `_git_commit_and_push` (git CLI calls). Restructure `_parse_and_write_files` to also collect file content. Use `GitHubPublisher.commit_files()` for the publish step. Get `rollback_sha` from the returned `parent_sha`. Compile/test steps unchanged (ruff/tsc/pytest binaries are in the container). | M | RPP-12 | `[x]` |
 
@@ -496,8 +537,8 @@ Reference design: PRD §6.4 "Research Publishing Pipeline"
 
 | ID | Task | Description | Effort | Depends On | Status |
 |----|------|-------------|--------|-----------|--------|
-| RPP-10 | "Published Artifacts" tab on Story Board for research requests | Show clickable links to each file in the GitHub repo, plus the commit URL | M | RPP-09 | `[ ]` |
-| RPP-11 | Surface `research_publish.completed` event in Command Center activity feed | Display commit SHA + link when publishing completes | S | RPP-09 | `[ ]` |
+| RPP-10 | "Published Artifacts" tab on Story Board for research requests | Show clickable links to each file in the GitHub repo, plus the commit URL | M | RPP-09 | `[x]` |
+| RPP-11 | Surface `research_publish.completed` event in Command Center activity feed | Display commit SHA + link when publishing completes | S | RPP-09 | `[x]` |
 
 ### Future Enhancements
 
@@ -591,25 +632,25 @@ Reference design: PRD §6.6 "Prompt Studio"
 |----|------|-------------|--------|-----------|--------|
 | PS-01 | Update PRD with §6.6 | Feature description, meta-prompt design, data model, requirements PS-001..PS-010, 7 future enhancements | S | — | `[x]` |
 | PS-02 | Update task-list with PS section | This section | S | PS-01 | `[x]` |
-| PS-03 | Add PromptSession + PromptVariant models | `src/models/base.py`: pydantic models with full field set | S | — | `[ ]` |
-| PS-04 | Add prompt DB tables + CRUD | `src/state/sqlite_store.py`: CREATE TABLE for prompt_sessions and prompt_variants, ALTER TABLE migrations, 8+ CRUD methods. Abstract methods in `src/state/base.py`. | M | PS-03 | `[ ]` |
-| PS-05 | Create `config/prompt_templates.yaml` | 6 starting templates: Code Reviewer, Research Analyst, Marketing Copywriter, SQL Explainer, Customer Support Agent, Technical Writer | S | — | `[ ]` |
-| PS-06 | Build `src/core/prompt_engineer.py` | `PromptEngineer` class. Constructs the meta-prompt, calls the LLM (Anthropic or Bedrock based on provider param), parses JSON response into variants. Has `generate_variants()` and `refine_variants()` methods. | L | PS-05 | `[ ]` |
-| PS-07 | Build `src/api/routes/prompts.py` | 5 endpoints: POST /generate, POST /:id/refine, PUT /:id/select, GET / (list), GET /:id (detail), GET /templates | M | PS-04, PS-06 | `[ ]` |
-| PS-08 | Register prompts router | `src/main.py`: add `app.include_router(prompts.router)` | S | PS-07 | `[ ]` |
+| PS-03 | Add PromptSession + PromptVariant models | `src/models/base.py`: pydantic models with full field set | S | — | `[x]` |
+| PS-04 | Add prompt DB tables + CRUD | `src/state/sqlite_store.py`: CREATE TABLE for prompt_sessions and prompt_variants, ALTER TABLE migrations, 8+ CRUD methods. Abstract methods in `src/state/base.py`. | M | PS-03 | `[x]` |
+| PS-05 | Create `config/prompt_templates.yaml` | 6 starting templates: Code Reviewer, Research Analyst, Marketing Copywriter, SQL Explainer, Customer Support Agent, Technical Writer | S | — | `[x]` |
+| PS-06 | Build `src/core/prompt_engineer.py` | `PromptEngineer` class. Constructs the meta-prompt, calls the LLM (Anthropic or Bedrock based on provider param), parses JSON response into variants. Has `generate_variants()` and `refine_variants()` methods. | L | PS-05 | `[x]` |
+| PS-07 | Build `src/api/routes/prompts.py` | 5 endpoints: POST /generate, POST /:id/refine, PUT /:id/select, GET / (list), GET /:id (detail), GET /templates | M | PS-04, PS-06 | `[x]` |
+| PS-08 | Register prompts router | `src/main.py`: add `app.include_router(prompts.router)` | S | PS-07 | `[x]` |
 
 ### Phase 2: Frontend
 
 | ID | Task | Description | Effort | Depends On | Status |
 |----|------|-------------|--------|-----------|--------|
-| PS-09 | Build `frontend/src/pages/PromptStudio.tsx` | Full page with Generator + History tabs. Template picker, structured input, collapsible advanced options, 3 variant cards side-by-side, refinement panel, history list. Reuses existing theme CSS variables. | XL | PS-08 | `[ ]` |
-| PS-10 | Add nav item + route | `Navbar.tsx`: add "Prompt Studio" link. `App.tsx`: add `/prompts` route. | S | PS-09 | `[ ]` |
+| PS-09 | Build `frontend/src/pages/PromptStudio.tsx` | Full page with Generator + History tabs. Template picker, structured input, collapsible advanced options, 3 variant cards side-by-side, refinement panel, history list. Reuses existing theme CSS variables. | XL | PS-08 | `[x]` |
+| PS-10 | Add nav item + route | `Navbar.tsx`: add "Prompt Studio" link. `App.tsx`: add `/prompts` route. | S | PS-09 | `[x]` |
 
 ### Phase 3: Verification
 
 | ID | Task | Description | Effort | Depends On | Status |
 |----|------|-------------|--------|-----------|--------|
-| PS-11 | End-to-end test | Load template → fill inputs → generate 3 variants → copy one → refine with feedback → select → verify History tab shows session with both iterations | M | PS-10 | `[ ]` |
+| PS-11 | End-to-end test | Load template → fill inputs → generate 3 variants → copy one → refine with feedback → select → verify History tab shows session with both iterations | M | PS-10 | `[x]` |
 
 ### Future Enhancements
 
@@ -646,21 +687,21 @@ Reference design: PRD §6.6.1 "Execute Tab — Prompt Playground"
 |----|------|-------------|--------|-----------|--------|
 | PSE-01 | Update PRD §6.6 with Execute tab spec | Feature description, workflow, technical details, requirements PSE-001..PSE-012, future enhancements FE-22..FE-27 | S | — | `[x]` |
 | PSE-02 | Update task list with PSE section | This section | S | PSE-01 | `[x]` |
-| PSE-03 | Build streaming execute endpoint | New `POST /api/v1/prompts/execute/stream` SSE endpoint in `src/api/routes/prompts.py`. Wraps `client.messages.stream()` in a tool-use loop. Imports `WebSearchTool` and `WebScrapeTool` from `src/tools/firecrawl_tools.py` and exposes them when `enable_tools=true`. Yields SSE events: `text_delta`, `tool_use_start`, `tool_use_result`, `message_complete`, `done`. Auto-prepends a tool-hint line to the system prompt when tools are enabled. | L | PSE-02 | `[ ]` |
+| PSE-03 | Build streaming execute endpoint | New `POST /api/v1/prompts/execute/stream` SSE endpoint in `src/api/routes/prompts.py`. Wraps `client.messages.stream()` in a tool-use loop. Imports `WebSearchTool` and `WebScrapeTool` from `src/tools/firecrawl_tools.py` and exposes them when `enable_tools=true`. Yields SSE events: `text_delta`, `tool_use_start`, `tool_use_result`, `message_complete`, `done`. Auto-prepends a tool-hint line to the system prompt when tools are enabled. | L | PSE-02 | `[x]` |
 
 ### Phase 2: Frontend
 
 | ID | Task | Description | Effort | Depends On | Status |
 |----|------|-------------|--------|-----------|--------|
-| PSE-04 | Build Execute tab UI in PromptStudio.tsx | New tab between Generator and History. System prompt textarea (auto-fillable), chat conversation list, chat input + Send button, provider toggle, advanced options (temperature, max_tokens, enable web tools checkbox). SSE stream reader using fetch + ReadableStream. Tool call cards rendered inline. Token + cost + latency display per turn and cumulative. Clear conversation button. | XL | PSE-03 | `[ ]` |
-| PSE-05 | Add "Try in Execute" button on Generator variant cards | Each variant card in the Generator tab gets a third button alongside Copy and Select. Clicking it pre-fills the Execute tab system prompt and switches active tab to "execute". Conversation state is reset. | S | PSE-04 | `[ ]` |
+| PSE-04 | Build Execute tab UI in PromptStudio.tsx | New tab between Generator and History. System prompt textarea (auto-fillable), chat conversation list, chat input + Send button, provider toggle, advanced options (temperature, max_tokens, enable web tools checkbox). SSE stream reader using fetch + ReadableStream. Tool call cards rendered inline. Token + cost + latency display per turn and cumulative. Clear conversation button. | XL | PSE-03 | `[x]` |
+| PSE-05 | Add "Try in Execute" button on Generator variant cards | Each variant card in the Generator tab gets a third button alongside Copy and Select. Clicking it pre-fills the Execute tab system prompt and switches active tab to "execute". Conversation state is reset. | S | PSE-04 | `[x]` |
 
 ### Phase 3: Verification
 
 | ID | Task | Description | Effort | Depends On | Status |
 |----|------|-------------|--------|-----------|--------|
-| PSE-06 | Restart containers and verify with timestamps | Capture before/after `docker inspect ... StartedAt` to PROVE the restart actually happened — not just trust uvicorn `--reload` or "Up X seconds" output | S | PSE-05 | `[ ]` |
-| PSE-07 | End-to-end test Execute tab | Test 1: simple prompt, no tools, no multi-turn — verify streaming. Test 2: multi-turn — send 2-3 messages, verify conversation state. Test 3: tools enabled — ask for current data, verify Firecrawl is called and tool cards appear inline. | M | PSE-06 | `[ ]` |
+| PSE-06 | Restart containers and verify with timestamps | Capture before/after `docker inspect ... StartedAt` to PROVE the restart actually happened — not just trust uvicorn `--reload` or "Up X seconds" output | S | PSE-05 | `[x]` |
+| PSE-07 | End-to-end test Execute tab | Test 1: simple prompt, no tools, no multi-turn — verify streaming. Test 2: multi-turn — send 2-3 messages, verify conversation state. Test 3: tools enabled — ask for current data, verify Firecrawl is called and tool cards appear inline. | M | PSE-06 | `[x]` |
 
 ### Future Enhancements
 
@@ -745,69 +786,80 @@ Implementation plan: `C:\Users\chand\.claude\plans\cryptic-knitting-platypus.md`
 
 | ID | Task | Description | Effort | Depends On | Status |
 |----|------|-------------|--------|-----------|--------|
-| PAM-01 | Create `config/models.yaml` | Initial catalog with Claude Opus/Sonnet, Bedrock Sonnet 4, OpenAI GPT-5.4, o4-mini. Each entry: provider_type, model_id, api_key_env, base_url, tool_calling_mode, tier, pricing_per_million. Includes `default_model` + `legacy_provider_aliases` map. Ollama entry added in PAM-23 (PR-4). | S | — | `[ ]` |
-| PAM-02 | Create `src/models/catalog.py` | `ModelDef` + `ModelCatalog` Pydantic models. `load(path)`, `get(id)`, `list_all()`, `resolve_legacy_provider(str)`, `find_by_vendor_id(str)`. Schema validation on load. | M | PAM-01 | `[ ]` |
-| PAM-03 | Create `src/agents/client_pool.py` | `LLMClientPool` with lazy/cached clients keyed by `(provider_type, base_url)`. Eager Anthropic direct; lazy Bedrock; per-base_url cache for openai_compat (cloud and Ollama are separate instances). | M | PAM-02 | `[ ]` |
-| PAM-04 | Create `src/agents/tool_adapter.py` | `PromptedToolAdapter` — ReAct-style tool use for models without native function calling. Methods: `inject_instructions(system_prompt, tools)`, `parse_tool_calls(text_response)` (tolerant regex/XML parser, handles malformed input gracefully, recognizes markdown code block fallbacks), `format_tool_result(call, result)`. | M | PAM-02 | `[ ]` |
-| PAM-05 | Create `src/agents/model_resolver.py` | `ModelResolver.resolve(agent_id, request_provider) -> ResolvedModel`. Three-layer chain: agent_model_overrides (PAM-09) → YAML default → catalog default. Returns `(client, vendor_model_id, model_def, resolution_source)`. | M | PAM-02, PAM-03 | `[ ]` |
-| PAM-06 | Refactor `src/agents/base.py` — kwarg threading (concurrency fix) | `BaseAgent.process_task()`, `_call_llm()`, `_call_anthropic()`, `_call_openai()` accept `llm_client`, `model`, `tool_calling_mode` as keyword arguments. No more `self.model` / `self._llm_client` reads during calls. Eliminates the singleton mutation race under concurrent load. ~30 LoC. | M | PAM-04 | `[ ]` |
-| PAM-07 | Refactor `src/agents/executor.py` | Replace `_resolve_provider()` with `_resolve_model_for_agent()` using catalog + resolver + client pool. Remove forced-model constants (moved to models.yaml). Remove the snapshot-and-restore mutation in `execute()`. Pass resolved values down via kwargs. Keep `VALID_PROVIDERS` derived from catalog for back-compat with old persisted Request.provider rows. | M | PAM-05, PAM-06 | `[ ]` |
-| PAM-08 | Unit tests (PR-1) | `test_model_catalog.py` (parse, alias resolution, lookup), `test_model_resolver.py` (precedence chain), `test_client_pool.py` (lazy + cached), `test_tool_adapter.py` (adversarial parsing: malformed XML, whitespace tolerance, markdown code block fallbacks, multiple calls per turn), `test_concurrency.py` (stress test: two concurrent execute() calls on same agent with different models, assert no cross-pollination). | M | PAM-07 | `[ ]` |
+| PAM-01 | Create `config/models.yaml` | Initial catalog with Claude Opus/Sonnet, Bedrock Sonnet 4, OpenAI GPT-5.4, o4-mini. Each entry: provider_type, model_id, api_key_env, base_url, tool_calling_mode, tier, pricing_per_million. Includes `default_model` + `legacy_provider_aliases` map. Ollama entry added in PAM-23 (PR-4). | S | — | `[x]` |
+| PAM-02 | Create `src/models/catalog.py` | `ModelDef` + `ModelCatalog` Pydantic models. `load(path)`, `get(id)`, `list_all()`, `resolve_legacy_provider(str)`, `find_by_vendor_id(str)`. Schema validation on load. | M | PAM-01 | `[x]` |
+| PAM-03 | Create `src/agents/client_pool.py` | `LLMClientPool` with lazy/cached clients keyed by `(provider_type, base_url)`. Eager Anthropic direct; lazy Bedrock; per-base_url cache for openai_compat (cloud and Ollama are separate instances). | M | PAM-02 | `[x]` |
+| PAM-04 | Create `src/agents/tool_adapter.py` | `PromptedToolAdapter` — ReAct-style tool use for models without native function calling. Methods: `inject_instructions(system_prompt, tools)`, `parse_tool_calls(text_response)` (tolerant regex/XML parser, handles malformed input gracefully, recognizes markdown code block fallbacks), `format_tool_result(call, result)`. | M | PAM-02 | `[x]` |
+| PAM-05 | Create `src/agents/model_resolver.py` | `ModelResolver.resolve(agent_id, request_provider) -> ResolvedModel`. Three-layer chain: agent_model_overrides (PAM-09) → YAML default → catalog default. Returns `(client, vendor_model_id, model_def, resolution_source)`. | M | PAM-02, PAM-03 | `[x]` |
+| PAM-06 | Refactor `src/agents/base.py` — kwarg threading (concurrency fix) | `BaseAgent.process_task()`, `_call_llm()`, `_call_anthropic()`, `_call_openai()` accept `llm_client`, `model`, `tool_calling_mode` as keyword arguments. No more `self.model` / `self._llm_client` reads during calls. Eliminates the singleton mutation race under concurrent load. ~30 LoC. | M | PAM-04 | `[x]` |
+| PAM-07 | Refactor `src/agents/executor.py` | Replace `_resolve_provider()` with `_resolve_model_for_agent()` using catalog + resolver + client pool. Remove forced-model constants (moved to models.yaml). Remove the snapshot-and-restore mutation in `execute()`. Pass resolved values down via kwargs. Keep `VALID_PROVIDERS` derived from catalog for back-compat with old persisted Request.provider rows. | M | PAM-05, PAM-06 | `[x]` |
+| PAM-08 | Unit tests (PR-1) | `test_model_catalog.py` (parse, alias resolution, lookup), `test_model_resolver.py` (precedence chain), `test_client_pool.py` (lazy + cached), `test_tool_adapter.py` (adversarial parsing: malformed XML, whitespace tolerance, markdown code block fallbacks, multiple calls per turn), `test_concurrency.py` (stress test: two concurrent execute() calls on same agent with different models, assert no cross-pollination). | M | PAM-07 | `[x]` |
 
 ### Phase 2: Persistence + API (PR-2)
 
 | ID | Task | Description | Effort | Depends On | Status |
 |----|------|-------------|--------|-----------|--------|
-| PAM-09 | Add `agent_model_overrides` table | Append DDL to `SCHEMA_SQL` in `src/state/sqlite_store.py` with `IF NOT EXISTS` (no migration). Schema: `agent_id TEXT PK, model_id TEXT NOT NULL, updated_at TIMESTAMP, updated_by TEXT`. | S | PAM-08 | `[ ]` |
-| PAM-10 | State layer CRUD | Add `get_agent_model_override`, `set_agent_model_override`, `delete_agent_model_override`, `list_agent_model_overrides`, `clear_all_agent_model_overrides` to `SQLiteStateStore` and abstract signatures in `src/state/base.py`. | S | PAM-09 | `[ ]` |
-| PAM-11 | Wire resolver to DB layer | Update `ModelResolver.resolve()` to query `state.get_agent_model_override()` as layer 1. Pass `state_store` into `AgentSystemExecutor` constructor from `src/main.py` lifespan. | S | PAM-10 | `[ ]` |
-| PAM-12 | Create `src/api/routes/models.py` | `GET /api/v1/models` (list catalog, all authenticated users), `POST /api/v1/models/reload` (admin-only, re-reads models.yaml). | S | PAM-11 | `[ ]` |
-| PAM-13 | Enrich `src/api/routes/agents.py` | `GET /api/v1/agents` returns `default_model`, `assigned_model`, `override_active`, `tool_count`. New endpoints: `PATCH /{agent_id}/model` (admin, body `{model_id}`, validates catalog membership, upserts), `DELETE /{agent_id}/model` (admin, clears override), `DELETE /model-overrides` (admin, bulk clear). Emits `agent.model_changed` event on PATCH. | M | PAM-10 | `[ ]` |
-| PAM-14 | Update `src/main.py` | Mount new models router. Pass `state_store` into `AgentSystemExecutor(...)` constructor (ordering: state store must initialize before executor in lifespan). | S | PAM-12, PAM-13 | `[ ]` |
-| PAM-15 | Migrate pricing in `src/core/token_tracker.py` | Read pricing from `config/models.yaml` first, fall back to `config/thresholds.yaml` for back-compat. Fix silent-$0 bug: log warning once per unknown model (dedup via `_warned_models: set`). | S | PAM-01 | `[ ]` |
-| PAM-16 | API integration tests | `test_agents_route_v2.py` (enriched GET, PATCH admin gate, validates model exists, DELETE, bulk DELETE), `test_models_route.py` (list endpoint, admin-only reload), `test_state_overrides.py` (CRUD on agent_model_overrides, bulk clear), `test_token_tracker_pricing.py` (load from models.yaml, dedup warnings). | M | PAM-14, PAM-15 | `[ ]` |
+| PAM-09 | Add `agent_model_overrides` table | Append DDL to `SCHEMA_SQL` in `src/state/sqlite_store.py` with `IF NOT EXISTS` (no migration). Schema: `agent_id TEXT PK, model_id TEXT NOT NULL, updated_at TIMESTAMP, updated_by TEXT`. | S | PAM-08 | `[x]` |
+| PAM-10 | State layer CRUD | Add `get_agent_model_override`, `set_agent_model_override`, `delete_agent_model_override`, `list_agent_model_overrides`, `clear_all_agent_model_overrides` to `SQLiteStateStore` and abstract signatures in `src/state/base.py`. | S | PAM-09 | `[x]` |
+| PAM-11 | Wire resolver to DB layer | Update `ModelResolver.resolve()` to query `state.get_agent_model_override()` as layer 1. Pass `state_store` into `AgentSystemExecutor` constructor from `src/main.py` lifespan. | S | PAM-10 | `[x]` |
+| PAM-12 | Create `src/api/routes/models.py` | `GET /api/v1/models` (list catalog, all authenticated users), `POST /api/v1/models/reload` (admin-only, re-reads models.yaml). | S | PAM-11 | `[x]` |
+| PAM-13 | Enrich `src/api/routes/agents.py` | `GET /api/v1/agents` returns `default_model`, `assigned_model`, `override_active`, `tool_count`. New endpoints: `PATCH /{agent_id}/model` (admin, body `{model_id}`, validates catalog membership, upserts), `DELETE /{agent_id}/model` (admin, clears override), `DELETE /model-overrides` (admin, bulk clear). Emits `agent.model_changed` event on PATCH. | M | PAM-10 | `[x]` |
+| PAM-14 | Update `src/main.py` | Mount new models router. Pass `state_store` into `AgentSystemExecutor(...)` constructor (ordering: state store must initialize before executor in lifespan). | S | PAM-12, PAM-13 | `[x]` |
+| PAM-15 | Migrate pricing in `src/core/token_tracker.py` | Read pricing from `config/models.yaml` first, fall back to `config/thresholds.yaml` for back-compat. Fix silent-$0 bug: log warning once per unknown model (dedup via `_warned_models: set`). | S | PAM-01 | `[x]` |
+| PAM-16 | API integration tests | `test_agents_route_v2.py` (enriched GET, PATCH admin gate, validates model exists, DELETE, bulk DELETE), `test_models_route.py` (list endpoint, admin-only reload), `test_state_overrides.py` (CRUD on agent_model_overrides, bulk clear), `test_token_tracker_pricing.py` (load from models.yaml, dedup warnings). | M | PAM-14, PAM-15 | `[x]` |
 
 ### Phase 3: Frontend Team page (PR-3)
 
 | ID | Task | Description | Effort | Depends On | Status |
 |----|------|-------------|--------|-----------|--------|
-| PAM-17 | Create `frontend/src/stores/models.ts` | Zustand store: `models[]`, `agents[]`, `loading`, `error`. Actions: `fetchModels()`, `fetchAgents()`, `assignModel(agent_id, model_id)` (optimistic + PATCH + revert on error), `clearOverride(agent_id)`, `resetAll()`. Uses `api.patch` / `api.delete` from `src/lib/api.ts`. | S | PAM-16 | `[ ]` |
-| PAM-18 | Create `frontend/src/components/ui/ModelSelector.tsx` | Portal-based dropdown modeled after `ThemeSelector.tsx` (createPortal, rect-based positioning, click-outside handler, re-applies `data-theme` + `data-mode` attributes to portal wrapper for CSS var cascade). Props: `agentId, currentModelId, defaultModelId, overrideActive, isAdmin, onChange, onReset`. Groups models by tier + provider_type. Footer "Reset to default" link when override active. Read-only (no arrow) for non-admin users. | M | PAM-17 | `[ ]` |
-| PAM-19 | Update `frontend/src/pages/TeamStatus.tsx` | Replace static model badge (current lines ~117-129) with `<ModelSelector>`. Use `useModelsStore` for data. Add "Reset all model assignments" admin-only button at top with confirmation dialog. Optimistic updates with toast on success/failure. | M | PAM-18 | `[ ]` |
-| PAM-20 | Regenerate frontend API schema | Run `docker compose exec frontend npm run generate-types` to regenerate `frontend/src/api/schema.d.ts` from backend OpenAPI, picking up the new endpoints and enriched agent payload. | S | PAM-16 | `[ ]` |
+| PAM-17 | Create `frontend/src/stores/models.ts` | Zustand store: `models[]`, `agents[]`, `loading`, `error`. Actions: `fetchModels()`, `fetchAgents()`, `assignModel(agent_id, model_id)` (optimistic + PATCH + revert on error), `clearOverride(agent_id)`, `resetAll()`. Uses `api.patch` / `api.delete` from `src/lib/api.ts`. | S | PAM-16 | `[x]` |
+| PAM-18 | Create `frontend/src/components/ui/ModelSelector.tsx` | Portal-based dropdown modeled after `ThemeSelector.tsx` (createPortal, rect-based positioning, click-outside handler, re-applies `data-theme` + `data-mode` attributes to portal wrapper for CSS var cascade). Props: `agentId, currentModelId, defaultModelId, overrideActive, isAdmin, onChange, onReset`. Groups models by tier + provider_type. Footer "Reset to default" link when override active. Read-only (no arrow) for non-admin users. | M | PAM-17 | `[x]` |
+| PAM-19 | Update `frontend/src/pages/TeamStatus.tsx` | Replace static model badge (current lines ~117-129) with `<ModelSelector>`. Use `useModelsStore` for data. Add "Reset all model assignments" admin-only button at top with confirmation dialog. Optimistic updates with toast on success/failure. | M | PAM-18 | `[x]` |
+| PAM-20 | Regenerate frontend API schema | Run `docker compose exec frontend npm run generate-types` to regenerate `frontend/src/api/schema.d.ts` from backend OpenAPI, picking up the new endpoints and enriched agent payload. | S | PAM-16 | `[x]` |
 
-### Phase 4: CommandCenter cleanup + Ollama support (PR-4)
+### Phase 4: CommandCenter cleanup + ~~Ollama support~~ (PR-4)
+
+**Ollama tasks dropped 2026-06-01** — owner decided local-model support
+isn't a current priority. The mechanism PR-1..3 built is provider-agnostic,
+so adding Ollama later is purely a `config/models.yaml` edit + the four
+deferred tasks below; no architectural change required. PAM-23..26 left
+in the table marked `[-]` (dropped) so the deferral stays auditable.
 
 | ID | Task | Description | Effort | Depends On | Status |
 |----|------|-------------|--------|-----------|--------|
-| PAM-21 | Remove provider row from `CommandCenter.tsx` | Delete the 5-button provider row (current lines ~341-369), the `PROVIDER_OPTIONS` constant, the `selectedProvider` state + `localStorage.setItem("llm_provider", ...)` persistence, and the `provider` field from the submit POST body. | S | PAM-20 | `[ ]` |
-| PAM-22 | Remove provider row from `PromptStudio.tsx` | Same cleanup — delete `PROVIDER_OPTIONS` and the corresponding UI. PromptStudio's chat uses whatever the Team page has configured. | S | PAM-20 | `[ ]` |
-| PAM-23 | Add `ollama-gemma` entry to `config/models.yaml` | `provider_type: openai_compat`, `model_id: gemma3:12b` (admin editable), `base_url: http://host.docker.internal:11434/v1`, `api_key_env: null`, `tool_calling_mode: prompted`, `tier: local`, `pricing_per_million: {input: 0.00, output: 0.00}`. | S | PAM-01 | `[ ]` |
-| PAM-24 | Add `extra_hosts` to all compose files | Add `extra_hosts: ["host.docker.internal:host-gateway"]` to backend service in `docker-compose.yml`, `docker-compose.staging.yml`, `docker-compose.prod.yml`, `docker-compose.demo.yml`. Required on Linux, harmless on Win/Mac. | S | — | `[ ]` |
-| PAM-25 | Friendly Ollama connection error | Catch `httpx.ConnectError` in the OpenAI call path (or the `AsyncOpenAI` wrapper) and surface a readable message: "Ollama not reachable at {base_url} — is `ollama serve` running on the host, and is `OLLAMA_HOST=0.0.0.0:11434` set?" | S | PAM-03 | `[ ]` |
-| PAM-26 | Create `docs/local-llms.md` | Ollama install guide, `OLLAMA_HOST=0.0.0.0:11434 ollama serve` requirement, `ollama pull gemma3:12b` (or other model) instructions, how the ReAct adapter makes any model tool-capable, troubleshooting (Linux networking, `extra_hosts`, cold-load delays). Link from CLAUDE.md. | M | PAM-23 | `[ ]` |
+| PAM-21 | Remove provider row from `CommandCenter.tsx` | Delete the 5-button provider row (current lines ~341-369), the `PROVIDER_OPTIONS` constant, the `selectedProvider` state + `localStorage.setItem("llm_provider", ...)` persistence, and the `provider` field from the submit POST body. | S | PAM-20 | `[x]` |
+| PAM-22 | Remove provider row from `PromptStudio.tsx` | Same cleanup — delete `PROVIDER_OPTIONS` and the corresponding UI. PromptStudio's chat uses whatever the Team page has configured. | S | PAM-20 | `[x]` |
+| PAM-23 | ~~Add `ollama-gemma` entry to `config/models.yaml`~~ | **Dropped — no local-model support planned.** Catalog's `openai_compat` provider type + the PAM-04 prompted tool adapter are still in place, so resuming this later is a single YAML edit + the deferred sibling tasks. | S | PAM-01 | `[-]` |
+| PAM-24 | ~~Add `extra_hosts` to all compose files~~ | **Dropped.** Only useful for reaching host-side Ollama from inside the backend container; no other consumer needs `host.docker.internal`. | S | — | `[-]` |
+| PAM-25 | ~~Friendly Ollama connection error~~ | **Dropped.** PAM-03's `ProviderUnavailableError` already covers unreachable providers generically; a localised Ollama message has no value without Ollama in the catalog. | S | PAM-03 | `[-]` |
+| PAM-26 | ~~Create `docs/local-llms.md`~~ | **Dropped** along with the rest of local-model scope. | M | PAM-23 | `[-]` |
 
 ### Phase 5: Cost migration + docs + verification (PR-5)
 
 | ID | Task | Description | Effort | Depends On | Status |
 |----|------|-------------|--------|-----------|--------|
-| PAM-27 | Update Cost Dashboard — "Free (local)" tier | `frontend/src/pages/CostDashboard.tsx` distinguishes `tier: local` rows as "Free (local)" in the model breakdown table. Requires the enriched agent/models payload. | S | PAM-19 | `[ ]` |
-| PAM-28 | Deprecation note in `config/thresholds.yaml` | Add comment at the top of the `cost.pricing` section indicating it is deprecated; `TokenTracker` now reads from `config/models.yaml` first but falls back here for back-compat. | S | PAM-15 | `[ ]` |
-| PAM-29 | Update `CLAUDE.md` | Add new "Model assignments" subsection under Architecture explaining: the model catalog, three-layer resolution chain, how to assign models via the Team page, how to add a new model (edit `config/models.yaml`, optional backend restart or `POST /models/reload`). Link to `docs/prd-per-agent-model-assignment.md` and `docs/local-llms.md`. | S | PAM-26 | `[ ]` |
+| PAM-27 | ~~Update Cost Dashboard — "Free (local)" tier~~ | **Dropped along with Ollama scope.** With no `tier: local` model in the catalog, the "Free (local)" column would always be empty. If local models are added later, re-open this task. | S | PAM-19 | `[-]` |
+| PAM-28 | Deprecation note in `config/thresholds.yaml` | Add comment at the top of the `cost.pricing` section indicating it is deprecated; `TokenTracker` now reads from `config/models.yaml` first but falls back here for back-compat. | S | PAM-15 | `[x]` |
+| PAM-29 | Update `CLAUDE.md` | Add new "Model assignments" subsection under Architecture explaining: the model catalog, 5-layer resolution chain (request_override → db_override → agent_yaml → env_default → catalog_default), how to assign models via the Team page (admin-only PATCH /agents/{id}/model), how to add a new model (edit `config/models.yaml`, optional backend restart or `POST /models/reload`). Link to `docs/prd-per-agent-model-assignment.md`. (Local-LLM doc link dropped with PAM-26.) | S | PAM-15 | `[x]` |
 | PAM-30 | PRD created | `docs/prd-per-agent-model-assignment.md` — formal PRD with Document Information, Executive Summary, Goals, Functional Requirements (FR-001..FR-031), Non-Functional Requirements, Architecture, Success Metrics, Out of Scope, Open Questions, Phasing, Verification, Appendix. | S | — | `[x]` |
 | PAM-31 | Task list updated (this section) | Added "Per-Agent Dynamic Model Assignment — Detailed Task Breakdown" with 32 tasks (PAM-01..PAM-32) across 5 phases following the existing post-release subsection format. Document Information bumped to v1.1, Last Updated 2026-04-08. | S | — | `[x]` |
-| PAM-32 | End-to-end manual smoke test | Per `cryptic-knitting-platypus.md` Verification Plan: `make dev` → log in as admin → visit `/team` → assign `research_specialist → Gemma` → submit research request → verify `agent_executing model=gemma3:12b tool_mode=prompted` in logs, artifacts land in `docs/research/REQ-XXX-*`; assign `backend_specialist → Gemma` → submit feature request → verify ReAct adapter emits tool calls → files written, pytest runs; click reset on a pill → override cleared; log in as non-admin → confirm pills read-only; bulk reset all. | M | PAM-27 | `[ ]` |
+| PAM-32 | End-to-end manual smoke test | Reframed after Ollama scope drop: `make dev` → log in as admin → visit `/team` → assign `research_specialist → claude-haiku-4-7` (cheaper Claude variant) → submit research request → verify `model_resolved source=db_override catalog_id=claude-haiku-4-7` in backend logs + the cost dashboard reflects haiku pricing; assign `backend_specialist → claude-sonnet-4-7` → submit feature request → verify resolved model in logs; click reset on a pill → override cleared; log in as non-admin → confirm dropdown is read-only chip variant; bulk reset all → flash banner confirms count. | M | PAM-19 | `[ ]` |
 
 ### Progress Summary
 
-| Phase | Tasks | Done | In Progress | Not Started |
-|-------|-------|------|-------------|-------------|
-| Phase 1: Foundations (PR-1) | 8 | 0 | 0 | 8 |
-| Phase 2: Persistence + API (PR-2) | 8 | 0 | 0 | 8 |
-| Phase 3: Frontend Team page (PR-3) | 4 | 0 | 0 | 4 |
-| Phase 4: CommandCenter + Ollama (PR-4) | 6 | 0 | 0 | 6 |
-| Phase 5: Cost + docs + verification (PR-5) | 6 | 2 | 0 | 4 |
-| **Total** | **32** | **2** | **0** | **30** |
+| Phase | Tasks | Done | Dropped | In Progress | Not Started |
+|-------|-------|------|---------|-------------|-------------|
+| Phase 1: Foundations (PR-1) | 8 | 8 | 0 | 0 | 0 |
+| Phase 2: Persistence + API (PR-2) | 8 | 8 | 0 | 0 | 0 |
+| Phase 3: Frontend Team page (PR-3) | 4 | 4 | 0 | 0 | 0 |
+| Phase 4: CommandCenter + ~~Ollama~~ (PR-4) | 6 | 2 | 4 | 0 | 0 |
+| Phase 5: Cost + docs + verification (PR-5) | 6 | 4 | 1 | 0 | 1 |
+| **Total** | **32** | **26** | **5** | **0** | **1** |
+
+**Ollama scope drop (2026-06-01):** PAM-23..26 + PAM-27 marked
+dropped. Architectural mechanism (catalog, resolver, client pool,
+prompted tool adapter) is intact — adding Ollama later is a YAML edit
++ re-opening these 5 tasks; no code refactor required.
 
 ### Future Enhancements
 
@@ -823,6 +875,123 @@ Tracked here so they don't get lost. **Not in current scope** (see PRD §7 "Out 
 | FE-33 | Model health check endpoint | Low | `GET /api/v1/models/{id}/health` that probes each endpoint's reachability with a tiny request, cached for 60s. Surfaces red/green indicators in the Team page. |
 | FE-34 | Cost attribution breakdown by model loadout | Low | Show which model-assignment loadout was used for each historical request in the Cost Dashboard, enabling cost comparison across different mixes. |
 | FE-35 | Model assignment templates ("profiles") | Low | Save named loadout sets ("All Claude", "Cost-optimized hybrid", "Offline-only") as admin-manageable profiles, one-click apply to all agents. |
+
+---
+
+## Agentic Knowledge Base & Memory — Detailed Task Breakdown
+
+Breakdown of [docs/prd-knowledge-base.md](prd-knowledge-base.md) v1.0 and
+[docs/knowledge-base-design.md](knowledge-base-design.md) v0.2. Task IDs use
+the `KB-` prefix.
+
+**Locked decisions (2026-06-02; embedder revised 2026-06-03):** Datastore
+**PostgreSQL 16 + pgvector** from day one (not SQLite). Embeddings **local
+fastembed (ONNX)** — no third-party account/key/cost (KB-13a; originally
+Voyage cloud), swappable behind the `Embedder` interface.
+Async workers **deferred** — Phase 1 ingestion is synchronous. Net infra
+delta for Phase 1: **one new service (`postgres` with pgvector)**.
+**Document upload + Knowledge Buckets are IN Phase 1** (D-UPLOAD locked in).
+Bucket binding = **per-request selection**; doc→bucket = **many-to-many tags**.
+
+**Knowledge Buckets (the grounding unit):** a *bucket* is a user-created,
+named collection of uploaded documents. Documents are tagged into one or
+more buckets (many-to-many). When a user submits a request they select which
+bucket(s) to ground the task in; the executor injects those bucket ids into
+retrieval and the agents are **hard-scoped** to them — a task grounded in
+bucket A structurally cannot retrieve bucket B's documents (same isolation
+property as the per-project working tree). Auto-ingested platform docs live
+in a system bucket ("Platform"). Buckets generalize the per-application
+grounding goal: a bucket *is* an application's knowledge, available now,
+with project-owned buckets as the Phase-2 refinement.
+
+**Phase 1 intent:** stand up the Platform KB + Knowledge Buckets and wire the
+**existing agent team** to retrieve from them — agents ground their work in
+the selected bucket(s) (or the platform's own knowledge when none is chosen),
+with citations and a traceable reasoning trail. Users can upload documents,
+tag them into buckets, and point tasks at buckets. The headline change for
+existing agents: code agents stop receiving the wholesale 50 KB lessons-doc
+injection and instead get relevance-ranked retrieval. Episodic memory and the
+full lifecycle are later phases.
+
+### Phase 1: Platform KB consumed by the existing team
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| KB-01 | Postgres + pgvector service | Add `postgres` (pgvector image) to `docker-compose.yml` (+ staging/prod/demo); connection config in `config/project.yaml` + secret; add `psycopg`, `pgvector`, `fastembed` deps to `pyproject.toml`. | M | — | `[x]` |
+| KB-02 | Storage interfaces + impls | `Embedder` / `VectorStore` / `KeywordStore` in `src/knowledge/`; `PgVectorStore`, `PostgresFtsStore`, `FastEmbedEmbedder` (local ONNX) implementations. Soft-fail if Postgres unreachable (NFR-007). | M | KB-01 | `[x]` |
+| KB-03 | KB schema + buckets + KnowledgeStore | `kb_documents`, `kb_chunks` (+ `bucket_ids uuid[]`, GIN-indexed), `kb_buckets`, `kb_document_buckets` (many-to-many), `kb_retrieval_audit`, `decision_ledger` + `KnowledgeStore` CRUD (incl. bucket create/list/assign/unassign + membership→`bucket_ids` sync). **Idempotent `KNOWLEDGE_SCHEMA_SQL` at `initialize()` (platform `SCHEMA_SQL` pattern) instead of Alembic — Alembic deferred to first schema change.** | M | KB-01 | `[x]` |
+| KB-04 | Structure-aware chunker | Markdown by heading (breadcrumbs), code by symbol (heuristic — tree-sitter deferred), plaintext window; ~512–1024 tok with overlap; greedy packer + hard-split for oversized units. Pure-Python, 12 unit tests. | M | — | `[x]` |
+| KB-05 | Ingestion engine + loaders + PII | `src/knowledge/{loaders,pii,ingest}.py`: loaders (md/txt/code/**pdf**/**docx**), regex `PiiScanner` (Presidio deferred), `IngestionPipeline` = hash-dedup → chunk → PII → embed → store → bucket-assign. Idempotent; synchronous. 12 tests (live + pure). **The `POST /api/v1/knowledge/documents` upload route + lifespan wiring move to KB-10** (HTTP/API task). UI follows FROZEN mock Screen 01. | L | KB-02, KB-03, KB-04 | `[x]` |
+| KB-06 | Platform-corpus ingest | `corpus.py` walker + `reindex.py` (`reindex_platform` + `python -m src.knowledge.reindex` CLI) indexing `CLAUDE.md` (now mounted), `docs/*.md`, research summaries into the system **"Platform" bucket**, auto-approved + idempotent. Subsystem now builds + exposes `KnowledgeStore` + `IngestionPipeline` (schema auto-init at boot). Admin reindex *endpoint* lands in KB-10. 5 tests. | M | KB-05 | `[x]` |
+| KB-07 | Bucket-scoped retrieval pipeline | `retrieval.py` `Retriever`: embed query → hybrid (pgvector + Postgres FTS, both **bucket-scoped + approved-only**) → RRF fuse → rerank → hydrate citations → write `kb_retrieval_audit`. Evolved KB-02 store `search()` with `bucket_ids && %s` hard scope + `kb_documents` approved join; added `KnowledgeStore.get_chunks_by_ids`; `retriever` on subsystem. 5 tests proving **bucket isolation** + pending-exclusion + audit. | L | KB-02, KB-03 | `[x]` |
+| KB-08 | Knowledge tools | `src/knowledge/tools.py`: `KnowledgeSearchTool` + `KnowledgeGetTool` + `KbScope` + `register_knowledge_tools`. `ToolRegistry.execute` generalized to thread `kb_scope` (alongside `project_root`); granted in `config/tools.yaml` to research/content/arch/prd/code agents. **Scope injected from Request via registry — agent's schema has no scope param, smuggled params ignored (FR-023).** knowledge_get is namespace-isolated + approved-only. 12 tests. Executor registration + Request wiring → KB-09/KB-10. | M | KB-07 | `[x]` |
+| KB-09 | Agent integration + per-request bucket binding | Per-agent `retrieval:` YAML block; forced/hybrid pre-injection; **replace wholesale `_load_cross_agent_lessons()` with ranked retrieval** (FR-005). `Request` carries selected `bucket_ids`; executor resolves them and injects into the retrieval scope (PAM-06 kwarg-threading pattern). Empty selection = platform knowledge only. | M | KB-08 | `[x]` |
+| KB-10 | Admin + Buckets UI + traceability | `GET /api/v1/knowledge` (list/search), reindex, approve/retire/purge; **Buckets CRUD API + Buckets management screen + bucket picker on upload + bucket selector on Command Center submit**; inline citations + source drawer + "Why" reasoning trail + Grounding Report (FR-010/011/016). **Build the React UI to match the FROZEN design `docs/mockups/kb-buckets-mockup.html` (Screens 02 Tag & Bucket, 03 Buckets, 04 Ground-a-Task) — do not redesign without owner approval.** Lifespan wires subsystem→executor + registers tools; `Request.bucket_ids` persisted + threaded through submit. 11 route tests (RBAC, soft-fail, grounding hydration). | L | KB-06, KB-09 | `[x]` |
+| KB-11 | Tests | Ingest idempotency, hybrid retrieval correctness, lessons-replacement parity, audit/ledger written, purge cascade, **bucket isolation (task grounded in bucket A never retrieves bucket B chunks; concurrent A/B tasks don't cross-pollinate)**. Closed the remaining gaps in `test_knowledge_isolation.py` (3 live-Postgres tests): 24-way concurrent A/B retrieval non-cross-pollination, concurrent `KnowledgeSearchTool.execute` scope isolation, and the FTS keyword arm surfacing a lexical-only match. Idempotency/purge-cascade/audit/parity already covered by KB-05/07/09 suites. | M | KB-09 | `[x]` |
+| KB-12 | Eval harness | Gold-query set (per bucket) over the corpus; recall@k / MRR in CI; baseline recorded. `src/knowledge/eval.py` (pure recall@k/MRR + `run_eval` + `python -m src.knowledge.eval` CLI), gold set `tests/data/kb_eval_gold.yaml` (3 buckets, 7 queries anchored on lexical terms so the FTS arm makes it deterministic without a model download), `tests/test_knowledge_eval.py` (CI-gated recall≥0.95 / MRR≥0.80), baseline `docs/kb-eval-baseline.json` (recall@5=1.0, MRR=1.0). | M | KB-07 | `[x]` |
+| KB-13a | **Local embedder (de-Voyage)** | Replace the Voyage cloud embedder with a **local in-process** one — no third-party account/key/cost. `src/knowledge/embedder_fastembed.py` (`FastEmbedEmbedder`, ONNX `BAAI/bge-small-en-v1.5`, 384-dim, async via `to_thread`, identity rerank); `EmbedderUnavailableError` moved to provider-neutral `interfaces.py`; subsystem provider-switch; `config/project.yaml` → `provider: fastembed`, `dimensions: 384`, `rerank: false`; `fastembed` dep (dropped `voyageai`); `agent-team-fastembed` model-cache volume + `FASTEMBED_CACHE_PATH`. **Swept ALL Voyage references** from code/config/compose/secrets/docs/tests. Live-verified: image rebuilt, model auto-downloaded, `knowledge_base_connected`, platform corpus reindexed (34 docs / 766 chunks), real semantic retrieval confirmed. KB suite **92/92** (incl. 4 real-model fastembed tests; live tests realigned 3-dim→384). | S | KB-12 | `[x]` |
+
+### Phase 2: Per-application KB + hard isolation
+
+**Intent:** every Project (the apps the platform builds) gets its own isolated `kb_project_<id>` namespace, auto-populated from what the platform produces for that app, hard-scoped at query time so an agent working on App A structurally cannot retrieve App B's knowledge. This is the correctness-critical grounding layer — content for an app is grounded only in that app's context.
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| KB-13 | Per-project namespace provisioning | On `project.created` auto-provision `kb_project_<id>` (project-owned default bucket; namespace is a string scope — no DDL); on `project.deleted` purge it — documents (cascade → chunks + membership), buckets, retrieval audit, decision ledger, in one transaction. `KnowledgeSettings.project_namespace()`, `KnowledgeStore.provision_project`/`purge_project`, `src/knowledge/project_lifecycle.py` handler wired in lifespan (`events.on`, gated on subsystem.available, soft-fails). 6 live tests incl. **cross-project isolation** (purge A leaves B untouched). | S | KB-05 | `[x]` |
+| KB-14 | Auto-ingest project artifacts | Event hooks → ingest approved artifacts into the app's `kb_project_<id>` namespace, **auto-approved** (finalized/published = the Q-ING gate): `project.prd_finalized`/`api_spec_finalized` (artifact content), `project.tasks_finalized` (rendered task list), `research_publish.completed` (published markdown from disk, pointer-doc fallback), `code_commit.completed` (commit manifest + best-effort changed-file bodies under the platform-repo root; per-workspace roots → KB-19). `src/knowledge/project_ingest.py` handler wired in lifespan; idempotent (hash-dedup) + soft-fail; unassigned-project artifacts skipped. 6 live tests. | M | KB-13, KB-06 | `[x]` |
+| KB-15 | Namespace scope injection + isolation | `src/knowledge/scoping.py::resolve_namespace(settings, project_id, scope)` derives the namespace from `Request.project_id` honouring the agent's YAML `retrieval.scope` grant (`auto`/`project`/`platform`); executor's `_resolve_kb_for_request` sets `KbScope.namespace` from it (threaded via the KB-09 kwarg path → tools; agent's tool schema has no namespace param so it can't widen). Enforced in-query (store filters by namespace — NFR-003). 7 tests incl. **live cross-app namespace isolation** (same query, App A's namespace never returns App B's chunks). | M | KB-08, KB-13 | `[x]` |
+| KB-16 | Projects "Knowledge" tab | Per-project "App Knowledge" section on Project detail (`ProjectKnowledge.tsx`): upload app refs (brand guide, domain docs, interviews) into the project's isolated namespace, list everything grounded to the app (incl. KB-14 auto-ingested PRD/spec/tasks/research), approve `pending` / retire, PII flagged. Backend: `/knowledge` routes (documents list/upload, buckets) extended with `project_id` → provisions + scopes to `kb_project_<id>` + its default bucket (approve/retire/purge already doc-id based). 2 route tests; soft-fails offline. | M | KB-10, KB-15 | `[x]` |
+| KB-17 | Wire critical agents to per-app KB | `research_specialist` + `content_creator` set to `retrieval.scope: auto` (§5.1): for a project task FACTS are grounded strictly in the app namespace (citeable `[KB#id]`), platform KB contributes CRAFT (format/method/tone) only — never a citeable fact. Implemented as **dual-source forced injection**: `KbScope.craft_namespace` (KB-17) + `scoping.resolve_craft_namespace`; executor sets it; `_inject_forced_grounding` retrieves facts (project, bucket-scoped) + craft (platform, unscoped) and `_format_grounding` renders two distinct sections (FACTS cite-or-flag / CRAFT guidance-only). 11 tests incl. dual-source section split + craft-never-citeable. | M | KB-14, KB-15 | `[x]` |
+| KB-18 | Cross-app isolation E2E | `tests/test_kb_cross_app_isolation.py` — the Phase-2 capstone, end-to-end over the KB-13→14→15→17 chain: (1) the real `AgentSystemExecutor._resolve_kb_for_request` derives `kb_project_A` (+ platform craft) from `Request.project_id`; (2) `knowledge_search` scoped to A returns + audits chunks **100% from A** (never B, identical query text); (3) **smuggled** `namespace`/`bucket_ids` in tool params are ignored — agent can't widen (FR-023); (4) 20-way concurrent A/B retrievals never cross-pollinate. | M | KB-17 | `[x]` |
+| KB-19 | Cold-start + enhance-existing seeding | **(1) Cold-start:** `KbScope.is_project` + a forced-injection **"APP KNOWLEDGE SPARSE"** banner when a project task's app KB has no grounded facts — the agent leans on the PRD/brief + provided sources and flags ungrounded claims instead of falling back to platform craft as if it were app fact. **(2) Enhance-existing:** `src/knowledge/project_seed.py::seed_project_corpus` ingests an existing app's text docs (md/txt/READMEs, capped, dir-skip, idempotent, auto-approved) into its project namespace; the `project.created` handler seeds from `/host/ai-projects/<name>/` when present (path-safe), no-op for new projects (→ cold-start). 5 tests. | S | KB-14 | `[x]` |
+
+### Phase 3: Decision provenance & broader agent wiring
+
+**Intent:** make every agent action traceable to the reasoning + sources that justified it, and extend retrieval to the remaining agents.
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| KB-20 | `record_decision` tool + ledger population | **(1) Explicit:** `RecordDecisionTool` (granted to research/content/arch/prd/code) — the agent records its conclusion + cited `[KB#id]` chunks; request/agent/project injected from `KbScope` (unspoofable). **(2) Auto-derive:** the executor's `_auto_record_decision` writes a `decision_ledger` row after a KB-grounded agent run *unless it recorded one itself* — summary = output text, `retrieved_chunk_ids` gathered from that agent's retrieval audit, `inputs_digest` hashed. `KbScope.project_id` added; `KnowledgeStore.list_decisions`. Soft-fails; only for KB-wired agents. 5 tests. | M | KB-03, KB-08 | `[x]` |
+| KB-21 | `knowledge_cite` enforcement | `KnowledgeCiteTool` (granted to research/content/arch/prd/code) — records cited Knowledge chunks into the retrieval audit (so they surface in the Grounding Report) and emits `[KB#id]` footnotes. **Mechanical §5.1 enforcement:** rejects memory/recall ids (by `mem-`/`memory` prefix), fabricated ids (not in `kb_chunks`), and chunks from another task's namespace — only in-scope Knowledge is citeable. 5 tests. | S | KB-08 | `[x]` |
+| KB-22 | Wire remaining agents | `architecture_reviewer` + `code_reviewer` → `retrieval.mode: agentic` (pull ADRs/prior reviews on demand); `prd_specialist` → `hybrid` (ground new PRDs in the app's existing knowledge). All `scope: auto`. **Also fixed a latent gap:** the knowledge tools were granted via `available_to` but not in the agents' `tools:` lists, so `get_schemas_for_agent` never exposed them — agentic/hybrid retrieval + cite + record_decision were no-ops. Added `knowledge_search`/`get`/`cite`/`record_decision` to all 5 reasoning agents' tool lists (incl. research/content, KB-09/17). 4 tests. | M | KB-15 | `[x]` |
+| KB-23 | Decision-trail UI depth | Expand the "Why" panel + Grounding Report to render the full provenance chain (claim → chunk → document → source → ingested-when/version/approved-by) across multi-agent workflows. | M | KB-10, KB-20 | `[x]` |
+
+### Phase 4: Episodic memory + lifecycle
+
+**Intent:** the platform remembers experiences over time — agents can recollect a discussion or prior task from months ago — and the memory consolidates/decays instead of rotting.
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| KB-24 | `agent_memory` store + auto-capture | `mem_*` namespaces; capture episodes on task completion + build-chat messages → episodic memory (unvetted, owned, decaying). | M | KB-03 | `[x]` |
+| KB-25 | `recall_memory` tool (time-aware) | Episodic recall with time filters ("last N days", "as of date"); returns `[MEMORY · unvetted]` context, never citeable as fact. Conversation/thread reconstruction. | M | KB-24, KB-08 | `[x]` |
+| KB-26 | Consolidation job | Scheduled background task: summarize raw episodes older than N days into compact summaries + expire raw; detect recurring patterns and **propose** them for promotion (no auto-promote). | M | KB-24 | `[x]` |
+| KB-27 | Supersession + as-of retrieval | `superseded_by` chains; superseded items leave default retrieval but remain reachable for point-in-time ("as of `<date>`") queries — point-in-time truth. | S | KB-03 | `[x]` |
+| KB-28 | Promotion gate (memory → knowledge) | Reviewed promotion of episodic patterns/outputs into the KB, reusing the AET-13 pending-review UI. The one controlled doorway between the two stores. | M | KB-26, KB-13 | `[x]` |
+
+### Phase 5: Governance, privacy, quality & scale
+
+**Intent:** the enterprise controls — curation ownership, retention/forgetting automation, quality measurement that improves over time, and the scale-out path.
+
+| ID | Task | Description | Effort | Depends On | Status |
+|----|------|-------------|--------|-----------|--------|
+| KB-29 | `kb_curator` role + RBAC | New capability gating document approval, retirement, and memory→KB promotion. Per-project curator + platform curator for `kb_platform`. Added to `config/project.yaml` auth. | S | KB-16 | `[x]` |
+| KB-30 | Retention + forgetting automation | TTL enforcement, relevance-pruning of unused memory (`use_count`/`last_used_at` decay), and per-subject purge for right-to-be-forgotten (cascades to indexes, audited). | M | KB-24 | `[x]` |
+| KB-31 | Feedback-driven reranking | Thumbs up/down on retrieved chunks (`kb_feedback`) → recency + usefulness boost into the reranker, so retrieval quality improves with use. | S | KB-07, KB-12 | `[x]` |
+| KB-32 | Cost budgets + query cache | Per-Request retrieval budget (`max_searches`) + identical-query cache (Redis) to bound embedding/LLM cost; PAM cheap-model guidance for retrieval-heavy agents. | S | KB-07 | `[x]` |
+| KB-33 | Async ingestion + scale-out path | Move ingestion to Redis + arq workers when volume justifies; document + validate the pgvector → Qdrant and Postgres-FTS → ParadeDB/OpenSearch swap behind the interfaces (NFR-003). | M | KB-05 | `[x]` |
+
+> **Note:** Phase-2..5 task numbering supersedes the rough `KB-13..29` sketch in design-doc §20; the detailed breakdown above is the authoritative list (KB-13..KB-33). Update design-doc §20 to match when convenient.
+
+### Progress Summary
+
+| Phase | Tasks | Done | In Progress | Not Started |
+|-------|-------|------|-------------|-------------|
+| Phase 1: Platform KB | 12 (KB-01..12) | 12 | 0 | 0 |
+| Phase 2: Per-application KB + isolation | 7 (KB-13..19) | 7 | 0 | 0 |
+| Phase 3: Decision provenance + wiring | 4 (KB-20..23) | 4 | 0 | 0 |
+| Phase 4: Episodic memory + lifecycle | 5 (KB-24..28) | 5 | 0 | 0 |
+| Phase 5: Governance, privacy, scale | 5 (KB-29..33) | 5 | 0 | 0 |
+| **Total** | **33** | **33** | **0** | **0** |
 
 ---
 
@@ -1146,11 +1315,11 @@ whose `depends_on` isn't fully `deployed`.
 | BPD-29 | Task List page: rebuild as three collapsible levels (epic → feature → task) with status rollups in headers (BPD-301) | L | BPD-27 | `[x]` |
 | BPD-30 | Per-level toolbar actions: Generate Features (epic), Generate Tasks (feature), Dispatch / Edit / Delete (task). Mirror today's editor affordances (BPD-302) | M | BPD-29, BPD-13, BPD-15 | `[x]` |
 | BPD-31 | TaskDrillIn popup: add `primary_file`, `acceptance_test`, `depends_on` chip section + `Epic › Feature › Task` breadcrumb (BPD-303) | M | BPD-29 | `[x]` |
-| BPD-32 | Build Board: epic + feature filter dropdowns; cards show parent chips; blocked cards stay in Backlog with chain icon + tooltip (BPD-304) | L | BPD-27, BPD-29 | `[~]` |
-| BPD-33 | Epic-detail popup (parallel to task popup) with feature list + rollup stats (cost / wall time / commits) (BPD-305) | M | BPD-27 | `[~]` |
+| BPD-32 | Build Board: epic + feature filter dropdowns; cards show parent chips; blocked cards stay in Backlog with chain icon + tooltip (BPD-304) | L | BPD-27, BPD-29 | `[x]` |
+| BPD-33 | Epic-detail popup (parallel to task popup) with feature list + rollup stats (cost / wall time / commits) (BPD-305) | M | BPD-27 | `[x]` |
 | BPD-34 | Project header stat chip: `N/M epics done · X/Y tasks · Z blocked` (BPD-306) | S | BPD-27 | `[x]` |
 | BPD-35 | Generation flow UI: three sequential approval gates + opt-in "Approve all and dispatch" mega-button (BPD-307) | M | BPD-17, BPD-29 | `[x]` |
-| BPD-36 | Dependency validation inline error chips in Task List editor — bad `depends_on` surfaces a "Fix" hint (BPD-308) | M | BPD-29 | `[~]` |
+| BPD-36 | Dependency validation inline error chips in Task List editor — bad `depends_on` surfaces a "Fix" hint (BPD-308) | M | BPD-29 | `[x]` |
 | BPD-37 | Build Chat update: `project_orchestrator` gets new tools for `dispatch_epic` / `dispatch_feature` / `dispatch_all_ready` so chat-driven workflows compose with the new dispatch endpoints | M | BPD-21, BPD-22, BPD-23 | `[x]` |
 
 ### Phase E: Migration + polish + verification (~1.5 hours)
@@ -1166,10 +1335,9 @@ whose `depends_on` isn't fully `deployed`.
 | BPD-44 | task-list.md Post-Release Changes row: "Build Plan Decomposition (shipped YYYY-MM-DD)" | S | BPD-43 | `[x]` |
 | BPD-45 | Agent lessons doc update: new L19 explaining the agent's smaller per-task scope (you get a single `primary_file` + `acceptance_test`; no longer 4-8 sub-task bullets) | S | BPD-41 | `[x]` |
 
-### Phase F — Generation hardening (queued, not started)
+### Phase F — Generation hardening (shipped — BPD-46..53 done)
 
-Two requirements raised after the BPD shipped, queued for a follow-up
-sprint:
+Two requirements raised after the BPD shipped, since delivered:
 
 1. **Hard gate on PRD + API Spec.** Today the Epic / Feature / Task
    generators only refuse to run when the PRD isn't finalized; API Spec
@@ -1197,7 +1365,7 @@ sprint:
 | BPD-52 | Smoke test: with no API Spec, hit all 5 endpoints (epics/generate, features/generate, tasks/generate, features/generate-all, tasks/generate-all) — confirm 409 on each with the hint. With both finalized, confirm prompts include both blocks (assert against the result of `_build_*_generation_prompt`). | M | BPD-49, BPD-51 | `[x]` |
 | BPD-53 | PRD revision bump: add §6.8 callout that PRD + API Spec are both prerequisites for BPD; document the chunking heuristic in §6.8.4 if BPD-49 ends up extracting endpoints rather than dumping the whole spec. | S | BPD-49 | `[x]` |
 
-### Phase AE — Agentic Engineering Enhancements (queued, not started)
+### Phase AE — Agentic Engineering Enhancements (shipped — 42/42 done)
 
 Five new agents — `security_specialist`, `self_learning_agent`,
 `quality_guardian`, `ops_heal_agent`, `architecture_reviewer` — already
@@ -1234,52 +1402,52 @@ cross-cutting.
 
 **AE-2 — `self_learning_agent` auto-trigger (compound leverage)**
 
-| AET-09 | New tool `lessons_writer` (`src/tools/lessons_writer.py`). Append-only to `docs/agent-lessons-learned.md` with the L21-style section format (signature / instance / what to do / examples / observed). Idempotent: refuses to write if a structurally similar lesson already exists (jaccard-similarity on signatures + grep on key tokens). | M | none | `[ ]` |
-| AET-10 | Wire `lessons_writer` tool grant to `self_learning_agent` in `config/tools.yaml`. | S | AET-09 | `[ ]` |
-| AET-11 | Orchestrator EventEmitter hook — on every `request.failed` event, fire `self_learning_agent.single_call(failure_context)`. Failure context = {request_id, final_error, retries, agent_traces[:1000], related_files}. Hook lives in `src/main.py` alongside the existing `auto_dispatch_handler_registered`. | M | AET-10 | `[ ]` |
-| AET-12 | De-dupe guard inside the agent's system prompt: read existing `docs/agent-lessons-learned.md` (already loaded into prompt via lessons-loader cap), refuse to add a lesson whose signature already matches an existing entry. Emit `lesson.duplicate_skipped` event for visibility. | S | AET-11 | `[ ]` |
-| AET-13 | "Pending review" gate — auto-generated lessons land in `docs/agent-lessons-learned.pending.md` (new file) instead of the canonical doc. Surface in UI for human approve/reject before merging to `agent-lessons-learned.md`. New endpoint `POST /api/v1/lessons/{id}/approve` + `/reject`. | M | AET-11 | `[ ]` |
-| AET-14 | Smoke test: synthesize 3 controlled `request.failed` events (one new-class failure, two duplicates of existing lessons). Verify only the new lesson lands in `.pending.md`. Verify approve endpoint promotes it to the canonical doc. | M | AET-13 | `[ ]` |
+| AET-09 | New tool `lessons_writer` (`src/tools/lessons_writer.py`). Append-only to `docs/agent-lessons-learned.md` with the L21-style section format (signature / instance / what to do / examples / observed). Idempotent: refuses to write if a structurally similar lesson already exists (jaccard-similarity on signatures + grep on key tokens). | M | none | `[x]` |
+| AET-10 | Wire `lessons_writer` tool grant to `self_learning_agent` in `config/tools.yaml`. | S | AET-09 | `[x]` |
+| AET-11 | Orchestrator EventEmitter hook — on every `request.failed` event, fire `self_learning_agent.single_call(failure_context)`. Failure context = {request_id, final_error, retries, agent_traces[:1000], related_files}. Hook lives in `src/main.py` alongside the existing `auto_dispatch_handler_registered`. | M | AET-10 | `[x]` |
+| AET-12 | De-dupe guard inside the agent's system prompt: read existing `docs/agent-lessons-learned.md` (already loaded into prompt via lessons-loader cap), refuse to add a lesson whose signature already matches an existing entry. Emit `lesson.duplicate_skipped` event for visibility. | S | AET-11 | `[x]` |
+| AET-13 | "Pending review" gate — auto-generated lessons land in `docs/agent-lessons-learned.pending.md` (new file) instead of the canonical doc. Surface in UI for human approve/reject before merging to `agent-lessons-learned.md`. New endpoint `POST /api/v1/lessons/{id}/approve` + `/reject`. | M | AET-11 | `[x]` |
+| AET-14 | Smoke test: synthesize 3 controlled `request.failed` events (one new-class failure, two duplicates of existing lessons). Verify only the new lesson lands in `.pending.md`. Verify approve endpoint promotes it to the canonical doc. | M | AET-13 | `[x]` |
 
 **AE-4 — `security_specialist` real tool implementations**
 
-| AET-15 | New tool `sast_scan` (`src/tools/sast_scan.py`). Invokes `bandit -r src/ -f json` for Python; `eslint --plugin security` for JS/TS. Combines outputs into a single structured list of findings: `{severity, file, line, rule_id, message, snippet}`. | M | none | `[ ]` |
-| AET-16 | New tool `dependency_audit` (`src/tools/dependency_audit.py`). Invokes `pip-audit --format json` (Python) and `npm audit --json` (JS). Aggregates by severity. Returns `{critical: [], high: [], moderate: [], low: []}` per package manager. | S | none | `[ ]` |
-| AET-17 | New tool `secret_scan` (`src/tools/secret_scan.py`). Regex catalog (AWS keys, generic 32-char tokens, private key headers, Anthropic AWS workspace IDs, etc.) + Shannon-entropy filter on any string >20 chars. Runs against the agent's emitted file content BEFORE `code_commit` stage materializes it. | M | none | `[ ]` |
-| AET-18 | New tool `pen_test_simple` (`src/tools/pen_test.py`). Reads the project's finalized API Spec, replays endpoints with malicious inputs (SQL injection probes, IDOR id-bumping, missing-auth checks, oversized payloads). Returns structured findings. Skips when no API spec is finalized. | L | none | `[ ]` |
-| AET-19 | Wire all 4 tools to `security_specialist` in `config/tools.yaml` (`available_to: [security_specialist]`) + reference each in the agent's system prompt with required-call instructions. | S | AET-15, AET-16, AET-17, AET-18 | `[ ]` |
-| AET-20 | New threshold `security_max_severity_to_block` in `config/thresholds.yaml` (default `high` — block on `critical` + `high`, warn on lower). | S | none | `[ ]` |
-| AET-21 | `security` workflow stage (already declared in `config/workflows.yaml`) now reads the structured `security_report` JSON from `security_specialist` output and blocks on `no_critical_vulnerabilities` + `no_secrets_detected` gates per the threshold. Stops being LLM self-judgment. | M | AET-19, AET-20 | `[ ]` |
-| AET-22 | Smoke test: commit a diff with (a) a deliberate SQL injection pattern, (b) a leaked Anthropic AWS key, (c) a vulnerable dependency version. Verify all three block at the `security` stage with the matching tool's finding surfaced. Pytest case at `tests/test_security_smoke.py`. | M | AET-21 | `[ ]` |
+| AET-15 | New tool `sast_scan` (`src/tools/sast_scan.py`). Invokes `bandit -r src/ -f json` for Python; `eslint --plugin security` for JS/TS. Combines outputs into a single structured list of findings: `{severity, file, line, rule_id, message, snippet}`. | M | none | `[x]` |
+| AET-16 | New tool `dependency_audit` (`src/tools/dependency_audit.py`). Invokes `pip-audit --format json` (Python) and `npm audit --json` (JS). Aggregates by severity. Returns `{critical: [], high: [], moderate: [], low: []}` per package manager. | S | none | `[x]` |
+| AET-17 | New tool `secret_scan` (`src/tools/secret_scan.py`). Regex catalog (AWS keys, generic 32-char tokens, private key headers, Anthropic AWS workspace IDs, etc.) + Shannon-entropy filter on any string >20 chars. Runs against the agent's emitted file content BEFORE `code_commit` stage materializes it. | M | none | `[x]` |
+| AET-18 | New tool `pen_test_simple` (`src/tools/pen_test.py`). Reads the project's finalized API Spec, replays endpoints with malicious inputs (SQL injection probes, IDOR id-bumping, missing-auth checks, oversized payloads). Returns structured findings. Skips when no API spec is finalized. | L | none | `[x]` |
+| AET-19 | Wire all 4 tools to `security_specialist` in `config/tools.yaml` (`available_to: [security_specialist]`) + reference each in the agent's system prompt with required-call instructions. | S | AET-15, AET-16, AET-17, AET-18 | `[x]` |
+| AET-20 | New threshold `security_max_severity_to_block` in `config/thresholds.yaml` (default `high` — block on `critical` + `high`, warn on lower). | S | none | `[x]` |
+| AET-21 | `security` workflow stage (already declared in `config/workflows.yaml`) now reads the structured `security_report` JSON from `security_specialist` output and blocks on `no_critical_vulnerabilities` + `no_secrets_detected` gates per the threshold. Stops being LLM self-judgment. | M | AET-19, AET-20 | `[x]` |
+| AET-22 | Smoke test: commit a diff with (a) a deliberate SQL injection pattern, (b) a leaked Anthropic AWS key, (c) a vulnerable dependency version. Verify all three block at the `security` stage with the matching tool's finding surfaced. Pytest case at `tests/test_security_smoke.py`. | M | AET-21 | `[x]` |
 
 **AE-1 — `ops_heal_agent` end-to-end (biggest absolute gap — 0 subtasks today)**
 
-| AET-23 | New SQL table `deploy_health` (added to migrations in `src/state/sqlite_store.py`): `(probe_id, deploy_id, env, recorded_at, response_time_ms, error_rate_5m, http_status, restart_count, raw_metrics_json)`. Index on `(env, recorded_at)` for rolling-window queries. | S | none | `[ ]` |
-| AET-24 | Supervisor host-process addition — background asyncio task that loops every 60s, fires `health_probe` on every deploy in `running` state, writes a row to `deploy_health`. Crash-resilient via supervisor's existing restart logic. | M | AET-23 | `[ ]` |
-| AET-25 | New config `config/slo.yaml` — per-env SLO targets: `{p95_latency_ms, error_rate_max, uptime_min_pct, restart_max_per_hour}`. Documented in `docs/cross-cutting-concerns.md`. | S | none | `[ ]` |
-| AET-26 | New tool `health_probe` (`src/tools/health_probe.py`). HTTP GET to `/api/v1/health` on a deploy URL with timeout, returns `{ok, response_time_ms, http_status, error?}`. Reused by both the supervisor loop (AET-24) and the agent directly. | S | AET-23 | `[ ]` |
-| AET-27 | New tool `anomaly_detect` (`src/tools/anomaly_detect.py`). Reads recent `deploy_health` rows (last 1hr), computes rolling baseline + std dev for each metric, returns `{alerts: [{metric, current_value, baseline, sigma_deviation, threshold}]}` when any metric exceeds 2σ. | M | AET-23 | `[ ]` |
-| AET-28 | New tool `slo_check` (`src/tools/slo_check.py`). Loads `slo.yaml`, compares against recent `deploy_health` rows, returns `{breaches: [{slo_name, target, actual, breach_duration_minutes}]}`. | S | AET-25 | `[ ]` |
-| AET-29 | New tool `auto_rollback` (`src/tools/auto_rollback.py`). On sustained breach (configurable `slo_breach_sustain_minutes` threshold, default 5min), calls supervisor's existing revert path. Idempotent — no-op if a rollback is already in flight for that deploy. | M | AET-27, AET-28 | `[ ]` |
-| AET-30 | Wire all 4 tools to `ops_heal_agent` in `config/tools.yaml`. | S | AET-26, AET-27, AET-28, AET-29 | `[ ]` |
-| AET-31 | Event subscription — `ops_heal_agent` listens for `deploy_health.anomaly_detected` events emitted by the supervisor loop (AET-24 promotes anomaly_detect outputs to events). On fire, it invokes `slo_check` + decides whether to call `auto_rollback`. Emits `ops.alert.fired` / `ops.rollback.triggered` for UI. | M | AET-27, AET-30 | `[ ]` |
-| AET-32 | Smoke test: deploy a project to staging, inject a controlled 5xx storm (mock endpoint returning 500), verify (a) supervisor loop captures the error_rate spike, (b) `anomaly_detect` flags >2σ deviation, (c) `ops_heal_agent` fires, (d) sustained breach triggers `auto_rollback`, (e) supervisor reverts, (f) health probes recover, (g) `ops.alert.cleared` event fires. End-to-end in `tests/test_ops_heal_smoke.py`. | L | AET-29, AET-31 | `[ ]` |
+| AET-23 | New SQL table `deploy_health` (added to migrations in `src/state/sqlite_store.py`): `(probe_id, deploy_id, env, recorded_at, response_time_ms, error_rate_5m, http_status, restart_count, raw_metrics_json)`. Index on `(env, recorded_at)` for rolling-window queries. | S | none | `[x]` |
+| AET-24 | Supervisor host-process addition — background asyncio task that loops every 60s, fires `health_probe` on every deploy in `running` state, writes a row to `deploy_health`. Crash-resilient via supervisor's existing restart logic. | M | AET-23 | `[x]` |
+| AET-25 | New config `config/slo.yaml` — per-env SLO targets: `{p95_latency_ms, error_rate_max, uptime_min_pct, restart_max_per_hour}`. Documented in `docs/cross-cutting-concerns.md`. | S | none | `[x]` |
+| AET-26 | New tool `health_probe` (`src/tools/health_probe.py`). HTTP GET to `/api/v1/health` on a deploy URL with timeout, returns `{ok, response_time_ms, http_status, error?}`. Reused by both the supervisor loop (AET-24) and the agent directly. | S | AET-23 | `[x]` |
+| AET-27 | New tool `anomaly_detect` (`src/tools/anomaly_detect.py`). Reads recent `deploy_health` rows (last 1hr), computes rolling baseline + std dev for each metric, returns `{alerts: [{metric, current_value, baseline, sigma_deviation, threshold}]}` when any metric exceeds 2σ. | M | AET-23 | `[x]` |
+| AET-28 | New tool `slo_check` (`src/tools/slo_check.py`). Loads `slo.yaml`, compares against recent `deploy_health` rows, returns `{breaches: [{slo_name, target, actual, breach_duration_minutes}]}`. | S | AET-25 | `[x]` |
+| AET-29 | New tool `auto_rollback` (`src/tools/auto_rollback.py`). On sustained breach (configurable `slo_breach_sustain_minutes` threshold, default 5min), calls supervisor's existing revert path. Idempotent — no-op if a rollback is already in flight for that deploy. | M | AET-27, AET-28 | `[x]` |
+| AET-30 | Wire all 4 tools to `ops_heal_agent` in `config/tools.yaml`. | S | AET-26, AET-27, AET-28, AET-29 | `[x]` |
+| AET-31 | Event subscription — `ops_heal_agent` listens for `deploy_health.anomaly_detected` events emitted by the supervisor loop (AET-24 promotes anomaly_detect outputs to events). On fire, it invokes `slo_check` + decides whether to call `auto_rollback`. Emits `ops.alert.fired` / `ops.rollback.triggered` for UI. | M | AET-27, AET-30 | `[x]` |
+| AET-32 | Smoke test: deploy a project to staging, inject a controlled 5xx storm (mock endpoint returning 500), verify (a) supervisor loop captures the error_rate spike, (b) `anomaly_detect` flags >2σ deviation, (c) `ops_heal_agent` fires, (d) sustained breach triggers `auto_rollback`, (e) supervisor reverts, (f) health probes recover, (g) `ops.alert.cleared` event fires. End-to-end in `tests/test_ops_heal_smoke.py`. | L | AET-29, AET-31 | `[x]` |
 
 **AE-5 — `architecture_reviewer` tuning (smallest, mostly already-working)**
 
-| AET-33 | Audit existing `architecture_reviewer` outputs from CrewAI's 5 historical subtasks. Classify each into: useful block / false positive / missed issue. Write findings to `docs/arch-reviewer-audit.md`. | S | none | `[ ]` |
-| AET-34 | System prompt tuning based on audit (AET-33). Sharpen the "what counts as a block-worthy architecture concern" definition vs nitpicking. Add explicit anti-patterns list. | S | AET-33 | `[ ]` |
-| AET-35 | New threshold `arch_review_block_severity` in `config/thresholds.yaml` — only `high` severity findings block the stage, `medium`/`low` annotate but don't gate. | S | none | `[ ]` |
-| AET-36 | Smoke test against the audit corpus from AET-33 — verify previous false positives no longer block, verify previously-missed issues now surface. | M | AET-34, AET-35 | `[ ]` |
+| AET-33 | Audit existing `architecture_reviewer` outputs from CrewAI's 5 historical subtasks. Classify each into: useful block / false positive / missed issue. Write findings to `docs/arch-reviewer-audit.md`. | S | none | `[x]` |
+| AET-34 | System prompt tuning based on audit (AET-33). Sharpen the "what counts as a block-worthy architecture concern" definition vs nitpicking. Add explicit anti-patterns list. | S | AET-33 | `[x]` |
+| AET-35 | New threshold `arch_review_block_severity` in `config/thresholds.yaml` — only `high` severity findings block the stage, `medium`/`low` annotate but don't gate. | S | none | `[x]` |
+| AET-36 | Smoke test against the audit corpus from AET-33 — verify previous false positives no longer block, verify previously-missed issues now surface. | M | AET-34, AET-35 | `[x]` |
 
 **Cross-cutting — tracking + verification + docs**
 
-| AET-37 | Team Status page — agents with `subtasks=0` get a small dashed "SCAFFOLD" badge so the cosmetic-vs-functional distinction is visible. Removes the over-stated "all 15 working" illusion the current page projects. | S | none | `[ ]` |
-| AET-38 | Active Agents feed (on /team page) surfaces AE-driven activity uniformly: quality_guardian.blocked, security_specialist.findings_count, ops_heal_agent.alert_fired show as feed entries with their own glyph + label, not just generic "in_progress". | M | AET-06, AET-21, AET-31 | `[ ]` |
-| AET-39 | PRD revision bump v3.14 → v3.15 with Phase AE completion summary. Update §6.9 status table to show shipped vs planned. Bump `## 14.4 Revision History` row. | S | (after all per-agent phases) | `[ ]` |
-| AET-40 | `agent-lessons-learned.md` — add lessons L22+ for any new failure classes observed during AE implementation (predicted candidates: workflow-runner stage gate vs event-driven gate, supervisor loop crash recovery, async task lifecycle on shutdown). | S | (during implementation) | `[ ]` |
-| AET-41 | Update PRD §6.9.6 (YAML Conformance Requirements) with the new tool grants per agent. Each AE agent's YAML should list its now-real tools under `tool_permissions:`. | S | AET-04, AET-10, AET-19, AET-30 | `[ ]` |
-| AET-42 | End-to-end smoke: ship one BPD feature through the FULL pipeline (PRD draft → finalize → API Spec → finalize → BPD 3-pass → Finalize feature → Dispatch → backend code → frontend code → arch_review → code_review → quality_guardian → testing → security → commit → deploy → ops_heal monitoring → success). Captured as a single Vitest+pytest hybrid in `tests/test_full_pipeline_smoke.py`. The "definition of done" for Phase AE. | L | AET-08, AET-14, AET-22, AET-32, AET-36 | `[ ]` |
+| AET-37 | Team Status page — agents with `subtasks=0` get a small dashed "SCAFFOLD" badge so the cosmetic-vs-functional distinction is visible. Removes the over-stated "all 15 working" illusion the current page projects. | S | none | `[x]` |
+| AET-38 | Active Agents feed (on /team page) surfaces AE-driven activity uniformly: quality_guardian.blocked, security_specialist.findings_count, ops_heal_agent.alert_fired show as feed entries with their own glyph + label, not just generic "in_progress". | M | AET-06, AET-21, AET-31 | `[x]` |
+| AET-39 | PRD revision bump v3.14 → v3.15 with Phase AE completion summary. Update §6.9 status table to show shipped vs planned. Bump `## 14.4 Revision History` row. | S | (after all per-agent phases) | `[x]` |
+| AET-40 | `agent-lessons-learned.md` — add lessons L22+ for any new failure classes observed during AE implementation (predicted candidates: workflow-runner stage gate vs event-driven gate, supervisor loop crash recovery, async task lifecycle on shutdown). | S | (during implementation) | `[x]` |
+| AET-41 | Update PRD §6.9.6 (YAML Conformance Requirements) with the new tool grants per agent. Each AE agent's YAML should list its now-real tools under `tool_permissions:`. | S | AET-04, AET-10, AET-19, AET-30 | `[x]` |
+| AET-42 | End-to-end smoke: ship one BPD feature through the FULL pipeline (PRD draft → finalize → API Spec → finalize → BPD 3-pass → Finalize feature → Dispatch → backend code → frontend code → arch_review → code_review → quality_guardian → testing → security → commit → deploy → ops_heal monitoring → success). Captured as a single Vitest+pytest hybrid in `tests/test_full_pipeline_smoke.py`. The "definition of done" for Phase AE. | L | AET-08, AET-14, AET-22, AET-32, AET-36 | `[x]` |
 
 ### Progress Summary
 
@@ -1288,16 +1456,16 @@ cross-cutting.
 | Phase A: Design + schema foundation | 9 | 9 | 0 | 0 | 0 |
 | Phase B: Three-pass generation | 10 | 10 | 0 | 0 | 0 |
 | Phase C: Dispatch engine + auto-dispatch | 9 | 9 | 0 | 0 | 0 |
-| Phase D: UI rework | 9 | 6 | 3 | 0 | 0 |
+| Phase D: UI rework | 9 | 9 | 0 | 0 | 0 |
 | Phase E: Migration + polish + verification | 8 | 7 | 0 | 1 | 0 |
 | Phase F: Generation hardening | 8 | 8 | 0 | 0 | 0 |
 | Phase AE: Agentic Engineering — quality_guardian (AE-3) | 8 | 8 | 0 | 0 | 0 |
-| Phase AE: Agentic Engineering — self_learning_agent (AE-2) | 6 | 0 | 0 | 0 | 6 |
-| Phase AE: Agentic Engineering — security_specialist (AE-4) | 8 | 0 | 0 | 0 | 8 |
-| Phase AE: Agentic Engineering — ops_heal_agent (AE-1) | 10 | 0 | 0 | 0 | 10 |
-| Phase AE: Agentic Engineering — architecture_reviewer (AE-5) | 4 | 0 | 0 | 0 | 4 |
-| Phase AE: Agentic Engineering — cross-cutting | 6 | 0 | 0 | 0 | 6 |
-| **Total** | **95** | **57** | **3** | **1** | **34** |
+| Phase AE: Agentic Engineering — self_learning_agent (AE-2) | 6 | 6 | 0 | 0 | 0 |
+| Phase AE: Agentic Engineering — security_specialist (AE-4) | 8 | 8 | 0 | 0 | 0 |
+| Phase AE: Agentic Engineering — ops_heal_agent (AE-1) | 10 | 10 | 0 | 0 | 0 |
+| Phase AE: Agentic Engineering — architecture_reviewer (AE-5) | 4 | 4 | 0 | 0 | 0 |
+| Phase AE: Agentic Engineering — cross-cutting | 6 | 6 | 0 | 0 | 0 |
+| **Total** | **95** | **94** | **0** | **1** | **0** |
 
 ### Phase AE execution notes
 

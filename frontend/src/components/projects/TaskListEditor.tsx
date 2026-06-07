@@ -17,6 +17,7 @@ import {
 } from "lucide-react"
 import { api } from "../../lib/api"
 import { PopupWindow } from "../board/PopupWindow"
+import { validateDepends, type DepIssue as _DepIssue } from "./_depValidation"
 
 interface Task {
   task_id: string
@@ -31,7 +32,14 @@ interface Task {
   estimated_agent: string | null
   task_status: string
   request_id: string | null
+  // BPD-36 — depends_on drives the inline validation chip. The API has
+  // emitted this field since BPD-003; the editor just wasn't reading it.
+  depends_on?: string[]
 }
+
+// BPD-36 — DepIssue type re-exported from the pure validator module
+// (_depValidation.ts). Single source of truth.
+type DepIssue = _DepIssue
 
 interface Props {
   projectId: string
@@ -265,6 +273,15 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
       return a.ordinal - b.ordinal
     })
   }, [tasks])
+  // BPD-36 — dependency-validation issue map. Pure validator extracted
+  // to `_depValidation.ts` so it's testable in isolation. Recomputed on
+  // every tasks-list change; output drives the inline DepIssueChip
+  // beside each task_id cell.
+  const depIssuesByTaskId = useMemo(
+    () => validateDepends(tasks || []),
+    [tasks],
+  )
+
   const allSelected =
     deletableTasks.length > 0 && deletableTasks.every((t) => selectedIds.has(t.task_id))
   const someSelected = selectedIds.size > 0 && !allSelected
@@ -697,38 +714,48 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
                       orchestrator ("dispatch T-abc12345"). Visual
                       feedback via title; copy uses the Clipboard
                       API with a fallback for older browsers. */}
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    title={`Click to copy ${t.task_id}`}
-                    onClick={() => {
-                      try {
-                        void navigator.clipboard?.writeText(t.task_id)
-                      } catch {
-                        /* clipboard unavailable — title text still informs */
-                      }
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault()
-                        try { void navigator.clipboard?.writeText(t.task_id) } catch { /* no-op */ }
-                      }
-                    }}
-                    style={{
-                      color: "var(--accent)",
-                      fontFamily: "var(--font-mono)",
-                      fontSize: 11,
-                      cursor: "pointer",
-                      padding: "1px 6px",
-                      borderRadius: 3,
-                      background: "var(--bg-hover)",
-                      border: "1px solid var(--border)",
-                      userSelect: "all",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {t.task_id}
-                  </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      title={`Click to copy ${t.task_id}`}
+                      onClick={() => {
+                        try {
+                          void navigator.clipboard?.writeText(t.task_id)
+                        } catch {
+                          /* clipboard unavailable — title text still informs */
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault()
+                          try { void navigator.clipboard?.writeText(t.task_id) } catch { /* no-op */ }
+                        }
+                      }}
+                      style={{
+                        color: "var(--accent)",
+                        fontFamily: "var(--font-mono)",
+                        fontSize: 11,
+                        cursor: "pointer",
+                        padding: "1px 6px",
+                        borderRadius: 3,
+                        background: "var(--bg-hover)",
+                        border: "1px solid var(--border)",
+                        userSelect: "all",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {t.task_id}
+                    </span>
+                    {/* BPD-36 — dependency-validation chip. Sits inline
+                        with the task_id so the operator's eye lands on
+                        the error in the same cell as the row that owns
+                        the bad depends_on. Color: red for errors, amber
+                        for warnings (forward_ref). Tooltip lists every
+                        issue + Fix hint so the editor pass clears all
+                        problems at once. */}
+                    <DepIssueChip issues={depIssuesByTaskId.get(t.task_id) || []} />
+                  </div>
                 </Td>
                 <Td>
                   {isFinalized ? (
@@ -1206,6 +1233,55 @@ function dangerBtn(disabled: boolean): React.CSSProperties {
     cursor: disabled ? "wait" : "pointer",
     whiteSpace: "nowrap", lineHeight: 1, fontFamily: "var(--font)",
   }
+}
+
+// BPD-36 — inline chip that summarises this task's depends_on issues.
+// Renders nothing when issues is empty so clean rows don't get visual
+// weight. Multi-line `title` lists every issue + Fix hint so a single
+// hover surfaces the whole problem.
+function DepIssueChip({ issues }: { issues: DepIssue[] }) {
+  if (issues.length === 0) return null
+  const hasError = issues.some((i) => i.severity === "error")
+  const tone = hasError ? "var(--danger)" : "var(--warning, #f59e0b)"
+  const tip = issues
+    .map((i) => {
+      const label =
+        i.kind === "self_reference" ? "Self-reference"
+        : i.kind === "dangling"     ? "Dangling reference"
+        : i.kind === "forward_ref"  ? "Forward reference"
+        : "Cycle"
+      const ref = i.bad_ref_title ? `${i.bad_ref} (${i.bad_ref_title})` : i.bad_ref
+      return `${label} → ${ref}\n  Fix: ${i.fix_hint}`
+    })
+    .join("\n\n")
+  const count = issues.length
+  const label = count === 1
+    ? (issues[0].kind === "cycle" ? "cycle"
+        : issues[0].kind === "forward_ref" ? "fwd-ref"
+        : issues[0].kind === "self_reference" ? "self-ref"
+        : "dangling")
+    : `${count} dep issues`
+  return (
+    <span
+      data-testid="dep-issue-chip"
+      data-severity={hasError ? "error" : "warn"}
+      title={tip}
+      style={{
+        fontSize: 9, fontWeight: 700,
+        padding: "1px 6px",
+        borderRadius: 3,
+        border: `1px solid ${tone}`,
+        color: tone,
+        background: "transparent",
+        fontFamily: "var(--font-mono)",
+        textTransform: "uppercase",
+        letterSpacing: 0.5,
+        cursor: "help",
+      }}
+    >
+      ⚠ {label}
+    </span>
+  )
 }
 
 function parseDetail(msg: string | undefined): string | undefined {

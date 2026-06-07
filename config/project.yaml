@@ -71,7 +71,64 @@ auth:
         - "releases:rollback"
         - "cost:manage"
         - "system:configure"
+        - "kb:curate"          # implicit kb_curator for all scopes
+
+  # KB-29 — knowledge-base curator capability. ORTHOGONAL to the role
+  # hierarchy above: a grantable, scoped capability gating KB curation
+  # (approve/retire documents, promote episodic memory → knowledge). Stored
+  # per-user as `kb_curator_scopes` (a list) and carried in the JWT. Scopes:
+  #   - "platform"   : curate the kb_platform corpus
+  #   - "<project_id>": curate that one application's KB/memory (per-project curator)
+  #   - "*"          : curate everything
+  # Admins and developers are IMPLICIT curators (backward compatible — they
+  # could already approve docs). The capability exists to grant a plain viewer
+  # curation rights on specific projects without elevating their whole role.
+  kb_curator:
+    capability: "kb:curate"
+    scopes: ["platform", "<project_id>", "*"]
+    grants: ["documents:approve", "documents:retire", "memory:promote"]
 
   first_run:
     default_admin_username: "admin"
     force_password_change: true
+
+# ── Knowledge Base Configuration (KB-01) ────────────
+# Agentic Knowledge Base & Memory — see docs/prd-knowledge-base.md and
+# docs/knowledge-base-design.md. Datastore is PostgreSQL 16 + pgvector
+# (separate from the SQLite platform DB). Connection values come from the
+# KB_PG_* env vars (docker-compose injects them); the password also resolves
+# from the `kb_pg_password` Docker secret. Embeddings run locally (fastembed).
+knowledge_base:
+  enabled: true                        # false → backend skips KB init entirely
+  # KB-33 — ingestion dispatch mode. inline (default, await + return doc_id) |
+  # background (fire-and-forget asyncio, off the event path) | queue (Redis +
+  # arq workers — the scale-out path, see docs/kb-scale-out.md). Call sites
+  # don't change; only this mode does.
+  ingest_mode: "inline"
+  postgres:
+    host_env: "KB_PG_HOST"             # → postgres (service hostname on dev-net)
+    port_env: "KB_PG_PORT"             # → 5432
+    user_env: "KB_PG_USER"             # → agentteam
+    password_ref: "kb_pg_password"     # Docker secret name; falls back to KB_PG_PASSWORD env
+    db_env: "KB_PG_DB"                 # → agentteam_kb
+    # Connection pool sizing for the async psycopg pool (KB-02).
+    pool_min: 1
+    pool_max: 10
+  embeddings:
+    # LOCAL by default — fastembed runs an ONNX model in-process. No external
+    # account, no API key, no per-call cost. Swappable behind the Embedder
+    # interface (KB-02 / KB-13a). The model downloads once from HuggingFace and
+    # is cached on the kb-fastembed-cache volume (FASTEMBED_CACHE_PATH).
+    provider: "fastembed"              # supported: fastembed (local ONNX)
+    model: "BAAI/bge-small-en-v1.5"    # 384-dim; strong + lean (~130 MB)
+    dimensions: 384                    # MUST match the model + the pgvector column
+    cache_dir: ""                      # blank → FASTEMBED_CACHE_PATH env / default
+  retrieval:
+    top_k: 8                           # chunks returned
+    hybrid_candidates: 40              # per-arm (vector + keyword) candidates before fusion
+    rerank: false                      # Phase 1: RRF fusion only (no cross-encoder rerank)
+  namespaces:
+    platform: "kb_platform"            # Phase 1 scope — the platform's own knowledge
+    project_prefix: "kb_project_"      # Phase 2 (KB-13) — per-app isolation: kb_project_<id>
+    memory_prefix: "mem_project_"      # Phase 4 (KB-24) — per-app episodic memory: mem_project_<id>
+    agent_memory_prefix: "mem_agent_"  # Phase 4 (KB-24) — cross-project per-agent memory: mem_agent_<id>

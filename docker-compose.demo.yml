@@ -28,14 +28,43 @@ services:
       # ANTHROPIC_AWS_API_KEY and ANTHROPIC_AWS_WORKSPACE_ID come from .env.demo.
       - AWS_REGION=${AWS_REGION:-us-east-1}
       - ANTHROPIC_AWS_INFERENCE_GEO=${ANTHROPIC_AWS_INFERENCE_GEO:-us}
+      # KB-01 — Knowledge Base datastore (Postgres + pgvector).
+      - KB_PG_HOST=${KB_PG_HOST:-postgres}
+      - KB_PG_PORT=${KB_PG_PORT:-5432}
+      - KB_PG_USER=${KB_PG_USER:-agentteam}
+      - KB_PG_PASSWORD=${KB_PG_PASSWORD:-change-me-in-demo}
+      - KB_PG_DB=${KB_PG_DB:-agentteam_kb}
     networks:
       - demo-net
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
       interval: 30s
       timeout: 5s
       start_period: 20s
       retries: 3
+    restart: unless-stopped
+
+  # KB-01 — Knowledge Base datastore (Postgres 16 + pgvector).
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agent-team-demo-postgres
+    environment:
+      - POSTGRES_USER=${KB_PG_USER:-agentteam}
+      - POSTGRES_PASSWORD=${KB_PG_PASSWORD:-change-me-in-demo}
+      - POSTGRES_DB=${KB_PG_DB:-agentteam_kb}
+    volumes:
+      - agent-team-demo-pgdata:/var/lib/postgresql/data
+    networks:
+      - demo-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KB_PG_USER:-agentteam} -d ${KB_PG_DB:-agentteam_kb}"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
     restart: unless-stopped
 
   frontend:
@@ -61,6 +90,7 @@ services:
 
 volumes:
   agent-team-demo-data:
+  agent-team-demo-pgdata:   # KB-01
 
 networks:
   demo-net:

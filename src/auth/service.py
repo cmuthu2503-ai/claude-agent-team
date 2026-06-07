@@ -48,6 +48,9 @@ class AuthService:
             "sub": user.user_id,
             "username": user.username,
             "role": user.role,
+            # KB-29 — curator scopes travel in the token so route guards don't
+            # have to hit the DB on every curation action.
+            "kb_curator_scopes": list(user.kb_curator_scopes or []),
             "exp": expire,
         }
         return jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
@@ -115,6 +118,25 @@ def require_role(*allowed_roles: str):
             )
         return payload
     return role_checker
+
+
+def is_kb_curator(payload: dict[str, Any], scope: str | None = None) -> bool:
+    """KB-29 — does this user hold the curator capability for ``scope``?
+
+    A scope is ``"platform"`` (the kb_platform corpus) or a ``project_id`` (that
+    app's KB/memory). Admins are implicit curators everywhere; developers are
+    implicit curators too (they could already approve docs pre-KB-29, so this
+    is backward-compatible). Beyond those, a user qualifies if their granted
+    ``kb_curator_scopes`` contains ``scope`` or the wildcard ``"*"`` — this is
+    how a plain viewer is made curator of a single project without elevating
+    their whole role.
+    """
+    if payload.get("role") in ("admin", "developer"):
+        return True
+    scopes = payload.get("kb_curator_scopes") or []
+    if "*" in scopes:
+        return True
+    return scope is not None and scope in scopes
 
 
 async def get_current_user(

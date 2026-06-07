@@ -242,6 +242,39 @@ Everything agent-related is defined in YAML under `config/` and loaded by `src/c
 
 JWT-based, bcrypt-hashed local users in SQLite. Three roles with inheritance: `viewer` → `developer` → `admin`. Permissions are enforced per route — see the full matrix in `docs/cross-cutting-concerns.md` AREA 1 and the role definitions in `config/project.yaml` under `auth:`. On first run, `AuthService.bootstrap_admin()` creates an `admin` user and logs a one-time password (force password change on first login).
 
+### Model assignments (per-agent dynamic resolution)
+
+Each agent's LLM model is resolved **per invocation** rather than pinned at construction. The mechanism is the PAM (Per-Agent Model assignment) work — see `docs/prd-per-agent-model-assignment.md` for the formal spec.
+
+**Catalog (`config/models.yaml`):**
+Single source of truth for "which models exist." Each entry carries `provider_type` (`anthropic_aws`, `anthropic`, `bedrock`, `openai`, `openai_compat`), `model_id` (the vendor SDK string), `tier` (`frontier`, `workhorse`, `fast`, `local`), `tool_calling_mode` (`native` or `prompted`), and `pricing_per_million.{input, output}` in USD. Loaded once at boot by `ModelCatalog.load()` in `src/models/catalog.py` and validated via Pydantic. The catalog also carries `default_model` (last-resort fallback) and a `legacy_provider_aliases` map so old persisted `Request.provider` strings (`anthropic_aws_sonnet` etc.) still resolve.
+
+**5-layer resolution chain (`src/agents/model_resolver.py`):**
+On every agent dispatch the executor calls `ModelResolver.resolve(agent_id, request_provider)` which walks:
+
+1. **`request_override`** — explicit per-request value (Command Center submit form, in-flight retry's persisted `Request.provider`)
+2. **`db_override`** — operator-set row in the `agent_model_overrides` SQLite table (set via the Team Status UI; PATCH `/api/v1/agents/{id}/model`)
+3. **`agent_yaml`** — the `model:` field in `config/agents/<id>.yaml`
+4. **`env_default`** — the `DEFAULT_AGENT_MODEL` env var
+5. **`catalog_default`** — `default_model` from `models.yaml` (always succeeds)
+
+Each layer skips on `None`, empty string, or a value that doesn't resolve to a known catalog id (logged as `model_resolver_unknown_candidate`, then falls through). Layer 2 also tolerates DB lookup failures — a SQLite hiccup MUST NOT block agent dispatch, so the resolver swallows exceptions and walks past.
+
+The resolved `(client, vendor_model_id, model_def, tool_calling_mode)` is threaded into `BaseAgent.process_task()` as **kwargs**, not stored on the agent instance. This is the L24-style concurrency fix — two concurrent calls on the same agent with different models cannot cross-pollinate via shared `self.model` / `self._llm_client`. The whole chain is covered by `tests/test_concurrency.py`.
+
+**How to assign a model to an agent at runtime:**
+Visit `/team` (Team Status) as an admin. Each agent card has a `<ModelSelector>` dropdown grouped by tier; pick a model → the change is optimistic + persisted via `PATCH /api/v1/agents/{id}/model`. Click the "Reset to default" footer to clear that agent's override (resolver falls back to the YAML default). The header "Reset all model assignments" button clears every override at once (two-click confirm to prevent misclicks during incidents). Non-admins see a read-only chip variant.
+
+**How to add a new model:**
+1. Add an entry to `config/models.yaml` under `models:` with `id`, `provider_type`, `model_id`, `api_key_env`, `base_url` (if needed), `tool_calling_mode`, `tier`, `display_name`, and `pricing_per_million`.
+2. Either restart the backend (`docker compose restart backend`) OR `POST /api/v1/models/reload` as admin (hot-swap, no downtime).
+3. The new model immediately appears in the Team Status dropdown.
+
+**Cost attribution:**
+`TokenTracker` (`src/core/token_tracker.py`) reads pricing from the catalog by catalog id, falling back to `config/thresholds.yaml`'s `cost.pricing` block for legacy rows. An unknown model logs a one-time WARNING (`token_tracker_no_pricing_for_model`) deduped per process — fixes the silent-$0 bug that previously made BPD generation spend invisible.
+
+**Note on local models:** the catalog supports an `openai_compat` provider type and a `prompted` tool-calling mode (ReAct/XML via `src/agents/tool_adapter.py`), so Ollama or any OpenAI-compatible local server can be plugged in via a single YAML edit. Local-LLM scope was deferred on 2026-06-01 — see PR-4 in `docs/task-list.md` for the dropped tasks if you want to revive it.
+
 ## Repo conventions
 
 - **Docs go in the working directory.** Any new plan/PRD/research/design doc goes under `docs/` in this repo. Never create project artifacts in `~/.claude/` or other external paths.

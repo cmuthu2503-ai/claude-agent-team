@@ -1,0 +1,96 @@
+# Service Level Objectives — AET-25
+#
+# Per-environment SLO targets the AE-1 ops_heal_agent reasons about.
+# Read by:
+#   - src/tools/slo_check.py (AET-28) — verdict per SLO
+#   - src/tools/auto_rollback.py (AET-29) — sustained-breach trigger
+#   - the Ops Console frontend (AET-28 page) — live SLO badges
+#
+# Editing this file does NOT require a backend restart — the slo_check
+# tool reloads on every call. Trade-off: a typo lands instantly,
+# scoped to the one tool that reads it. Validate with:
+#   docker compose exec backend python -c "from src.tools.slo_check import load_slo_config; load_slo_config()"
+#
+# Severity model (matches AET-20 / AET-35 convention):
+#   - Availability dipping below target → BREACH (auto_rollback trigger)
+#   - Any other SLO failing → DEGRADED (alert, do not roll back)
+# This split exists so a slow p99 in production doesn't pull the chute;
+# only user-visible unavailability does.
+#
+# Inheritance: each env may override `defaults`. Anything not specified
+# in an env block falls back to defaults.
+
+defaults:
+  # Rolling window for percentile / availability calculations.
+  window_minutes: 15
+
+  # Smallest probe count before slo_check is allowed to emit a real
+  # PASS/DEGRADED/BREACH verdict. Below this it returns INSUFFICIENT_DATA
+  # so the agent can't auto-rollback on a cold start. 3 covers ~3 min of
+  # data at the AET-24 60s probe cadence.
+  min_samples: 3
+
+  # The five SLOs. Targets are env-tunable below. Comparator notation:
+  #   ge → "higher is better" (only used by availability)
+  #   le → "lower is better"  (used by latency / error / restart_burst)
+  slos:
+    availability:
+      target:     0.99    # 99% of probes succeed (HTTP 2xx)
+      comparator: ge
+      severity:   breach   # below target → BREACH → auto_rollback trigger
+    p95_latency_ms:
+      target:     500
+      comparator: le
+      severity:   degraded
+    p99_latency_ms:
+      target:     1000
+      comparator: le
+      severity:   degraded
+    error_rate_5m:
+      target:     0.01    # ≤1% errors in rolling 5m sub-window
+      comparator: le
+      severity:   degraded
+    restart_burst:
+      target:     2       # ≤2 container restarts in rolling 5m
+      comparator: le
+      severity:   degraded
+
+# ── Per-env overrides ────────────────────────────────────────────────
+# Each block inherits from `defaults`. Override any SLO's `target` field
+# to tighten/loosen for that env. The intent: production is strictest,
+# development is loosest (we expect cold-restart latency spikes during
+# active dev work and don't want them to noise up the agent).
+
+development:
+  slos:
+    p95_latency_ms:
+      target: 2000      # cold-start spikes acceptable on dev
+    p99_latency_ms:
+      target: 5000
+    availability:
+      target: 0.90      # local stack flaps during code reloads
+    restart_burst:
+      target: 10        # active dev = lots of restarts
+
+staging:
+  # Staging is the trial-by-fire env — should match production targets
+  # so a regression here catches before promotion.
+  slos: {}    # inherit defaults verbatim
+
+production:
+  slos:
+    availability:
+      target: 0.995     # 99.5% in prod — tighter than the 99% default
+    p95_latency_ms:
+      target: 300       # user-visible — be stricter
+    error_rate_5m:
+      target: 0.005     # 0.5% errors in prod
+
+demo:
+  # Demo is for screenshots / customer walkthroughs; tolerate noise but
+  # don't pretend it's production.
+  slos:
+    availability:
+      target: 0.95
+    p95_latency_ms:
+      target: 1500

@@ -14,6 +14,10 @@ matching environment variables.
 | `github_token.txt`      | `src/core/github_publisher.py` (research auto-push) | `GITHUB_TOKEN` |
 | `firecrawl_api_key.txt` | `src/tools/firecrawl_tools.py` (web search/scrape) | `FIRECRAWL_API_KEY` |
 | `jwt_secret.txt`        | `src/main.py` (JWT signing) | `JWT_SECRET` |
+| `kb_pg_password.txt`    | Knowledge Base Postgres password (KB-01) | `KB_PG_PASSWORD` |
+
+> **KB embeddings are local** (fastembed ONNX, KB-13a) — no embedding API key
+> or account is required. The model runs in-process and caches on a volume.
 
 Each file should contain **only the secret value** — no quotes, no key name,
 no trailing newlines (the reader strips whitespace, but cleaner is better).

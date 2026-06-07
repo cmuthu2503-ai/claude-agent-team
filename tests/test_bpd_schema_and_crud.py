@@ -150,27 +150,43 @@ async def test_epic_finalize_archives_other_finalized(tmp_path: Path) -> None:
     assert v2 is not None and v2.list_status == ArtifactStatus.FINALIZED
 
 
-async def test_epic_delete_cascades_features_and_nulls_tasks(tmp_path: Path) -> None:
-    """Deleting an epic deletes its features but PRESERVES tasks
-    (task.feature_id is NULL'd, not the task row itself). This protects
-    agent emission from being lost on a structural reshuffle."""
+async def test_epic_delete_cascade_semantics(tmp_path: Path) -> None:
+    """Deleting an epic:
+      - hard-deletes UNSTARTED backlog tasks (regenerable draft rows
+        that would otherwise pile up as orphans across re-runs)
+      - PRESERVES dispatched / in-flight / completed tasks (real work
+        history that the user already paid compute for), NULLing the
+        feature_id back-link so they survive as "Legacy" rows.
+    Previously the cascade NULLed every task indiscriminately, which
+    let backlog orphans accumulate across every BPD re-generation
+    cycle — they showed in the rollup counter but couldn't render
+    under any feature because their feature was gone."""
     store = await _make_store(tmp_path)
     await store.create_epic(_epic("E-X"))
     await store.create_feature(_feature("F-X1", "E-X"))
     await store.create_feature(_feature("F-X2", "E-X"))
+    # T-X1: backlog + no request → should be HARD DELETED
     await store.create_task(_task("T-X1", feature_id="F-X1"))
-    await store.create_task(_task("T-X2", feature_id="F-X2"))
+    # T-X2: in_progress with request_id → should SURVIVE with
+    # feature_id NULLed (history preserved)
+    await store.create_task(_task(
+        "T-X2", feature_id="F-X2",
+        status=TaskStatus.IN_PROGRESS,
+        request_id="REQ-XYZ",
+    ))
 
     await store.delete_epic("E-X")
 
     assert await store.get_epic("E-X") is None
     assert await store.get_feature("F-X1") is None
     assert await store.get_feature("F-X2") is None
-    # Tasks survive; back-link cleared
-    t1 = await store.get_task("T-X1")
+    # Backlog orphan → gone
+    assert await store.get_task("T-X1") is None
+    # Dispatched task → survives, feature_id NULLed
     t2 = await store.get_task("T-X2")
-    assert t1 is not None and t1.feature_id is None
-    assert t2 is not None and t2.feature_id is None
+    assert t2 is not None
+    assert t2.feature_id is None
+    assert t2.request_id == "REQ-XYZ"  # history preserved
 
 
 # ── Feature CRUD ──────────────────────────────────────────────────────
@@ -200,15 +216,26 @@ async def test_feature_list_by_epic(tmp_path: Path) -> None:
     assert [f.feature_id for f in listed_a] == ["F-A1", "F-A2"]
 
 
-async def test_feature_delete_nulls_task_back_link(tmp_path: Path) -> None:
+async def test_feature_delete_cascade_semantics(tmp_path: Path) -> None:
+    """Same delete-vs-preserve rules as delete_epic: unstarted backlog
+    rows are hard-deleted; dispatched / completed rows survive."""
     store = await _make_store(tmp_path)
     await store.create_epic(_epic("E-001"))
     await store.create_feature(_feature("F-001", "E-001"))
+    # Backlog → deleted
     await store.create_task(_task("T-100", feature_id="F-001"))
+    # Completed with request → preserved
+    await store.create_task(_task(
+        "T-101", feature_id="F-001",
+        status=TaskStatus.DEPLOYED,
+        request_id="REQ-ABC",
+    ))
     await store.delete_feature("F-001")
     assert await store.get_feature("F-001") is None
-    t = await store.get_task("T-100")
+    assert await store.get_task("T-100") is None  # backlog orphan purged
+    t = await store.get_task("T-101")
     assert t is not None and t.feature_id is None
+    assert t.request_id == "REQ-ABC"
 
 
 # ── ProjectTask BPD fields round-trip ─────────────────────────────────

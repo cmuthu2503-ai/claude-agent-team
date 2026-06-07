@@ -82,12 +82,19 @@ class WorkflowRunner:
         # `policy_check_unavailable` so the operator can spot the gap.
         get_policy_check_tool: Callable[[], Any] | None = None,
         events: Any = None,
+        # AET-21 — `thresholds` is the parsed thresholds.yaml dict
+        # (ConfigLoader.thresholds). Used to read
+        # `security_max_severity_to_block` for the AE-4 security gate.
+        # Optional for backward compat with existing tests that build
+        # a runner without config — falls back to DEFAULT_MAX_SEVERITY.
+        thresholds: dict[str, Any] | None = None,
     ) -> None:
         self.executor = executor
         self._code_commit_handler = code_commit_handler
         self._publish_handler = publish_handler
         self._get_policy_check_tool = get_policy_check_tool
         self._events = events
+        self._thresholds = thresholds
         # Fix A: invoked RIGHT AFTER the development stage completes
         # (before review/testing). Writes the agent's ``### Full Source:``
         # blocks to disk + runs lint/test so the reviewer's file_read at
@@ -238,7 +245,7 @@ class WorkflowRunner:
 
                 # Security gate: runs after SECURITY stage
                 if stage_id == "security":
-                    sec_result = self._check_security_gate(artifacts, request_id)
+                    sec_result = await self._check_security_gate(artifacts, request_id)
                     if not sec_result["passed"]:
                         rework_count = self._rework_count.get(request_id, 0)
                         if rework_count < MAX_REWORK_CYCLES:
@@ -658,13 +665,34 @@ class WorkflowRunner:
             return False
         return True  # No clear failure signal = pass
 
-    def _check_security_gate(self, artifacts: dict[str, Any], request_id: str) -> dict[str, Any]:
-        """Evaluate the security stage output against no_critical_vulnerabilities
-        and no_secrets_detected gates.
+    async def _check_security_gate(
+        self, artifacts: dict[str, Any], request_id: str,
+    ) -> dict[str, Any]:
+        """AET-21 — evaluate the security stage output against the
+        configured ``security_max_severity_to_block`` threshold.
 
-        Pass = security_specialist emitted "Verdict: ✅ PASS" (or no report yet).
-        Fail = "Verdict: ❌ FAIL" or explicit CRITICAL/HIGH findings present.
+        Priority order:
+          1. STRUCTURED PATH — the agent embedded a
+             ```security-report-json fenced block. Parse findings,
+             split via the AET-20 threshold, decide BLOCK/PASS
+             mechanically. Emit security.gate.* event with the
+             structured payload.
+          2. PROSE FALLBACK — no JSON block, or it failed to parse.
+             Fall back to the legacy verdict-line parser so older
+             agents (or rework cycles where the model regressed to
+             prose) still produce a sensible decision. Emit the same
+             events but with empty `blocking` / `by_tool` lists so
+             subscribers can still render something.
+
+        Returns ``{"passed": bool, "reason": str}`` to match the
+        existing call-site contract.
         """
+        from src.core.security_gate import (
+            emit_security_gate_event,
+            evaluate_security_report,
+        )
+        from src.core.security_threshold import get_max_severity
+
         sec_text = artifacts.get("security_report", "")
         if not sec_text:
             for key, val in artifacts.items():
@@ -672,12 +700,75 @@ class WorkflowRunner:
                     sec_text = val
                     break
 
+        max_severity = get_max_severity(self._thresholds)
+
+        # ── 1. Structured path ────────────────────────────────────────
+        decision = evaluate_security_report(sec_text, max_severity)
+        if decision is not None:
+            await emit_security_gate_event(self._events, request_id, decision)
+            if decision["verdict"] == "PASS":
+                logger.info(
+                    "security_gate_passed_structured",
+                    request_id=request_id,
+                    finding_count=len(decision.get("non_blocking", [])),
+                    max_severity=max_severity,
+                )
+                return {
+                    "passed": True,
+                    "reason": decision["summary"],
+                }
+            # BLOCK — build the rework feedback string with per-finding
+            # detail so the next cycle has actionable guidance.
+            feedback = [
+                "=== SECURITY GATE BLOCKED (structured) ===",
+                decision["summary"],
+                "",
+                "Findings at/above the configured cutoff "
+                f"('{max_severity}'):",
+            ]
+            for f in decision["blocking"][:20]:  # cap to keep prompt sane
+                feedback.append(
+                    f"  - [{f.get('severity', '?').upper()}] "
+                    f"{f.get('tool', '?')}/{f.get('rule_id', '?')} "
+                    f"at {f.get('file', '?')}:{f.get('line', '?')} — "
+                    f"{(f.get('message') or '')[:200]}"
+                )
+                if f.get("fix_hint"):
+                    feedback.append(f"      Fix: {f['fix_hint'][:200]}")
+            if decision["non_blocking"]:
+                feedback.append("")
+                feedback.append(
+                    f"Sub-threshold findings (not blocking, but worth fixing): "
+                    f"{len(decision['non_blocking'])}"
+                )
+            logger.info(
+                "security_gate_failed_structured",
+                request_id=request_id,
+                blocking_count=len(decision["blocking"]),
+                max_severity=max_severity,
+            )
+            return {"passed": False, "reason": "\n".join(feedback)}
+
+        # ── 2. Prose fallback ─────────────────────────────────────────
         vuln_passed = self._check_no_critical_vulnerabilities(sec_text)
         secrets_passed = self._check_no_secrets_detected(sec_text)
 
         if vuln_passed and secrets_passed:
-            logger.info("security_gate_passed", request_id=request_id)
-            return {"passed": True, "reason": "Security scan passed — no critical vulnerabilities or secrets detected"}
+            logger.info(
+                "security_gate_passed_prose_fallback", request_id=request_id,
+            )
+            await emit_security_gate_event(
+                self._events, request_id,
+                {
+                    "verdict": "PASS", "max_severity": max_severity,
+                    "blocking": [], "non_blocking": [], "by_tool": {},
+                    "summary": "Security scan passed (prose fallback path).",
+                },
+            )
+            return {
+                "passed": True,
+                "reason": "Security scan passed — no critical vulnerabilities or secrets detected",
+            }
 
         feedback_parts = []
         if not vuln_passed:
@@ -696,8 +787,16 @@ class WorkflowRunner:
             )
 
         logger.info(
-            "security_gate_failed", request_id=request_id,
+            "security_gate_failed_prose_fallback", request_id=request_id,
             vuln_passed=vuln_passed, secrets_passed=secrets_passed,
+        )
+        await emit_security_gate_event(
+            self._events, request_id,
+            {
+                "verdict": "BLOCK", "max_severity": max_severity,
+                "blocking": [], "non_blocking": [], "by_tool": {},
+                "summary": "Security scan failed (prose fallback path).",
+            },
         )
         return {"passed": False, "reason": "\n\n".join(feedback_parts)}
 

@@ -1,0 +1,195 @@
+# Per-Agent Dynamic Model Assignment — Model Catalog (PAM-01)
+#
+# Single source of truth for which LLM models the platform knows about.
+# Read by:
+#   - src/models/catalog.py (PAM-02) — Pydantic-validated load
+#   - src/agents/client_pool.py (PAM-03) — provider client construction
+#   - src/agents/model_resolver.py (PAM-05) — per-agent resolution chain
+#   - src/core/token_tracker.py (PAM-15) — per-call cost attribution
+#
+# Adding a new model: append an entry under `models:` with the 8 fields
+# below, then `POST /api/v1/models/reload` (admin-only, PAM-12) or restart
+# the backend. No code changes required for new models that share an
+# existing provider_type — the client_pool resolves a new client from the
+# (provider_type, base_url) tuple at first use.
+#
+# ── KB-32 cost guidance: retrieval-heavy agents ───────────────────────────
+# The agentic-retrieval agents (architecture_reviewer, code_reviewer — they
+# run a ReAct loop with retrieval.max_searches up to 8) spend most of their
+# tokens summarizing retrieved chunks, not deep reasoning. That work runs well
+# on a CHEAPER model. To cap cost without hurting grounding, set a per-agent
+# override to a cheaper tier via TeamStatus → ModelSelector (PAM-19) or
+# PATCH /api/v1/agents/<id> (PAM-13). The KB query cache + per-Request
+# max_searches budget (KB-32) already bound how often they retrieve; a cheaper
+# model bounds the per-call cost.
+#
+# ── Field reference ───────────────────────────────────────────────────────
+#
+# provider_type   — wire protocol family. One of:
+#                     anthropic       — Anthropic direct API (api.anthropic.com)
+#                     anthropic_aws   — Claude Platform on AWS (the current default)
+#                     bedrock         — AWS Bedrock (boto3 AnthropicBedrock)
+#                     openai          — OpenAI direct (api.openai.com)
+#                     openai_compat   — any OpenAI-compatible endpoint
+#                                       (Ollama, vLLM, Together, Groq, …)
+#
+# model_id        — the vendor's canonical id for the model. Passed verbatim
+#                   to the SDK (`model="claude-opus-4-7"`). For openai_compat
+#                   endpoints this is whatever the local server expects
+#                   (e.g. `gemma3:12b` for Ollama).
+#
+# api_key_env     — env var name that holds the API key. Null when the
+#                   provider doesn't require auth (Ollama on localhost).
+#                   The platform NEVER reads the value here; it reads from
+#                   env at construction time so secrets stay out of YAML.
+#
+# base_url        — provider endpoint. Null for SDK defaults. Required for
+#                   openai_compat (no SDK default). The (provider_type,
+#                   base_url) tuple is the client_pool cache key.
+#
+# tool_calling_mode — how the agent system tells this model about tools:
+#                     native    — provider supports function calling natively
+#                                 (Anthropic, OpenAI, Bedrock all do)
+#                     prompted  — fall back to ReAct-style prompted tool use
+#                                 (PromptedToolAdapter, PAM-04). Required
+#                                 for local models that don't speak the
+#                                 tool-use protocol natively.
+#
+# tier            — pricing tier for UI grouping + cost-dashboard color:
+#                     frontier  — top-of-line reasoning models (Opus)
+#                     workhorse — balanced cost/quality (Sonnet)
+#                     fast      — latency-optimized cheap models (Haiku)
+#                     local     — runs on operator hardware ($0)
+#
+# pricing_per_million — USD per million tokens, separated into input + output.
+#                        Used by token_tracker (PAM-15) for per-call cost
+#                        attribution. For US inference_geo on Anthropic AWS
+#                        the 1.1× multiplier is BAKED IN here — matches the
+#                        legacy thresholds.yaml::cost.pricing convention.
+#                        Local models are 0.00 by definition.
+#
+# ── Resolution defaults ──────────────────────────────────────────────────
+
+# Fallback when no agent override, no YAML default, and no env var pins
+# a specific model. Keeps the platform working out of the box.
+default_model: claude-opus-4-7
+
+# Map from pre-PAM "provider" identifiers (Request.provider column, env
+# var values) to a concrete model_id. Old persisted Request rows from
+# before PAM-01 carry strings like "anthropic_aws_opus" — this map keeps
+# them resolvable without a data migration.
+legacy_provider_aliases:
+  anthropic_aws:        claude-opus-4-7      # legacy default
+  anthropic_aws_opus:   claude-opus-4-7
+  anthropic_aws_sonnet: claude-sonnet-4-7
+  anthropic_direct:     claude-opus-4-7
+  bedrock:              bedrock-claude-sonnet-4-7
+  openai:               gpt-5-4
+  gpt5:                 gpt-5-4
+  o4-mini:              o4-mini
+  # Note: an `ollama: ollama-gemma` alias used to live here as a
+  # forward-looking placeholder for PAM-23 (PR-4). That work was
+  # dropped on 2026-06-01 — no local-model support planned — so the
+  # orphan alias was removed to stop the `legacy_alias_dropped` warning
+  # on every backend boot. Re-add it (plus the matching models: entry)
+  # if local-LLM scope is revived.
+
+# ── Model catalog ────────────────────────────────────────────────────────
+
+
+models:
+
+  # ── Anthropic / Claude Platform on AWS — current production stack ──────
+
+  claude-opus-4-7:
+    provider_type:    anthropic_aws
+    model_id:         claude-opus-4-7
+    api_key_env:      ANTHROPIC_AWS_API_KEY
+    base_url:         null
+    tool_calling_mode: native
+    tier:             frontier
+    display_name:     "Claude Opus 4.7"
+    pricing_per_million:
+      input:  16.50        # 15.00 × 1.1 US-geo multiplier
+      output: 82.50        # 75.00 × 1.1
+
+  claude-sonnet-4-7:
+    provider_type:    anthropic_aws
+    model_id:         claude-sonnet-4-7
+    api_key_env:      ANTHROPIC_AWS_API_KEY
+    base_url:         null
+    tool_calling_mode: native
+    tier:             workhorse
+    display_name:     "Claude Sonnet 4.7"
+    pricing_per_million:
+      input:   3.30        # 3.00 × 1.1
+      output: 16.50        # 15.00 × 1.1
+
+  claude-haiku-4-7:
+    provider_type:    anthropic_aws
+    model_id:         claude-haiku-4-7
+    api_key_env:      ANTHROPIC_AWS_API_KEY
+    base_url:         null
+    tool_calling_mode: native
+    tier:             fast
+    display_name:     "Claude Haiku 4.7"
+    pricing_per_million:
+      input:  0.88         # 0.80 × 1.1
+      output: 4.40         # 4.00 × 1.1
+
+  # ── Anthropic direct API (fallback when Claude Platform on AWS is down) ──
+
+  claude-opus-4-7-direct:
+    provider_type:    anthropic
+    model_id:         claude-opus-4-7
+    api_key_env:      ANTHROPIC_API_KEY
+    base_url:         null     # SDK default
+    tool_calling_mode: native
+    tier:             frontier
+    display_name:     "Claude Opus 4.7 (direct)"
+    pricing_per_million:
+      input:  15.00          # raw Anthropic direct pricing (no AWS multiplier)
+      output: 75.00
+
+  # ── AWS Bedrock — alternative path for orgs on Bedrock contracts ──────
+
+  bedrock-claude-sonnet-4-7:
+    provider_type:    bedrock
+    model_id:         anthropic.claude-sonnet-4-7-20260301-v1:0
+    api_key_env:      AWS_ACCESS_KEY_ID    # Bedrock uses AWS creds; this is informational
+    base_url:         null                  # boto3 resolves from AWS_REGION
+    tool_calling_mode: native
+    tier:             workhorse
+    display_name:     "Claude Sonnet 4.7 (Bedrock)"
+    pricing_per_million:
+      input:  3.00
+      output: 15.00
+
+  # ── OpenAI — for ops who prefer GPT-class models on specific agents ───
+
+  gpt-5-4:
+    provider_type:    openai
+    model_id:         gpt-5.4
+    api_key_env:      OPENAI_API_KEY
+    base_url:         null
+    tool_calling_mode: native
+    tier:             frontier
+    display_name:     "GPT-5.4"
+    pricing_per_million:
+      input:  10.00
+      output: 30.00
+
+  o4-mini:
+    provider_type:    openai
+    model_id:         o4-mini
+    api_key_env:      OPENAI_API_KEY
+    base_url:         null
+    tool_calling_mode: native
+    tier:             fast
+    display_name:     "o4-mini"
+    pricing_per_million:
+      input:   1.10
+      output:  4.40
+
+# Ollama entries land via PAM-23 (PR-4). Keeping that scoped to its own PR
+# avoids dragging the host networking + extra_hosts work into PR-1.

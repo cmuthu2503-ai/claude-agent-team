@@ -7,6 +7,7 @@ import { Plus, Send, X, Trash2 } from "lucide-react"
 import { RefreshButton } from "../components/ui/RefreshButton"
 import { SystemHealthPill } from "../components/ui/SystemHealthPill"
 import { useAuthStore } from "../stores/auth"
+import { useKnowledgeStore } from "../stores/knowledge"
 import { CreateProjectModal, type CreatedProject } from "../components/projects/CreateProjectModal"
 import { ProjectChip } from "../components/projects/ProjectChip"
 import { BuildChatPanel } from "../components/projects/BuildChatPanel"
@@ -58,6 +59,13 @@ export function CommandCenterPage() {
   const [selectedTeam, setSelectedTeam] = useState("engineering")
   const [taskType, setTaskType] = useState("feature_request")
   const [priority, setPriority] = useState("medium")
+  // KB-10 — per-request grounding scope. Selected bucket ids are sent on
+  // submit; agents are hard-sealed to these buckets for retrieval.
+  const [groundBuckets, setGroundBuckets] = useState<string[]>([])
+  const kbBuckets = useKnowledgeStore((s) => s.buckets)
+  const kbStatus = useKnowledgeStore((s) => s.status)
+  const fetchKbBuckets = useKnowledgeStore((s) => s.fetchBuckets)
+  const fetchKbStatus = useKnowledgeStore((s) => s.fetchStatus)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState("")
   const [attachCount, setAttachCount] = useState(0)
@@ -144,6 +152,10 @@ export function CommandCenterPage() {
 
   useEffect(() => {
     loadRequests()
+    // KB-10 — load grounding buckets + status for the selector (soft-fails
+    // silently when the KB subsystem is offline).
+    fetchKbStatus()
+    fetchKbBuckets()
 
     // Connect to WebSocket for real-time activity
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
@@ -203,6 +215,7 @@ export function CommandCenterPage() {
       formData.append("task_type", taskType)
       formData.append("priority", priority)
       formData.append("project_id", projectId)
+      formData.append("bucket_ids", JSON.stringify(groundBuckets))  // KB-10 grounding
       for (const file of content.files) {
         formData.append("screenshots", file)
       }
@@ -211,6 +224,7 @@ export function CommandCenterPage() {
       localStorage.setItem(LAST_PROJECT_LS_KEY, projectId)
       editorRef.current?.clear()
       setAttachCount(0)
+      setGroundBuckets([])
       await loadRequests()
     } catch (err: any) {
       console.error("Submit failed:", err)
@@ -511,6 +525,42 @@ export function CommandCenterPage() {
               <span style={{ fontSize: 12, color: "var(--accent)" }}>
                 📎 {attachCount} screenshot{attachCount > 1 ? "s" : ""} attached
               </span>
+            )}
+
+            {/* KB-10 — grounding bucket selector. Only shown when the KB is
+                online and has buckets; agents are hard-sealed to the picks. */}
+            {kbStatus?.available && kbBuckets.length > 0 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>🔒 Ground:</span>
+                {kbBuckets.map((b) => {
+                  const on = groundBuckets.includes(b.bucket_id)
+                  return (
+                    <button
+                      key={b.bucket_id}
+                      type="button"
+                      onClick={() =>
+                        setGroundBuckets((s) =>
+                          s.includes(b.bucket_id)
+                            ? s.filter((x) => x !== b.bucket_id)
+                            : [...s, b.bucket_id],
+                        )
+                      }
+                      title={b.description || b.name}
+                      style={{
+                        borderRadius: 9999,
+                        padding: "4px 11px",
+                        fontSize: 12,
+                        cursor: "pointer",
+                        border: `1px solid ${on ? "var(--accent)" : "var(--border)"}`,
+                        background: on ? "var(--accent-subtle)" : "var(--bg-hover)",
+                        color: on ? "var(--accent)" : "var(--text-secondary)",
+                      }}
+                    >
+                      {on ? "◉" : "◌"} {b.name}
+                    </button>
+                  )
+                })}
+              </div>
             )}
           </div>
           <button
@@ -962,6 +1012,29 @@ function _eventMessage(type: string, data: any): string {
       return `Finished work on ${data.request_id}`
     case "agent.failed":
       return `Failed: ${data.error || "unknown error"}`
+    // RPP-11 — research publish pipeline. Three terminal states fan
+    // out from Orchestrator._handle_publish. completed surfaces the
+    // short SHA + clickable commit link (when provided); partial
+    // notes the soft-fail; started just announces.
+    case "research_publish.started":
+      return `Publishing research artifacts for ${data.request_id}…`
+    case "research_publish.completed": {
+      const sha = (data.commit_sha || "").slice(0, 7)
+      const files = Array.isArray(data.files) ? data.files.length : 0
+      const fileStr = `${files} file${files === 1 ? "" : "s"}`
+      if (sha && data.commit_url) {
+        // Activity feed renders message as plain text today, so we
+        // include the short SHA inline; the full URL is on the
+        // request detail page's Published Artifacts tab (RPP-10).
+        return `📚 Published ${fileStr} for ${data.request_id} → commit ${sha}`
+      }
+      return `📚 Published ${fileStr} for ${data.request_id}`
+    }
+    case "research_publish.partial": {
+      const files = Array.isArray(data.files) ? data.files.length : 0
+      const err = (data.error || "").slice(0, 80)
+      return `📚 Wrote ${files} file(s) for ${data.request_id} but GitHub commit failed: ${err}`
+    }
     default:
       return type.replace(/\./g, " ")
   }

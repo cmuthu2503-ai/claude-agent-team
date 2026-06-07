@@ -19,7 +19,6 @@ import { useEffect, useState } from "react"
 import { ChevronDown, ChevronRight, FileText, Sparkles, CheckCircle2 } from "lucide-react"
 import { api } from "../../lib/api"
 import { MarkdownRenderer } from "../ui/MarkdownRenderer"
-import { TaskListEditor } from "./TaskListEditor"
 import { BuildChatPanel } from "./BuildChatPanel"
 import { APISpecSection } from "./APISpecSection"
 import { BuildPlanGenerator } from "./BuildPlanGenerator"
@@ -540,6 +539,9 @@ function PRDFinalized({
   const [collapsed, setCollapsed] = useState(true)
   const [deleting, setDeleting] = useState(false)
   const [deleteErr, setDeleteErr] = useState("")
+  // Bumped by BuildPlanGenerator's onChanged; threaded into BuildPlanView's
+  // refreshNonce prop so the tree re-fetches after each pass completes.
+  const [bpdRefreshNonce, setBpdRefreshNonce] = useState(0)
 
   // Hard-delete the finalized PRD. Heavier confirmation than the
   // draft version because there may be downstream tasks / dispatches
@@ -681,17 +683,24 @@ function PRDFinalized({
 
       {/* BPD §6.8 — Build Plan Decomposition. The generator surfaces
           the 3-pass flow (epics → features → atomic tasks + DAG); the
-          view shows the resulting hierarchy alongside the legacy flat
-          TaskListEditor. BuildPlanView returns null when no epics
-          exist, so legacy projects see no change. */}
-      <BuildPlanGenerator projectId={projectId} onChanged={reload} />
-      <BuildPlanView projectId={projectId} />
+          view shows the resulting hierarchy. The legacy flat
+          TaskListEditor was removed per user request — its "Generate
+          Task List" path produced rows with all the BPD fields NULL
+          (feature_id, primary_file, depends_on, etc.), which created
+          a confusing duplicate "Legacy" task universe parallel to BPD.
+          The Pass-3 "Generate Tasks" button in the BuildPlanGenerator
+          is now the single canonical task-generation path.
 
-      {/* Tasks list comes last. Stacked layout (previously a 2-column
-          chat-on-left / tasks-on-right grid) per user-requested order:
-          Deploy → Build Chat → PRD → API Spec → Tasks → Requests.
-          TaskListEditor renders its own card chrome — no wrapping <Card>. */}
-      <TaskListEditor projectId={projectId} onFinalized={reload} />
+          The `refreshNonce` thread lets the Generator tell the View
+          to re-fetch after each successful pass: Generator's onChanged
+          bumps the nonce, View's useEffect depends on it and reloads.
+          Without this, after clicking Pass 1/2/3 the user had to hit
+          F5 to see the new epic/feature/task rows. */}
+      <BuildPlanGenerator
+        projectId={projectId}
+        onChanged={() => { setBpdRefreshNonce((n) => n + 1); reload() }}
+      />
+      <BuildPlanView projectId={projectId} refreshNonce={bpdRefreshNonce} />
     </div>
   )
 }

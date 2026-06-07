@@ -29,14 +29,14 @@ interface LiveTickerData {
   agentsTotal: number
   latestRequest: { id: string; status: string } | null
   recentCommitId: string | null
-  /** Cost in USD spent today. The cost-dashboard endpoint exposes
-   *  `today.total_cost_usd` but no per-day token count, so dollars is
-   *  the only honestly-time-bounded number we can show here. */
+  /** Cost in USD spent today, from `data.today.total_cost_usd`. */
   costTodayUsd: number
-  /** All-time token count (input + output), from `totals.total_input_tokens
-   *  + totals.total_output_tokens`. Running total since the deployment
-   *  was provisioned — there's no "reset" semantic in the backend. */
-  tokensTotal: number
+  /** Tokens consumed today (input + output), from
+   *  `data.today.total_input_tokens + total_output_tokens`. Paired with
+   *  `costTodayUsd` so [COST] and [TOKENS] share the same time window
+   *  in the ticker — earlier this read all-time totals, which mixed
+   *  scopes and made the bar misleading. */
+  tokensToday: number
 }
 
 function useLiveTicker(): LiveTickerData {
@@ -54,7 +54,7 @@ function useLiveTicker(): LiveTickerData {
     latestRequest: null,
     recentCommitId: null,
     costTodayUsd: 0,
-    tokensTotal: 0,
+    tokensToday: 0,
   })
 
   useEffect(() => {
@@ -80,7 +80,7 @@ function useLiveTicker(): LiveTickerData {
         latestRequest: null,
         recentCommitId: null,
         costTodayUsd: 0,
-        tokensTotal: 0,
+        tokensToday: 0,
       }
 
       if (agents.status === "fulfilled") {
@@ -113,15 +113,13 @@ function useLiveTicker(): LiveTickerData {
       }
 
       if (cost.status === "fulfilled") {
-        // The endpoint exposes daily cost (data.today.total_cost_usd) and
-        // separately the all-time token totals (data.totals.total_input_tokens).
-        // Today's cost is time-bounded ($ for today); the running total
-        // of tokens is the lifetime sum since the deployment was provisioned.
-        next.costTodayUsd = cost.value?.data?.today?.total_cost_usd ?? 0
-        const totals = cost.value?.data?.totals ?? {}
-        next.tokensTotal =
-          (totals.total_input_tokens ?? 0) +
-          (totals.total_output_tokens ?? 0)
+        // Pair today's cost with today's token count so the ticker shows
+        // a consistent time window. Both fields come from `data.today.*`
+        // on /cost/dashboard.
+        const today = cost.value?.data?.today ?? {}
+        next.costTodayUsd = today.total_cost_usd ?? 0
+        next.tokensToday =
+          (today.total_input_tokens ?? 0) + (today.total_output_tokens ?? 0)
       }
 
       setData(next)
@@ -233,7 +231,7 @@ function TickerSlots({ data }: { data: LiveTickerData }) {
       <span>today {formatUsd(data.costTodayUsd)}</span>
       <span className="ch-sep">·</span>
       <span className="ch-ok">[TOKENS]</span>
-      <span>total {formatTokens(data.tokensTotal)}</span>
+      <span>today {formatTokens(data.tokensToday)}</span>
       <span className="ch-sep">·</span>
       <span className="ch-ok">[SYS]</span>
       <span>claude-opus-4-7 ready</span>

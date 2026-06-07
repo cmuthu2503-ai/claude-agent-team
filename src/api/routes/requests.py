@@ -1,5 +1,6 @@
 """Request endpoints — submit, list, detail, retry, stories, attachments."""
 
+import json
 import os
 import uuid
 from datetime import datetime
@@ -132,9 +133,18 @@ async def submit_request(
     task_type: str = Form("feature_request"),
     priority: str = Form("medium"),
     project_id: str | None = Form(None),
+    bucket_ids: str = Form("[]"),
     screenshots: list[UploadFile] = File(default=[]),
     user: dict = Depends(require_role("developer", "admin")),
 ):
+    # KB-10 — grounding scope. The Ground-a-Task UI sends the selected bucket
+    # ids as a JSON array string (multipart form). Tolerate empty / malformed →
+    # [] (platform knowledge only). The agent is hard-sealed to these buckets.
+    try:
+        parsed_buckets = json.loads(bucket_ids) if bucket_ids else []
+        selected_buckets = [str(b) for b in parsed_buckets] if isinstance(parsed_buckets, list) else []
+    except (ValueError, TypeError):
+        selected_buckets = []
     # Save uploaded screenshots
     saved_files: list[dict[str, str]] = []
     for file in screenshots:
@@ -173,6 +183,7 @@ async def submit_request(
             priority=priority,
             created_by=user.get("username", ""),
             project_id=project_id,  # None → defaults to Unassigned (PM-11)
+            bucket_ids=selected_buckets,  # KB-10 — grounding scope
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -182,6 +193,7 @@ async def submit_request(
         "description": result.description,
         "priority": result.priority,
         "project_id": result.project_id,
+        "bucket_ids": result.bucket_ids,
         "created_at": result.created_at.isoformat(),
         "attachments": saved_files,
     })

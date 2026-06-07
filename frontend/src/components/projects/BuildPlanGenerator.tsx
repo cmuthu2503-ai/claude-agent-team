@@ -23,7 +23,7 @@
 import { useCallback, useEffect, useState } from "react"
 import {
   Sparkles, ChevronRight, Loader2, CheckCircle2,
-  AlertTriangle, Rocket,
+  AlertTriangle, Trash2,
 } from "lucide-react"
 import { api } from "../../lib/api"
 
@@ -39,30 +39,91 @@ interface Counts {
   tasks: number
 }
 
-type BusyKind = "epics" | "features" | "tasks" | "mega" | null
+// BPD-50 — readiness gate state. Both PRD and API Spec must be
+// FINALIZED before any of the three passes (or the mega button) can
+// fire. Tracked here so the buttons can be disabled with a clear
+// tooltip instead of letting the user click and get a 409 back.
+interface Readiness {
+  prd_finalized: boolean
+  api_spec_finalized: boolean
+}
+
+type BusyKind = "epics" | "features" | "tasks" | "reset" | null
 
 export function BuildPlanGenerator({ projectId, onChanged }: Props) {
   const [counts, setCounts] = useState<Counts>({ epics: 0, features: 0, tasks: 0 })
+  const [readiness, setReadiness] = useState<Readiness>({
+    prd_finalized: false,
+    api_spec_finalized: false,
+  })
   const [busy, setBusy] = useState<BusyKind>(null)
   const [error, setError] = useState("")
   const [warnings, setWarnings] = useState<string[]>([])
 
   const loadCounts = useCallback(async () => {
     try {
-      const [e, f, t] = await Promise.all([
-        api.get(`/projects/${projectId}/epics`).catch(() => ({ data: [] })),
-        api.get(`/projects/${projectId}/features`).catch(() => ({ data: [] })),
-        api.get(`/projects/${projectId}/tasks`).catch(() => ({ data: [] })),
+      const [e, f, t, prd, spec] = await Promise.all([
+        api.get(`/projects/${projectId}/epics`).catch((err) => {
+          console.warn("[BPD-gate] /epics fetch failed:", err); return { data: [] }
+        }),
+        api.get(`/projects/${projectId}/features`).catch((err) => {
+          console.warn("[BPD-gate] /features fetch failed:", err); return { data: [] }
+        }),
+        api.get(`/projects/${projectId}/tasks`).catch((err) => {
+          console.warn("[BPD-gate] /tasks fetch failed:", err); return { data: [] }
+        }),
+        // 404s cleanly when the artifact doesn't exist (no PRD generated
+        // yet); the catch turns that into { data: null } so we just
+        // treat it as not-finalized. Non-404 errors also fall through
+        // here — we log them so a silent 5xx or auth blip doesn't get
+        // hidden behind a benign-looking "not finalized" gate.
+        api.get(`/projects/${projectId}/prd`).catch((err) => {
+          const msg = String(err?.message || err)
+          if (!msg.startsWith("404")) console.warn("[BPD-gate] /prd fetch error:", msg)
+          return { data: null }
+        }),
+        api.get(`/projects/${projectId}/api-spec`).catch((err) => {
+          const msg = String(err?.message || err)
+          if (!msg.startsWith("404")) console.warn("[BPD-gate] /api-spec fetch error:", msg)
+          return { data: null }
+        }),
       ])
       setCounts({
         epics: (e?.data || []).length,
         features: (f?.data || []).length,
         tasks: (t?.data || []).length,
       })
-    } catch {/* soft */}
+      // Defensive status check. Backend serializes ArtifactStatus enum
+      // values to lowercase strings ("finalized" / "draft"), but make
+      // the comparison case-insensitive + tolerate the enum object
+      // shape just in case. Log the resolved values to the browser
+      // console so a stuck gate is debuggable in 5 seconds.
+      const prdStatus = String(prd?.data?.status ?? "").toLowerCase()
+      const specStatus = String(spec?.data?.status ?? "").toLowerCase()
+      const prdOK = prdStatus === "finalized"
+      const specOK = specStatus === "finalized"
+      console.debug("[BPD-gate] readiness", {
+        prd: { status: prdStatus, finalized: prdOK, version: prd?.data?.version },
+        api_spec: { status: specStatus, finalized: specOK, version: spec?.data?.version },
+      })
+      setReadiness({ prd_finalized: prdOK, api_spec_finalized: specOK })
+    } catch (err) {
+      console.warn("[BPD-gate] loadCounts crashed:", err)
+    }
   }, [projectId])
 
   useEffect(() => { void loadCounts() }, [loadCounts])
+
+  // Compute a single "gate" message for the disabled tooltip + banner.
+  // Empty string means all prerequisites are met.
+  const gateMessage = (() => {
+    const missing: string[] = []
+    if (!readiness.prd_finalized) missing.push("PRD")
+    if (!readiness.api_spec_finalized) missing.push("API Specification")
+    if (missing.length === 0) return ""
+    return `Finalize the ${missing.join(" and ")} before generating epics, features, or tasks.`
+  })()
+  const isGated = gateMessage !== ""
 
   const runEpics = async () => {
     setBusy("epics"); setError(""); setWarnings([])
@@ -115,33 +176,60 @@ export function BuildPlanGenerator({ projectId, onChanged }: Props) {
     } finally { setBusy(null) }
   }
 
-  const runMega = async () => {
+  // The "Approve All & Run All Three Passes" mega-button was removed per
+  // user request — it bypassed the per-level review checkpoints that are
+  // the whole point of the 3-pass design. Each pass now requires an
+  // explicit click, which keeps the user in the loop between epic /
+  // feature / task generation. The orchestrator endpoint
+  // (`POST /build-plan/generate`) is still on the backend if external
+  // tooling needs it; it just isn't surfaced in the UI any more.
+
+  // Reset wipes every epic, feature, and unstarted backlog task in one
+  // call (POST /build-plan/reset). Dispatched tasks survive as "Legacy"
+  // pseudo-epic rows so the user's already-paid-for work isn't lost.
+  // PRD and API Spec are NOT touched — this is a build-plan reset, not
+  // a project reset.
+  const runReset = async () => {
+    const summary = `${counts.epics} epic${counts.epics === 1 ? "" : "s"}, ` +
+      `${counts.features} feature${counts.features === 1 ? "" : "s"}, ` +
+      `${counts.tasks} task${counts.tasks === 1 ? "" : "s"}`
     if (!window.confirm(
-      "Run all 3 passes back-to-back?\n\n" +
-      "This makes 1 (epics) + N (features per epic) + M (tasks per feature) " +
-      "LLM calls. For a typical project that's 15-50 calls and a few minutes " +
-      "of wall time. Each level auto-finalizes between passes — no review " +
-      "gates.\n\nProceed?"
+      `Wipe the entire build plan for this project?\n\n` +
+      `This deletes: ${summary}\n\n` +
+      `Dispatched / completed tasks survive as "Legacy" rows so you ` +
+      `don't lose work history. PRD + API Spec are NOT touched.\n\n` +
+      `This cannot be undone.`,
     )) return
-    setBusy("mega"); setError(""); setWarnings([])
+    setBusy("reset"); setError(""); setWarnings([])
     try {
-      await api.post(`/projects/${projectId}/build-plan/generate`, {})
+      const res = await api.post(`/projects/${projectId}/build-plan/reset`, {})
+      const d = res?.data || {}
+      const lines = [
+        `Build plan reset complete.`,
+        `Deleted: ${d.epics_deleted || 0} epics, ${d.features_deleted || 0} features, ${d.tasks_deleted || 0} backlog tasks.`,
+      ]
+      if (d.tasks_preserved_as_legacy > 0) {
+        lines.push(`Preserved: ${d.tasks_preserved_as_legacy} dispatched task(s) as Legacy (history kept).`)
+      }
+      window.alert(lines.join("\n"))
       await loadCounts()
       onChanged?.()
     } catch (e: any) {
-      setError(parseDetail(e?.message) || "Build-plan orchestrator failed")
+      setError(parseDetail(e?.message) || "Build-plan reset failed")
     } finally { setBusy(null) }
   }
 
   const canRunFeatures = counts.epics > 0
   const canRunTasks = counts.features > 0
+  // Reset is meaningful only when there's something to wipe.
+  const canReset = counts.epics > 0 || counts.features > 0 || counts.tasks > 0
 
   return (
     <div style={{
       background: "var(--bg-card)", border: "1px solid var(--border)",
       borderRadius: "var(--radius)", padding: 16,
     }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
         <Sparkles size={14} color="var(--accent)" />
         <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "var(--text-primary)" }}>
           Build Plan Decomposition
@@ -151,6 +239,37 @@ export function BuildPlanGenerator({ projectId, onChanged }: Props) {
           <Pill label="features" value={counts.features} />
           <Pill label="tasks" value={counts.tasks} />
         </span>
+        {/* One-shot wipe — clears every epic, feature, and unstarted task
+            for this project. Disabled when there's nothing to wipe.
+            Dispatched tasks survive as Legacy rows; PRD + API Spec are
+            preserved. Kept visually distinct (danger border, dashed when
+            inert) so it can't be confused with a generation button. */}
+        <button
+          type="button"
+          onClick={runReset}
+          disabled={!canReset || busy !== null}
+          title={
+            !canReset
+              ? "Nothing to reset — generate epics/features/tasks first."
+              : "Wipe every epic, feature, and unstarted backlog task. Dispatched tasks survive as Legacy. PRD + API Spec untouched."
+          }
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 5,
+            height: 22, padding: "0 10px", fontSize: 10,
+            background: "transparent",
+            color: (!canReset || busy !== null) ? "var(--text-muted)" : "var(--danger)",
+            border: `1px ${(!canReset || busy !== null) ? "dashed" : "solid"} ${(!canReset || busy !== null) ? "var(--border)" : "var(--danger)"}`,
+            borderRadius: 2,
+            cursor: (!canReset || busy !== null) ? "not-allowed" : "pointer",
+            fontFamily: "var(--font-mono)", whiteSpace: "nowrap", lineHeight: 1,
+            textTransform: "uppercase", letterSpacing: 0.5,
+          }}
+        >
+          {busy === "reset"
+            ? <Loader2 size={11} className="spin" />
+            : <Trash2 size={11} />}
+          {busy === "reset" ? "Resetting…" : "Reset Build Plan"}
+        </button>
       </div>
 
       <div style={{
@@ -162,12 +281,34 @@ export function BuildPlanGenerator({ projectId, onChanged }: Props) {
         cascade them. See <code>docs/prd-build-plan-decomposition.md</code>.
       </div>
 
+      {/* BPD-50 — readiness gate banner. Shown when PRD or API Spec is
+          missing; calls out exactly what's blocking + links to the
+          sections above. Buttons stay disabled while this banner is up. */}
+      {isGated && (
+        <div style={{
+          marginBottom: 12, padding: "8px 12px",
+          background: "color-mix(in srgb, var(--warning, #d4a017) 10%, transparent)",
+          border: "1px solid var(--warning, #d4a017)",
+          borderRadius: 3, fontSize: 11, color: "var(--text-primary)",
+          display: "flex", gap: 8, alignItems: "flex-start",
+        }}>
+          <AlertTriangle size={12} color="var(--warning, #d4a017)" style={{ flexShrink: 0, marginTop: 1 }} />
+          <span style={{ flex: 1, lineHeight: 1.5 }}>
+            <strong style={{ color: "var(--warning, #d4a017)" }}>Blocked: </strong>
+            {gateMessage} Generation produces dramatically better epics / features /
+            atomic tasks when it has the concrete API surface to decompose against.
+          </span>
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "stretch" }}>
         <StepButton
           n="1"
           label="Generate Epics"
           done={counts.epics > 0}
           busy={busy === "epics"}
+          disabled={isGated}
+          disabledReason={gateMessage}
           onClick={runEpics}
         />
         <Arrow done={counts.features > 0} />
@@ -176,7 +317,8 @@ export function BuildPlanGenerator({ projectId, onChanged }: Props) {
           label="Generate Features"
           done={counts.features > 0}
           busy={busy === "features"}
-          disabled={!canRunFeatures}
+          disabled={isGated || !canRunFeatures}
+          disabledReason={isGated ? gateMessage : "Generate Epics first"}
           onClick={runFeaturesAll}
         />
         <Arrow done={counts.tasks > 0} />
@@ -185,35 +327,10 @@ export function BuildPlanGenerator({ projectId, onChanged }: Props) {
           label="Generate Tasks"
           done={counts.tasks > 0}
           busy={busy === "tasks"}
-          disabled={!canRunTasks}
+          disabled={isGated || !canRunTasks}
+          disabledReason={isGated ? gateMessage : "Generate Features first"}
           onClick={runTasksAll}
         />
-      </div>
-
-      <div style={{ marginTop: 10 }}>
-        <button
-          type="button"
-          onClick={runMega}
-          disabled={busy !== null}
-          style={{
-            width: "100%", padding: "8px 12px",
-            background: busy === "mega"
-              ? "var(--bg-hover)"
-              : "linear-gradient(135deg, var(--accent), var(--info, #b026ff))",
-            color: busy === "mega" ? "var(--text-muted)" : "#0a0014",
-            border: "none", borderRadius: "var(--radius)",
-            fontWeight: 700, fontSize: 12, letterSpacing: 0.3,
-            cursor: busy ? "wait" : "pointer",
-            opacity: busy && busy !== "mega" ? 0.5 : 1,
-            display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
-            fontFamily: "var(--font)",
-          }}
-        >
-          {busy === "mega" ? <Loader2 size={12} className="spin" /> : <Rocket size={12} />}
-          {busy === "mega"
-            ? "Running all three passes…"
-            : "⚡ Approve All & Run All Three Passes"}
-        </button>
       </div>
 
       {warnings.length > 0 && (
@@ -248,10 +365,16 @@ export function BuildPlanGenerator({ projectId, onChanged }: Props) {
 }
 
 function StepButton({
-  n, label, done, busy, disabled, onClick,
+  n, label, done, busy, disabled, disabledReason, onClick,
 }: {
   n: string; label: string; done: boolean; busy: boolean;
-  disabled?: boolean; onClick: () => void
+  disabled?: boolean;
+  /** Shown as native `title=` tooltip when the button is disabled.
+   *  Used by BPD-50 to explain "Finalize the PRD and API Specification
+   *  before generating epics, features, or tasks." on hover instead
+   *  of leaving the user to guess why nothing happens. */
+  disabledReason?: string;
+  onClick: () => void
 }) {
   const color = done
     ? "var(--success)"
@@ -266,6 +389,7 @@ function StepButton({
       type="button"
       onClick={onClick}
       disabled={disabled || busy}
+      title={disabled && disabledReason ? disabledReason : undefined}
       style={{
         flex: 1, minWidth: 140, padding: "10px 12px",
         background: bg, color, border: `1px solid ${color}`,
