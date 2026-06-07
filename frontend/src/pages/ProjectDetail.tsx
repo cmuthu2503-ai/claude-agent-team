@@ -22,6 +22,7 @@ import { api } from "../lib/api"
 import { StatusBadge } from "../components/ui/StatusBadge"
 import { EditProjectModal } from "../components/projects/EditProjectModal"
 import { BuildWorkspace } from "../components/projects/BuildWorkspace"
+import { ProjectKnowledge } from "../components/projects/ProjectKnowledge"
 import { PopupWindow } from "../components/board/PopupWindow"
 import { TaskDrillIn } from "../components/board/TaskDrillIn"
 import type { CardData, TaskStatus } from "../components/board/types"
@@ -420,6 +421,12 @@ export function ProjectDetailPage() {
       {/* ── Build Workspace (PDB-09 → PDB-12) — Brief → PRD ── */}
       {data.project_id !== "proj-unassigned" && (
         <BuildWorkspace projectId={data.project_id} />
+      )}
+
+      {/* ── App Knowledge (KB-16) — per-project KB: upload app refs +
+          curate, all grounded only to this application. ── */}
+      {data.project_id !== "proj-unassigned" && (
+        <ProjectKnowledge projectId={data.project_id} />
       )}
 
       {/* ── Next Steps (PM-34) — only when template was selected ── */}

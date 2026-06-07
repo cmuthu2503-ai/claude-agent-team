@@ -22,6 +22,8 @@ import {
   Workflow,
   LogOut,
   FolderGit2,
+  GraduationCap,
+  BookOpen,
 } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 import { useAuthStore } from "../../stores/auth"
@@ -48,6 +50,7 @@ const navItems: NavItem[] = [
     path: "/projects", label: "Projects", icon: FolderGit2,
     alsoMatches: ["/stories/project/"],  // per-project StoryBoard wins via longest-prefix
   },
+  { path: "/knowledge", label: "Knowledge Base", icon: BookOpen },
   { path: "/prompts", label: "Prompt Studio", icon: Wand2 },
   { path: "/diagrams", label: "Diagrams", icon: Workflow },
   { path: "/history", label: "History", icon: History },
@@ -55,6 +58,7 @@ const navItems: NavItem[] = [
   { path: "/team", label: "Team", icon: Users },
   { path: "/cost", label: "Cost", icon: DollarSign },
   { path: "/users", label: "Users", icon: Shield, adminOnly: true },
+  { path: "/lessons", label: "Lessons Review", icon: GraduationCap, adminOnly: true },
 ]
 
 /** Picks which nav item is "active" for the given URL. Exact-match wins;

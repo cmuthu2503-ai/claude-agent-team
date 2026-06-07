@@ -2,9 +2,10 @@ import { useState, useEffect, useRef } from "react"
 import { useParams, Link } from "react-router-dom"
 import { api } from "../lib/api"
 import { StatusBadge } from "../components/ui/StatusBadge"
-import { ArrowLeft, ChevronDown, ChevronRight, FileText, ExternalLink, Github, FileType, Presentation, FileImage, Code, ShieldAlert, ShieldCheck } from "lucide-react"
+import { ArrowLeft, ChevronDown, ChevronRight, FileText, ExternalLink, Github, FileType, Presentation, FileImage, Code, ShieldAlert, ShieldCheck, ThumbsUp, ThumbsDown } from "lucide-react"
 import { MarkdownRenderer } from "../components/ui/MarkdownRenderer"
 import { ProjectChip } from "../components/projects/ProjectChip"
+import { useKnowledgeStore, type GroundingReport, type KbBucket } from "../stores/knowledge"
 
 // AET-07 — shape of the latest quality.gate.* event the backend emits
 // when the workflow runner evaluates the quality_guardian_approval
@@ -50,6 +51,22 @@ function fileIcon(path: string) {
 // Friendly label for a published-file path: extract just the filename
 function fileLabel(path: string) {
   return path.split('/').pop() || path
+}
+
+// RPP-10 — derive a clickable GitHub blob URL from the commit URL + a
+// relative file path. Commit-URL shape: https://github.com/<owner>/<repo>/commit/<sha>
+// Blob-URL shape:   https://github.com/<owner>/<repo>/blob/<sha>/<path>
+// Returns "" when the commit URL is missing or doesn't match the expected
+// shape — the caller renders a non-clickable row in that case.
+function _githubBlobUrl(commitUrl: string | undefined, path: string): string {
+  if (!commitUrl || !path) return ""
+  const m = commitUrl.match(/^(https:\/\/github\.com\/[^/]+\/[^/]+)\/commit\/([a-f0-9]+)/i)
+  if (!m) return ""
+  const repoRoot = m[1]
+  const sha = m[2]
+  // Strip a leading slash on the path so we don't get a double slash.
+  const cleanPath = path.replace(/^\/+/, "")
+  return `${repoRoot}/blob/${sha}/${encodeURI(cleanPath)}`
 }
 
 // Map doc_type → human-readable label
@@ -238,6 +255,10 @@ export function RequestDetailPage() {
         </div>
       </div>
 
+      {/* KB-10 — Grounding Report: which buckets this request was sealed to,
+          the agents' retrieval reasoning trail, and the cited sources. */}
+      {requestId && <GroundingReportCard requestId={requestId} />}
+
       {/* Artifacts Panel */}
       {data.artifacts && (data.artifacts.documents?.length > 0 || data.artifacts.published_files?.length > 0) && (
         <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 24 }}>
@@ -273,24 +294,56 @@ export function RequestDetailPage() {
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 {data.artifacts.published_files.map((path: string) => {
                   const Icon = fileIcon(path)
+                  // RPP-10 — derive per-file GitHub blob URL from the
+                  // commit_url. Shape: .../commit/SHA → .../blob/SHA/<path>.
+                  // When commit_url is missing (local-only fallback OR
+                  // legacy publish) the row stays non-clickable but the
+                  // file label still renders so the user can copy the path.
+                  const blobUrl = _githubBlobUrl(data.artifacts.commit_url, path)
+                  const Row = blobUrl ? "a" : "div"
+                  const rowProps: any = blobUrl
+                    ? {
+                        href: blobUrl,
+                        target: "_blank",
+                        rel: "noopener noreferrer",
+                        title: `Open ${path} on GitHub`,
+                      }
+                    : {}
                   return (
-                    <div
+                    <Row
                       key={path}
+                      {...rowProps}
                       style={{
                         display: "flex", alignItems: "center", gap: 8,
                         padding: "8px 12px", borderRadius: "var(--radius)",
                         background: "var(--bg-input)", border: "1px solid var(--border)",
                         fontSize: 13,
+                        textDecoration: "none",
+                        color: "inherit",
+                        cursor: blobUrl ? "pointer" : "default",
+                        transition: "background 0.15s ease",
+                      }}
+                      onMouseEnter={(e: any) => {
+                        if (blobUrl) e.currentTarget.style.background = "var(--bg-hover)"
+                      }}
+                      onMouseLeave={(e: any) => {
+                        if (blobUrl) e.currentTarget.style.background = "var(--bg-input)"
                       }}
                     >
                       <Icon size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
-                      <span style={{ color: "var(--text-primary)", fontFamily: "var(--font-mono)" }}>
+                      <span style={{
+                        color: blobUrl ? "var(--accent)" : "var(--text-primary)",
+                        fontFamily: "var(--font-mono)",
+                      }}>
                         {fileLabel(path)}
                       </span>
                       <span style={{ color: "var(--text-muted)", fontSize: 11, marginLeft: "auto", fontFamily: "var(--font-mono)" }}>
                         {path}
                       </span>
-                    </div>
+                      {blobUrl && (
+                        <ExternalLink size={11} style={{ color: "var(--text-muted)", marginLeft: 4 }} />
+                      )}
+                    </Row>
                   )
                 })}
               </div>
@@ -694,6 +747,231 @@ function QualityGateViolations({ state }: { state: QualityGateState }) {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+// ── KB-10 — Grounding Report ───────────────────────────────────────────────
+//
+// Traceability surface (FR-011/016): the buckets this request was sealed to,
+// the agents' retrieval reasoning trail (each knowledge_search: query →
+// buckets → returned/cited counts), and the cited source snippets. Fetched
+// lazily; renders nothing when the request had no KB grounding (the common
+// case for non-grounded requests) so it never adds noise.
+
+// KB-31 — thumbs up/down on a cited chunk. The vote feeds a recency-weighted
+// usefulness boost into reranking, so retrieval quality improves with use.
+function CitationVote({ chunkId, requestId }: { chunkId: string; requestId: string }) {
+  const [vote, setVote] = useState<"up" | "down" | null>(null)
+  const send = async (v: "up" | "down") => {
+    const next = vote === v ? null : v
+    setVote(next)
+    if (next === null) return // (no un-vote endpoint; optimistic toggle only)
+    try {
+      await api.post("/knowledge/feedback", {
+        chunk_id: chunkId,
+        vote: v,
+        request_id: requestId,
+      })
+    } catch {
+      setVote(vote) // revert on failure
+    }
+  }
+  const btn = (active: boolean): React.CSSProperties => ({
+    background: "transparent",
+    border: "none",
+    cursor: "pointer",
+    padding: 2,
+    lineHeight: 1,
+    opacity: active ? 1 : 0.45,
+    color: active ? "var(--accent)" : "var(--text-muted)",
+  })
+  return (
+    <span style={{ marginLeft: "auto", display: "inline-flex", gap: 4 }} title="Was this source useful?">
+      <button style={btn(vote === "up")} onClick={() => send("up")} aria-label="Useful">
+        <ThumbsUp size={13} />
+      </button>
+      <button style={btn(vote === "down")} onClick={() => send("down")} aria-label="Not useful">
+        <ThumbsDown size={13} />
+      </button>
+    </span>
+  )
+}
+
+function GroundingReportCard({ requestId }: { requestId: string }) {
+  const fetchGrounding = useKnowledgeStore((s) => s.fetchGrounding)
+  const fetchBuckets = useKnowledgeStore((s) => s.fetchBuckets)
+  const buckets = useKnowledgeStore((s) => s.buckets)
+  const [report, setReport] = useState<GroundingReport | null>(null)
+  const [open, setOpen] = useState(true)
+
+  useEffect(() => {
+    fetchBuckets()
+    fetchGrounding(requestId).then(setReport)
+  }, [requestId, fetchGrounding, fetchBuckets])
+
+  // Nothing to show: no selected buckets AND no retrievals recorded.
+  if (!report) return null
+  const hasContent =
+    (report.buckets?.length ?? 0) > 0 ||
+    (report.retrievals?.length ?? 0) > 0 ||
+    (report.citations?.length ?? 0) > 0 ||
+    (report.decisions?.length ?? 0) > 0
+  if (!hasContent) return null
+
+  const bucketName = (id: string): KbBucket | undefined =>
+    buckets.find((b) => b.bucket_id === id)
+
+  return (
+    <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 24 }}>
+      <div
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <h2 style={{ fontSize: 18, fontWeight: 600, color: "var(--text-primary)", margin: 0, display: "flex", alignItems: "center", gap: 8 }}>
+          <ShieldCheck size={18} style={{ color: "var(--accent)" }} /> Grounding Report
+        </h2>
+        <span style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+          {report.retrievals.length} retrieval{report.retrievals.length === 1 ? "" : "s"} ·{" "}
+          {report.citations.length} citation{report.citations.length === 1 ? "" : "s"} ·{" "}
+          {(report.decisions?.length ?? 0)} decision{(report.decisions?.length ?? 0) === 1 ? "" : "s"}
+          {open ? " ▾" : " ▸"}
+        </span>
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 18 }}>
+          {/* Sealed buckets */}
+          <div>
+            <div style={{ fontSize: 12, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+              Sealed to bucket(s)
+            </div>
+            {report.buckets.length === 0 ? (
+              <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                Platform knowledge only (no app buckets selected).
+              </span>
+            ) : (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {report.buckets.map((id) => {
+                  const b = bucketName(id)
+                  return (
+                    <span
+                      key={id}
+                      style={{
+                        display: "inline-flex", alignItems: "center", gap: 6,
+                        fontSize: 12, padding: "4px 11px", borderRadius: 999,
+                        border: "1px solid var(--accent)", color: "var(--accent)",
+                        background: "var(--accent-subtle)",
+                      }}
+                    >
+                      🔒 {b?.name ?? id.slice(0, 8)}
+                    </span>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Reasoning trail — the "Why" */}
+          {report.retrievals.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+                Retrieval reasoning trail
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {report.retrievals.map((r) => (
+                  <div
+                    key={r.audit_id}
+                    style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", background: "var(--bg-secondary)" }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 600 }}>
+                        🔎 “{r.query}”
+                      </span>
+                      <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                        {r.agent_id}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4, fontFamily: "var(--font-mono)" }}>
+                      {r.returned_chunk_ids.length} returned · {r.cited_chunk_ids.length} cited
+                      {r.bucket_ids.length > 0 && ` · buckets: ${r.bucket_ids.map((id) => bucketName(id)?.name ?? id.slice(0, 6)).join(", ")}`}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Cited sources */}
+          {report.citations.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+                Cited sources
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {report.citations.map((c) => (
+                  <div
+                    key={c.chunk_id}
+                    style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", background: "var(--bg-secondary)" }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                      <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--accent)", padding: "1px 6px", border: "1px solid var(--accent)", borderRadius: 4 }}>
+                        KB#{c.chunk_id.slice(0, 8)}
+                      </span>
+                      <span style={{ fontSize: 12, color: "var(--text-primary)", fontWeight: 600 }}>
+                        {c.title || c.uri || c.doc_id}
+                      </span>
+                      <CitationVote chunkId={c.chunk_id} requestId={requestId} />
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                      {c.snippet}
+                    </div>
+                    {/* KB-23 — provenance chain: source → version · ingested · approved-by */}
+                    <div style={{ fontSize: 10.5, color: "var(--text-muted)", fontFamily: "var(--font-mono)", marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      {c.uri && <span title="original source">📄 {c.uri}</span>}
+                      {c.version != null && <span>v{c.version}</span>}
+                      {c.status && <span>· {c.status}</span>}
+                      {c.ingested_at && <span>· ingested {new Date(c.ingested_at).toLocaleDateString()}</span>}
+                      {c.approved_by && <span>· by {c.approved_by}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* KB-23 — Concluded: the decision ledger (why the agents concluded
+              what they did), grouped per agent across the workflow. */}
+          {(report.decisions?.length ?? 0) > 0 && (
+            <div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+                Concluded (decision ledger)
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {report.decisions.map((d) => (
+                  <div
+                    key={d.decision_id}
+                    style={{ border: "1px solid var(--border)", borderLeft: "3px solid var(--accent)", borderRadius: 8, padding: "10px 12px", background: "var(--bg-secondary)" }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, color: "var(--accent)", fontFamily: "var(--font-mono)", fontWeight: 600 }}>
+                        🧠 {d.agent_id}
+                      </span>
+                      <span style={{ fontSize: 10.5, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                        {d.retrieved_chunk_ids.length} source{d.retrieved_chunk_ids.length === 1 ? "" : "s"}
+                        {d.created_at && ` · ${new Date(d.created_at).toLocaleString()}`}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12.5, color: "var(--text-primary)", lineHeight: 1.5 }}>
+                      {d.summary}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

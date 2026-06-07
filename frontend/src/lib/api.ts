@@ -1,4 +1,8 @@
-const API_BASE = "/api/v1"
+// Base URL for backend API. In dev/prod the default `/api/v1` is served
+// via Vite's proxy (see vite.config.ts) or the production reverse proxy.
+// Override with VITE_API_BASE_URL when pointing at a non-proxied backend
+// (e.g. local backend on http://localhost:8000 without the proxy).
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1"
 
 class ApiClient {
   private token: string | null = null
