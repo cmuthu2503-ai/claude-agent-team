@@ -1,0 +1,14 @@
+# agent-team-mcp coverage config (HAI-53 / NFR-004).
+# Separate from the backend's --cov=src gate: this measures the MCP service's
+# OWN code, which the backend container doesn't even mount. Run with:
+#   pip install pytest pytest-asyncio pytest-cov && python -m pytest --cov
+[run]
+source = .
+omit =
+    tests/*
+
+[report]
+show_missing = true
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:

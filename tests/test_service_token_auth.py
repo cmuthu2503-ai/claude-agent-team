@@ -11,7 +11,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
-from src.auth.service import get_service_principal, hash_service_token
+from src.auth.service import get_service_principal, hash_service_token, principal_actor
 from src.state.sqlite_store import SQLiteStateStore
 
 
@@ -85,3 +85,13 @@ def test_hash_is_sha256_hex():
 
     assert hash_service_token("abc") == hashlib.sha256(b"abc").hexdigest()
     assert len(hash_service_token("abc")) == 64
+
+
+def test_principal_actor_attribution():
+    # Service token → service:<name>, falling back to the token id.
+    assert principal_actor({"is_service_token": True, "username": "hermes-monitor", "token_id": "stok-1"}) == "service:hermes-monitor"
+    assert principal_actor({"is_service_token": True, "username": "", "token_id": "stok-1"}) == "service:stok-1"
+    # Human → username, falling back to sub, then 'unknown'.
+    assert principal_actor({"username": "alice", "sub": "u1"}) == "alice"
+    assert principal_actor({"sub": "u1"}) == "u1"
+    assert principal_actor({}) == "unknown"

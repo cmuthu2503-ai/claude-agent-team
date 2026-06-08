@@ -8,12 +8,30 @@ business logic of its own (see `docs/prd-hermes-agent-integration.md`).
 
 | Task | What | Status |
 |------|------|--------|
-| HAI-05 | Scaffold: FastMCP server, streamable-HTTP transport, `ping` tool, Dockerfile | ✅ this |
-| HAI-06 | Compose wiring (`agent-team-mcp` service) | ☐ |
-| HAI-07 | Thin REST-adapter client (service-token auth) | ☐ |
-| HAI-08 | Tool manifest loader (role-scoped tool exposure) | ☐ |
-| HAI-09 | Health/ping + Hermes connect docs | ☐ |
-| HAI-10+ | Monitor / action tools | ☐ |
+| HAI-05 | Scaffold: FastMCP server, streamable-HTTP transport, `ping` tool, Dockerfile | ✅ |
+| HAI-06 | Compose wiring (`agent-team-mcp` service) | ✅ |
+| HAI-07 | Thin REST-adapter client (`backend_client.py`, service-token auth) | ✅ |
+| HAI-08 | Tool manifest loader (`manifest.py` + `tools_manifest.yaml`, role-scoped) | ✅ |
+| HAI-09 | Health/ping (`healthz`) + Hermes connect docs | ✅ |
+| HAI-53 | MCP↔backend contract test + coverage config | ✅ |
+| HAI-10+ | Monitor / action tools (append to `tools_manifest.yaml` + `tool_impls.py`) | ☐ |
+
+## Tests & coverage
+
+The MCP service has its **own** harness — it's outside the backend's `--cov=src`
+gate (the backend container doesn't even mount `mcp_server/`). Run inside the
+running service container (it carries the deps):
+
+```bash
+docker compose exec agent-team-mcp sh -c \
+  "pip install -q pytest pytest-asyncio pytest-cov && python -m pytest --cov"
+```
+
+- `pytest.ini` — `asyncio_mode=auto`, `testpaths=tests`.
+- `.coveragerc` — measures `mcp_server/` (this service's own code).
+- `tests/test_contract.py` (HAI-53) pins the backend endpoints the adapter
+  depends on against the live OpenAPI schema; it **skips** when the backend
+  isn't reachable.
 
 ## Transport
 

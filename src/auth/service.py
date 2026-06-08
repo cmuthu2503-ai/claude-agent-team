@@ -214,8 +214,16 @@ async def get_service_principal(
     # Stamp usage — debounced (HAI-52) to ≤ once/window/token so a chatty client
     # doesn't write to the shared SQLite DB on every request. Best-effort
     # telemetry: a write hiccup must NOT block auth (mirrors the resolver's
-    # "DB blip can't break dispatch" rule).
+    # "DB blip can't break dispatch" rule). The same gate bounds the structured
+    # attribution log (HAI-04 / FR-082) so service traffic is distinguishable in
+    # logs without spamming once per poll.
     if _should_touch_last_used(token.token_id):
+        logger.info(
+            "service_principal_active",
+            actor=f"service:{token.name}",
+            token_id=token.token_id,
+            role=str(token.role),
+        )
         try:
             await state.touch_service_token_last_used(token.token_id)
         except Exception as e:  # noqa: BLE001
@@ -229,3 +237,17 @@ async def get_service_principal(
         "kb_curator_scopes": [],
         "is_service_token": True,
     }
+
+
+def principal_actor(principal: dict[str, Any]) -> str:
+    """Canonical actor string for attribution — ``created_by`` / ``proposed_by``
+    / audit logs — uniform across human and service principals (HAI-04 / FR-013,
+    FR-082). The proposals engine (P2) and any service-originated row stamp this
+    so Hermes-driven actions are distinguishable from human ones.
+
+    - Service token → ``service:<name>`` (falls back to the token id).
+    - Human user    → username (falls back to ``sub``).
+    """
+    if principal.get("is_service_token"):
+        return f"service:{principal.get('username') or principal.get('token_id') or 'unknown'}"
+    return principal.get("username") or principal.get("sub") or "unknown"
