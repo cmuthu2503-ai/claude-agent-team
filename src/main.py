@@ -312,6 +312,18 @@ async def lifespan(app: FastAPI):
     )
     logger.info("anomaly_sweeper_started")
 
+    # HAI-29 — proposal auto-expire sweeper. Expires PENDING proposals past their
+    # TTL (atomic CAS → never executes) and emits proposal.expired, so an
+    # unanswered approval queue can't pile up invisibly.
+    from src.core.proposal_expiry import make_proposal_expiry_sweeper
+
+    _proposal_expiry_interval = float(os.getenv("PROPOSAL_EXPIRY_INTERVAL_SECONDS", "60"))
+    app.state.proposal_expiry_task = asyncio.create_task(
+        make_proposal_expiry_sweeper(state, events, interval=_proposal_expiry_interval)(),
+        name="proposal_expiry_sweeper",
+    )
+    logger.info("proposal_expiry_sweeper_registered")
+
     # HAI-17/18 — outbound push bridge. Forwards curated events (request.failed,
     # request.completed, deploy_health.anomaly_detected) to a Hermes inbound
     # webhook so Hermes is pinged in real time. Registered ONLY when
@@ -353,6 +365,13 @@ async def lifespan(app: FastAPI):
     push_bridge = getattr(app.state, "push_bridge", None)
     if push_bridge is not None:
         await push_bridge.stop()
+
+    # HAI-29 — cancel the proposal-expiry sweeper cleanly.
+    proposal_expiry = getattr(app.state, "proposal_expiry_task", None)
+    if proposal_expiry is not None and not proposal_expiry.done():
+        proposal_expiry.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await proposal_expiry
 
     # KB-26 — cancel the consolidation job cleanly.
     consolidation = getattr(app.state, "kb_consolidation_task", None)
