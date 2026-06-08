@@ -4,7 +4,7 @@ role: "Architecture Reviewer"
 team: development
 reports_to: code_reviewer
 
-model: claude-opus-4-7
+model: claude-opus-4-8
 
 # Reads multiple files per rule check (main.py, App.tsx, route files).
 # 15 iterations is sufficient for a read-only, parallel-to-code-reviewer pass.

@@ -69,7 +69,7 @@ def test_list_models_returns_catalog():
     assert r.status_code == 200
     body = r.json()
     assert body["error"] is None
-    assert body["data"]["default_model"] == "claude-opus-4-7"
+    assert body["data"]["default_model"] == "claude-opus-4-8"
     assert body["meta"]["count"] == len(body["data"]["models"])
     assert body["meta"]["count"] >= 5
     # Each model has the full shape — frontend depends on these keys.

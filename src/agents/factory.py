@@ -63,7 +63,7 @@ class AgentFactory:
             display_name=config.get("display_name", agent_id),
             role=config.get("role", ""),
             team=config.get("team", ""),
-            model=config.get("model", "claude-opus-4-7"),
+            model=config.get("model", "claude-opus-4-8"),
             system_prompt=config.get("system_prompt", ""),
             tools=config.get("tools", []),
             delegation_targets=delegation.get("can_delegate_to", []),

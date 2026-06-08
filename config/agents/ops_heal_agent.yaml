@@ -4,7 +4,7 @@ role: "Post-Deploy Operations Monitor"
 team: delivery
 reports_to: devops_specialist
 
-model: claude-opus-4-7
+model: claude-opus-4-8
 
 # Each post-deploy check: probe + slo_check + (optional) anomaly_detect +
 # (optional) auto_rollback + remediation advice. 10 iterations is enough

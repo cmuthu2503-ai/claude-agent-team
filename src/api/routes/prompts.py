@@ -29,7 +29,7 @@ router = APIRouter(prefix="/api/v1/prompts", tags=["prompts"])
 TEMPLATES_PATH = Path("config/prompt_templates.yaml")
 
 # Default model for the Prompt Studio. Overridable via env for short-term experiments.
-PROMPT_STUDIO_MODEL = os.getenv("PROMPT_STUDIO_MODEL", "claude-opus-4-7")
+PROMPT_STUDIO_MODEL = os.getenv("PROMPT_STUDIO_MODEL", "claude-opus-4-8")
 
 # Per-million-token pricing for the live cost display in the playground.
 # Mirror the values in config/thresholds.yaml (Claude Platform on AWS, US geo).

@@ -4,7 +4,7 @@ role: "User Story Author"
 team: planning
 reports_to: prd_specialist
 
-model: claude-opus-4-7
+model: claude-opus-4-8
 
 system_prompt: |
   You are the User Story Author for the Agent Team platform.

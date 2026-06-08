@@ -4,7 +4,7 @@ role: "Frontend Specialist"
 team: development
 reports_to: code_reviewer
 
-model: claude-opus-4-7
+model: claude-opus-4-8
 
 # Code-touching agent, same rationale as backend_specialist — reads file
 # (often the large PromptStudio.tsx / App.tsx / themes.css) then makes

@@ -673,7 +673,7 @@ class Orchestrator(AgentExecutor):
             output_tokens = result.get("output_tokens", 0)
             if input_tokens > 0 or output_tokens > 0:
                 model = result.get("model") or self.config.agents.get(agent_id, {}).get(
-                    "model", "claude-opus-4-7"
+                    "model", "claude-opus-4-8"
                 )
                 await self._token_tracker.record(
                     request_id=request_id,

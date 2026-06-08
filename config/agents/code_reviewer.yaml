@@ -4,7 +4,7 @@ role: "Code Reviewer & Development Lead"
 team: development
 reports_to: prd_specialist
 
-model: claude-opus-4-7
+model: claude-opus-4-8
 
 # Reviews multiple files; needs iterations to read each one. 20 is sufficient.
 max_iterations: 20

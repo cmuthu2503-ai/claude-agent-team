@@ -4,7 +4,7 @@ role: "Self-Learning Agent"
 team: engineering
 reports_to: project_orchestrator
 
-model: claude-opus-4-7
+model: claude-opus-4-8
 
 # Failure analysis is sequential: read → analyse → write. 10 iterations is ample.
 max_iterations: 10

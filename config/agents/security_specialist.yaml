@@ -4,7 +4,7 @@ role: "Security Specialist"
 team: delivery
 reports_to: devops_specialist
 
-model: claude-opus-4-7
+model: claude-opus-4-8
 
 # Runs 4 focused scanners + OWASP manual review + optional CVE web lookups.
 # 15 iterations covers the worst-case "scan all four, web-search 2 CVEs,

@@ -4,7 +4,7 @@ role: "Build Coordinator (Project-driven Build chat)"
 team: planning
 reports_to: null
 
-model: claude-opus-4-7
+model: claude-opus-4-8
 
 # This agent is invoked via the chat endpoint (POST /projects/:id/build/chat),
 # NOT via the standard workflow runner. Its tools (list_tasks, dispatch_task,

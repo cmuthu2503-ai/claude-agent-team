@@ -159,7 +159,7 @@ async def evaluate_project_deploy(
     project: Project,
     drift: ProjectDrift,
     prior_overrides: list[DeployDecision] | None = None,
-    model: str = "claude-opus-4-7",
+    model: str = "claude-opus-4-8",
 ) -> ProjectJudgeResult:
     """Ask the judge LLM what to do with the project's drift.
 
