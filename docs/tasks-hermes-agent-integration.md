@@ -46,10 +46,10 @@
 |-------|-------|-------|------|-------------|---------|-------------|
 | P0 | Foundations (service token + MCP skeleton) | 12 | 12 | 0 | 0 | 0 |
 | P1 | Monitor (read-only + push) | 12 | 12 | 0 | 0 | 0 |
-| P2 | Approval Gate (proposals engine) | 21 | 0 | 0 | 0 | 21 |
+| P2 | Approval Gate (proposals engine) | 21 | 1 | 0 | 0 | 20 |
 | P3 | Lifecycle Actions (gated) | 12 | 0 | 0 | 0 | 12 |
 | P4 | Autonomous-Loop Reconciliation | 6 | 0 | 0 | 0 | 6 |
-| **Total** | | **63** | **24** | **0** | **0** | **39** |
+| **Total** | | **63** | **25** | **0** | **0** | **38** |
 
 > Task IDs run HAI-01..HAI-63. IDs are unique but **not contiguous per phase** — HAI-51..63 were added in the v1.1 gap-review and slot into their dependency phase (P0: 51–53, P1: 54, P2: 55–63), not at the end. Sort by the Depends-On graph, not by ID number.
 
@@ -103,7 +103,7 @@ Unified proposals engine. Goal: no gated action executes without a confirmed pro
 
 | ID | Task | Description | Effort | Depends On | Traces FR | Status |
 |----|------|-------------|--------|-----------|-----------|--------|
-| HAI-21 | `proposals` schema | New `proposals` table per FR-030 (full lifecycle fields). | M | HAI-01 | FR-030 | `[ ]` |
+| HAI-21 | `proposals` schema | New `proposals` table per FR-030 (full lifecycle fields). **Done:** `proposals` table in `SCHEMA_SQL` (proposal_id, action_type, target_ref, payload_json, status, proposed_by, created_at, decided_by/at, executed_at, ttl_seconds, result_ref, error, idempotency_key UNIQUE) + status/created indexes. 4 schema tests; created on the live dev DB. | M | HAI-01 | FR-030 | `[x]` |
 | HAI-22 | Proposal model + store methods | Pydantic model + CRUD/transition methods on the state store. | M | HAI-21 | FR-030 | `[ ]` |
 | HAI-23 | `POST /proposals` (create) | Create pending proposal; no side effects; emit `proposal.created`. | M | HAI-22 | FR-031 | `[ ]` |
 | HAI-24 | Gated-action registry | Config of gated `action_type`s (FR-037) + dispatcher mapping each to its internal handler. | M | HAI-22 | FR-037 | `[ ]` |

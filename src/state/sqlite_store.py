@@ -637,6 +637,39 @@ CREATE TABLE IF NOT EXISTS service_tokens (
     last_used_at  TIMESTAMP,
     revoked_at    TIMESTAMP
 );
+
+-- HAI-21 (FR-030) — the approval gate. Every state-changing action a service
+-- principal (Hermes) requests becomes a PROPOSAL here; it executes only after a
+-- human confirms it (FR-038). Unified across all gated action_types.
+--   status:          pending → confirmed → executed | failed
+--                            ↘ rejected   ↘ expired
+--   action_type:     project.create | request.submit | deploy | rollback | ... (HAI-24 registry)
+--   target_ref:      the entity the action targets (project_id / request_id / ...)
+--   payload_json:    JSON args for the action handler
+--   proposed_by:     principal_actor() of the proposer (e.g. "service:hermes-operator")
+--   decided_by:      the HUMAN who confirmed/rejected (never the service principal — FR-038)
+--   ttl_seconds:     auto-expire window; the sweeper (HAI-29) expires stale pending rows
+--   result_ref:      pointer to the executed action's result (e.g. the created request_id)
+--   error:           failure reason when status='failed' (FR-035d)
+--   idempotency_key: optional dedup of repeated creates (FR-035a); UNIQUE when present
+CREATE TABLE IF NOT EXISTS proposals (
+    proposal_id      TEXT PRIMARY KEY,                 -- 'prop-<hex>'
+    action_type      TEXT NOT NULL,
+    target_ref       TEXT,
+    payload_json     TEXT NOT NULL DEFAULT '{}',
+    status           TEXT NOT NULL DEFAULT 'pending',
+    proposed_by      TEXT NOT NULL,
+    created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    decided_by       TEXT,
+    decided_at       TIMESTAMP,
+    executed_at      TIMESTAMP,
+    ttl_seconds      INTEGER NOT NULL DEFAULT 86400,
+    result_ref       TEXT,
+    error            TEXT,
+    idempotency_key  TEXT UNIQUE
+);
+CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
+CREATE INDEX IF NOT EXISTS idx_proposals_created ON proposals(created_at);
 """
 
 
