@@ -183,40 +183,20 @@ def _should_touch_last_used(token_id: str, now: float | None = None) -> bool:
     return True
 
 
-async def get_service_principal(
-    credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
-    request: Request = None,
-) -> dict[str, Any]:
-    """FastAPI dependency: authenticate a long-lived SERVICE token presented as
-    ``Authorization: Bearer <token>`` (HAI-02, used by the headless Hermes Agent
-    integration).
+async def _resolve_service_principal(raw: str, state: StateStore) -> dict[str, Any] | None:
+    """Resolve a raw bearer to a SERVICE principal, or None if it isn't a service
+    token (so callers can fall back to JWT). Raises 401 for a *revoked* token.
 
-    Returns a principal payload shaped like a user payload (``sub`` / ``role`` /
-    ``kb_curator_scopes``) so existing route guards can treat it uniformly, but
-    tagged ``is_service_token=True`` so later layers can tell a MACHINE principal
-    from a human (the write-block FR-015a and the human-only proposal confirm
-    FR-038 both rely on this flag). Unknown and revoked tokens are rejected 401.
+    Side effects (debounced, HAI-52): stamps ``last_used_at`` and emits the
+    bounded ``service_principal_active`` attribution log (HAI-04 / FR-082).
     """
-    if not credentials:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
-        )
-    state: StateStore = request.app.state.state_store
-    token = await state.get_service_token_by_hash(hash_service_token(credentials.credentials))
+    token = await state.get_service_token_by_hash(hash_service_token(raw))
     if token is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid service token"
-        )
+        return None
     if token.is_revoked:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Service token has been revoked"
         )
-    # Stamp usage — debounced (HAI-52) to ≤ once/window/token so a chatty client
-    # doesn't write to the shared SQLite DB on every request. Best-effort
-    # telemetry: a write hiccup must NOT block auth (mirrors the resolver's
-    # "DB blip can't break dispatch" rule). The same gate bounds the structured
-    # attribution log (HAI-04 / FR-082) so service traffic is distinguishable in
-    # logs without spamming once per poll.
     if _should_touch_last_used(token.token_id):
         logger.info(
             "service_principal_active",
@@ -228,7 +208,6 @@ async def get_service_principal(
             await state.touch_service_token_last_used(token.token_id)
         except Exception as e:  # noqa: BLE001
             logger.warning("service_token_touch_failed", token_id=token.token_id, error=str(e))
-
     return {
         "sub": token.token_id,
         "token_id": token.token_id,
@@ -237,6 +216,53 @@ async def get_service_principal(
         "kb_curator_scopes": [],
         "is_service_token": True,
     }
+
+
+async def get_service_principal(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
+    request: Request = None,
+) -> dict[str, Any]:
+    """FastAPI dependency: authenticate a long-lived SERVICE token only (rejects
+    JWTs). Used where only a service identity makes sense (e.g. /service-tokens/me).
+
+    Returns a principal payload shaped like a user payload, tagged
+    ``is_service_token=True`` so later layers can tell a MACHINE principal from a
+    human (write-block FR-015a, human-only confirm FR-038). Unknown/revoked → 401.
+    """
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+        )
+    state: StateStore = request.app.state.state_store
+    principal = await _resolve_service_principal(credentials.credentials, state)
+    if principal is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid service token"
+        )
+    return principal
+
+
+async def get_principal(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
+    request: Request = None,
+) -> dict[str, Any]:
+    """FastAPI dependency accepting EITHER a human JWT or a service token,
+    returning a uniform principal (HAI-10). Read endpoints the MCP monitor tools
+    call use this so the headless Hermes service token can read them, while human
+    UI traffic keeps working unchanged. The write-block (FR-015a) still blocks any
+    state-changing call a service principal makes, so broadening reads is safe.
+    """
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+        )
+    state: StateStore = request.app.state.state_store
+    # Cheap hash lookup first; a human JWT hashes to nothing in service_tokens.
+    principal = await _resolve_service_principal(credentials.credentials, state)
+    if principal is not None:
+        return principal
+    auth_service: AuthService = request.app.state.auth_service
+    return auth_service.decode_token(credentials.credentials)
 
 
 def principal_actor(principal: dict[str, Any]) -> str:

@@ -18,3 +18,9 @@ tools:
     min_role: viewer
     method: GET
     path: /api/v1/health
+
+  - name: monitor_list_requests
+    description: "List Agent Team requests (newest first). Optional filters: status, project_id, per_page."
+    min_role: viewer
+    method: GET
+    path: /api/v1/requests

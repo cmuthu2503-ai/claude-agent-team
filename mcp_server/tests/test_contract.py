@@ -22,6 +22,7 @@ BACKEND = os.getenv("AGENT_TEAM_BACKEND_URL", "http://backend:8000")
 REQUIRED_ENDPOINTS = [
     ("get", "/api/v1/health"),
     ("get", "/api/v1/service-tokens/me"),
+    ("get", "/api/v1/requests"),  # HAI-10 monitor_list_requests
 ]
 
 
