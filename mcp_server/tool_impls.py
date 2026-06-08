@@ -24,6 +24,26 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
         """Agent Team backend health + agent execution mode (real_llm vs mock)."""
         return await client.get("/api/v1/health")
 
+    async def monitor_list_requests(
+        status: str | None = None,
+        project_id: str | None = None,
+        per_page: int = 20,
+    ) -> Any:
+        """List Agent Team requests, newest first.
+
+        Filters (all optional):
+          status:     e.g. 'failed', 'completed', 'in_progress', 'analyzing'
+          project_id: restrict to one project
+          per_page:   page size (default 20)
+        """
+        params: dict[str, Any] = {"per_page": per_page}
+        if status:
+            params["status"] = status
+        if project_id:
+            params["project_id"] = project_id
+        return await client.get("/api/v1/requests", params=params)
+
     return {
         "monitor_backend_health": monitor_backend_health,
+        "monitor_list_requests": monitor_list_requests,
     }

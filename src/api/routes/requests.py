@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from src.auth.service import get_current_user, require_role
+from src.auth.service import get_current_user, get_principal, require_role
 from src.workflows.loader import ParallelStage, WorkflowDefinition
 
 router = APIRouter(prefix="/api/v1/requests", tags=["requests"])
@@ -218,7 +218,8 @@ async def list_requests(
     project_id: str | None = None,  # PM-16
     page: int = 1,
     per_page: int = 20,
-    user: dict = Depends(get_current_user),
+    # HAI-10 — accepts a JWT (human UI) OR a service token (Hermes monitor tool).
+    user: dict = Depends(get_principal),
 ):
     state = request.app.state.state_store
     offset = (page - 1) * per_page

@@ -11,7 +11,14 @@ import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
-from src.auth.service import get_service_principal, hash_service_token, principal_actor
+from src.auth.service import (
+    AuthService,
+    get_principal,
+    get_service_principal,
+    hash_service_token,
+    principal_actor,
+)
+from src.models.base import User, UserRole
 from src.state.sqlite_store import SQLiteStateStore
 
 
@@ -85,6 +92,52 @@ def test_hash_is_sha256_hex():
 
     assert hash_service_token("abc") == hashlib.sha256(b"abc").hexdigest()
     assert len(hash_service_token("abc")) == 64
+
+
+def _request_with_auth(store, auth_service):
+    return types.SimpleNamespace(
+        app=types.SimpleNamespace(
+            state=types.SimpleNamespace(state_store=store, auth_service=auth_service)
+        )
+    )
+
+
+async def test_get_principal_accepts_service_token(store):
+    raw = "combined-svc"
+    await store.create_service_token("stok-c", "hermes-monitor", hash_service_token(raw), "viewer")
+    auth = AuthService(state=store, secret_key="test-secret")
+    p = await get_principal(credentials=_creds(raw), request=_request_with_auth(store, auth))
+    assert p["is_service_token"] is True
+    assert p["role"] == "viewer"
+    assert p["token_id"] == "stok-c"
+
+
+async def test_get_principal_accepts_human_jwt(store):
+    auth = AuthService(state=store, secret_key="test-secret")
+    jwt = auth.create_access_token(
+        User(user_id="u1", username="alice", email="alice@example.com", role=UserRole.DEVELOPER)
+    )
+    p = await get_principal(credentials=_creds(jwt), request=_request_with_auth(store, auth))
+    assert p.get("is_service_token") is None       # a human, not a service token
+    assert p["role"] == "developer"
+    assert p["username"] == "alice"
+
+
+async def test_get_principal_missing_credentials_401(store):
+    auth = AuthService(state=store, secret_key="test-secret")
+    with pytest.raises(HTTPException) as exc:
+        await get_principal(credentials=None, request=_request_with_auth(store, auth))
+    assert exc.value.status_code == 401
+
+
+async def test_get_principal_revoked_service_token_401(store):
+    raw = "combined-revoked"
+    await store.create_service_token("stok-cr", "x", hash_service_token(raw), "viewer")
+    await store.revoke_service_token("stok-cr")
+    auth = AuthService(state=store, secret_key="test-secret")
+    with pytest.raises(HTTPException) as exc:
+        await get_principal(credentials=_creds(raw), request=_request_with_auth(store, auth))
+    assert exc.value.status_code == 401
 
 
 def test_principal_actor_attribution():

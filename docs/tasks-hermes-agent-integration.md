@@ -45,11 +45,11 @@
 | Phase | Theme | Total | Done | In Progress | Blocked | Not Started |
 |-------|-------|-------|------|-------------|---------|-------------|
 | P0 | Foundations (service token + MCP skeleton) | 12 | 12 | 0 | 0 | 0 |
-| P1 | Monitor (read-only + push) | 12 | 0 | 0 | 0 | 12 |
+| P1 | Monitor (read-only + push) | 12 | 1 | 0 | 0 | 11 |
 | P2 | Approval Gate (proposals engine) | 21 | 0 | 0 | 0 | 21 |
 | P3 | Lifecycle Actions (gated) | 12 | 0 | 0 | 0 | 12 |
 | P4 | Autonomous-Loop Reconciliation | 6 | 0 | 0 | 0 | 6 |
-| **Total** | | **63** | **12** | **0** | **0** | **51** |
+| **Total** | | **63** | **13** | **0** | **0** | **50** |
 
 > Task IDs run HAI-01..HAI-63. IDs are unique but **not contiguous per phase** — HAI-51..63 were added in the v1.1 gap-review and slot into their dependency phase (P0: 51–53, P1: 54, P2: 55–63), not at the end. Sort by the Depends-On graph, not by ID number.
 
@@ -82,7 +82,7 @@ Read-only observation tools + outbound push. Goal: Hermes reports live state and
 
 | ID | Task | Description | Effort | Depends On | Traces FR | Status |
 |----|------|-------------|--------|-----------|-----------|--------|
-| HAI-10 | `monitor_list_requests` | List requests with status/project/time filters → requests read endpoints. | S | HAI-07, HAI-08 | FR-020, FR-027 | `[ ]` |
+| HAI-10 | `monitor_list_requests` | List requests with status/project/time filters → requests read endpoints. **Done:** manifest entry + `monitor_list_requests(status, project_id, per_page)` impl → `GET /api/v1/requests`. Enabler: combined **`get_principal`** dependency (JWT *or* service token) applied to the list route — humans unaffected, write-block still guards mutations. Verified E2E: viewer token listed requests via the adapter. 5 backend + 3 MCP tests + contract endpoint. | S | HAI-07, HAI-08 | FR-020, FR-027 | `[x]` |
 | HAI-11 | `monitor_get_request` | Request detail + status + stories/subtasks. | S | HAI-10 | FR-021, FR-027 | `[ ]` |
 | HAI-12 | `monitor_list_projects` / `monitor_get_project` | Project catalog + detail (feeds project inference). | S | HAI-07 | FR-022, FR-027 | `[ ]` |
 | HAI-13 | `monitor_get_costs` | Cost/spend rollups by request + project. Uses **only** the viewer-readable `/cost/dashboard` — never the admin-only orphan/reconcile endpoints (would 403). | S | HAI-07 | FR-023, FR-027 | `[ ]` |
