@@ -66,3 +66,28 @@ tools:
     min_role: viewer
     method: GET
     path: /api/v1/agents
+
+  # ── HAI-43 — lifecycle read companions (review between gated steps) ──
+  - name: project_get_prd
+    description: "The project's current PRD (latest version). Arg: project_id."
+    min_role: viewer
+    method: GET
+    path: /api/v1/projects/{project_id}/prd
+
+  - name: project_get_apispec
+    description: "The project's current API specification (latest version). Arg: project_id."
+    min_role: viewer
+    method: GET
+    path: /api/v1/projects/{project_id}/api-spec
+
+  - name: project_get_buildplan
+    description: "The project's build-plan rollup (epics -> features -> tasks + counts). Arg: project_id."
+    min_role: viewer
+    method: GET
+    path: /api/v1/projects/{project_id}/build-plan/rollup
+
+  - name: project_get_tasks
+    description: "The project's generated task list (the unit auto-dispatch acts on). Arg: project_id."
+    min_role: viewer
+    method: GET
+    path: /api/v1/projects/{project_id}/tasks

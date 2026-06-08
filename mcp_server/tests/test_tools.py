@@ -131,3 +131,31 @@ def test_registry_has_expected_tools():
         "monitor_recent_failures", "monitor_deploy_health", "monitor_team_status",
     ):
         assert name in impls
+
+
+# ── HAI-43 — lifecycle read companions ───────────────────────────────────────
+
+async def test_lifecycle_read_companions_build_paths():
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["url"] = str(req.url)
+        return httpx.Response(200, json={"data": {"ok": True}, "meta": None, "error": None})
+
+    impls = build_tool_impls(_client(handler))
+    for tool, suffix in [
+        ("project_get_prd", "/api/v1/projects/proj-1/prd"),
+        ("project_get_apispec", "/api/v1/projects/proj-1/api-spec"),
+        ("project_get_buildplan", "/api/v1/projects/proj-1/build-plan/rollup"),
+        ("project_get_tasks", "/api/v1/projects/proj-1/tasks"),
+    ]:
+        out = await impls[tool]("proj-1")
+        assert out == {"ok": True}
+        assert seen["url"].endswith(suffix), f"{tool} -> {seen['url']}"
+
+
+def test_companions_are_registered_viewer_tier():
+    # All four are present in the impl map (manifest min_role viewer is asserted in
+    # test_manifest's role-filter coverage).
+    impls = build_tool_impls(_client(lambda r: httpx.Response(200, json={"data": None})))
+    assert {"project_get_prd", "project_get_apispec", "project_get_buildplan", "project_get_tasks"} <= set(impls)

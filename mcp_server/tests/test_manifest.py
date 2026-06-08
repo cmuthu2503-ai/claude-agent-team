@@ -75,3 +75,21 @@ def test_register_tools_respects_role_and_impl():
     m2 = _MCP()
     # admin → 'a' and 'b' ('c' still skipped — no impl)
     assert register_tools(m2, specs, "admin", impls) == ["a", "b"]
+
+
+def test_per_tier_identities_see_lifecycle_companions():
+    """HAI-43/44 — the lifecycle read companions are viewer-tier, so BOTH a
+    hermes-monitor (viewer) and a hermes-operator (developer) identity get them.
+    Loaded from the real shipped manifest, not a fixture."""
+    from pathlib import Path
+
+    manifest_path = Path(__file__).resolve().parents[1] / "tools_manifest.yaml"
+    specs = load_manifest(manifest_path)
+    companions = {"project_get_prd", "project_get_apispec", "project_get_buildplan", "project_get_tasks"}
+    for spec in specs:
+        if spec.name in companions:
+            assert spec.min_role == "viewer", f"{spec.name} should be viewer-tier"
+    viewer_names = {s.name for s in tools_for_role(specs, "viewer")}
+    developer_names = {s.name for s in tools_for_role(specs, "developer")}
+    assert companions <= viewer_names        # hermes-monitor (viewer) sees them
+    assert companions <= developer_names     # hermes-operator (developer) too

@@ -73,6 +73,26 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
         """The agents with their resolved/assigned model, override state, tool count, and busy state."""
         return await client.get("/api/v1/agents")
 
+    # ── HAI-43 — lifecycle read companions (Monitor-tier). Let Hermes REVIEW the
+    # artifact produced by each gated step (PRD, API spec, build plan, tasks)
+    # before proposing/confirming the next one. Reads only — never mutating.
+
+    async def project_get_prd(project_id: str) -> Any:
+        """The project's current PRD (latest version) for review between gated steps."""
+        return await client.get(f"/api/v1/projects/{project_id}/prd")
+
+    async def project_get_apispec(project_id: str) -> Any:
+        """The project's current API specification (latest version)."""
+        return await client.get(f"/api/v1/projects/{project_id}/api-spec")
+
+    async def project_get_buildplan(project_id: str) -> Any:
+        """The project's build-plan rollup: epics → features → tasks structure + counts."""
+        return await client.get(f"/api/v1/projects/{project_id}/build-plan/rollup")
+
+    async def project_get_tasks(project_id: str) -> Any:
+        """The project's generated task list (the unit auto-dispatch acts on)."""
+        return await client.get(f"/api/v1/projects/{project_id}/tasks")
+
     return {
         "monitor_backend_health": monitor_backend_health,
         "monitor_list_requests": monitor_list_requests,
@@ -83,4 +103,8 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
         "monitor_recent_failures": monitor_recent_failures,
         "monitor_deploy_health": monitor_deploy_health,
         "monitor_team_status": monitor_team_status,
+        "project_get_prd": project_get_prd,
+        "project_get_apispec": project_get_apispec,
+        "project_get_buildplan": project_get_buildplan,
+        "project_get_tasks": project_get_tasks,
     }
