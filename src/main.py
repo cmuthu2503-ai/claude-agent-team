@@ -326,7 +326,14 @@ async def lifespan(app: FastAPI):
         make_ops_heal_handler,
     )
 
-    events.on(make_ops_heal_handler(state, agent_executor, events))
+    # HAI-47 — pass a live governed predicate so a BREACH proposes a rollback (vs
+    # auto-rolling-back) when governance is on. Alert-only verdicts still auto-fire.
+    events.on(
+        make_ops_heal_handler(
+            state, agent_executor, events,
+            governed=lambda: getattr(app.state, "governed_mode", False),
+        )
+    )
     logger.info("ops_heal_handler_registered")
     app.state.ae1_anomaly_sweeper_task = asyncio.create_task(
         make_anomaly_sweeper(state, events, agent_executor)(),

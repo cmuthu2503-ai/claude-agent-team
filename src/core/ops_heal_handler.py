@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Callable
 from typing import Any
 
 import structlog
@@ -55,6 +56,7 @@ from src.core.events import (
     OPS_ROLLBACK_TRIGGERED,
     EventEmitter,
 )
+from src.core.in_process_gate import submit_gated_action
 
 logger = structlog.get_logger()
 
@@ -140,10 +142,17 @@ def make_anomaly_sweeper(
 
 def make_ops_heal_handler(
     state: Any, agent_executor: Any, events: EventEmitter,
+    governed: Callable[[], bool] | None = None,
 ) -> Any:
     """Returns the async EventHandler bound to (state, executor, events).
     Listens for ``deploy_health.anomaly_detected`` ONLY — every other
     event type is dropped cheaply.
+
+    ``governed`` is a live predicate (HAI-47): when True, a BREACH proposes a
+    rollback (a human confirms; the HAI-42 handler enqueues it) instead of rolling
+    back automatically. Alert-only verdicts (DEGRADED / INSUFFICIENT_DATA) still
+    auto-fire. Defaults to legacy (never governed), so existing call sites/tests
+    are unchanged.
 
     Decision algorithm (deterministic, no LLM):
         1. Pull slo_check + auto_rollback tools from the executor.
@@ -153,6 +162,7 @@ def make_ops_heal_handler(
     On any failure, log and return — never raise into the event
     loop. The handler must never break event broadcast.
     """
+    _is_governed: Callable[[], bool] = governed if callable(governed) else (lambda: False)
 
     async def _handler(event_type: str, data: dict[str, Any]) -> None:
         if event_type != DEPLOY_HEALTH_ANOMALY_DETECTED:
@@ -205,42 +215,75 @@ def make_ops_heal_handler(
                     )
                     return
 
-                # ── BREACH → attempt rollback ─────────────────────
+                # ── BREACH → roll back, GATED by governance (HAI-47) ──
                 if slo_verdict == "BREACH":
-                    rb = await rollback_tool.execute({
-                        "env": env,
-                        "reason": slo.get("summary", "SLO breach"),
-                    })
-                    rb_status = rb.get("status")
-                    if rb_status == "queued":
-                        await events.emit(OPS_ROLLBACK_TRIGGERED, {
+                    async def _legacy_rollback() -> Any:
+                        """The pre-integration behavior: roll back NOW via the tool."""
+                        rb = await rollback_tool.execute({
                             "env": env,
-                            "request_id": rb.get("request_id"),
-                            "deploy_id": rb.get("deploy_id"),
-                            "reason": rb.get("reason"),
-                            "slo_summary": slo.get("summary"),
+                            "reason": slo.get("summary", "SLO breach"),
                         })
-                        logger.info(
-                            "ops_rollback_triggered",
-                            env=env, request_id=rb.get("request_id"),
-                        )
-                    else:
-                        # already_in_flight / breach_not_sustained /
-                        # insufficient_data / error — surface as alert
-                        # so the UI shows something, but don't claim a
-                        # new rollback was triggered.
+                        rb_status = rb.get("status")
+                        if rb_status == "queued":
+                            await events.emit(OPS_ROLLBACK_TRIGGERED, {
+                                "env": env,
+                                "request_id": rb.get("request_id"),
+                                "deploy_id": rb.get("deploy_id"),
+                                "reason": rb.get("reason"),
+                                "slo_summary": slo.get("summary"),
+                            })
+                            logger.info(
+                                "ops_rollback_triggered",
+                                env=env, request_id=rb.get("request_id"),
+                            )
+                        else:
+                            # already_in_flight / breach_not_sustained / error —
+                            # surface as alert, don't claim a new rollback fired.
+                            await events.emit(OPS_ALERT_FIRED, {
+                                "env": env,
+                                "severity": "breach",
+                                "slo_verdict": "BREACH",
+                                "slo_summary": slo.get("summary"),
+                                "rollback_status": rb_status,
+                                "rollback_request_id": rb.get("request_id"),
+                                "anomaly_alerts": data.get("alerts", []),
+                            })
+                            logger.info(
+                                "ops_alert_fired_no_rollback",
+                                env=env, rollback_status=rb_status,
+                            )
+                        return rb
+
+                    # Governed → propose the rollback (human confirms; the HAI-42
+                    # handler enqueues it) + a breach alert. Legacy → roll back now.
+                    # Idempotent per env so repeated breaches don't stack proposals.
+                    outcome = await submit_gated_action(
+                        state, events,
+                        governed=_is_governed(),
+                        action_type="rollback",
+                        proposed_by="system:ops-heal",
+                        target_ref=f"env:{env}",
+                        payload={
+                            "env": env,
+                            "deploy_id": data.get("deploy_id", ""),
+                            "reason": slo.get("summary", "SLO breach"),
+                        },
+                        idempotency_key=f"autorollback:{env}",
+                        execute=_legacy_rollback,
+                    )
+                    if outcome.gated:
                         await events.emit(OPS_ALERT_FIRED, {
                             "env": env,
                             "severity": "breach",
                             "slo_verdict": "BREACH",
                             "slo_summary": slo.get("summary"),
-                            "rollback_status": rb_status,
-                            "rollback_request_id": rb.get("request_id"),
+                            "rollback_status": "proposed",
+                            "rollback_proposal_id": outcome.proposal_id,
                             "anomaly_alerts": data.get("alerts", []),
                         })
                         logger.info(
-                            "ops_alert_fired_no_rollback",
-                            env=env, rollback_status=rb_status,
+                            "ops_rollback_proposed",
+                            env=env, proposal_id=outcome.proposal_id,
                         )
                     return
 
