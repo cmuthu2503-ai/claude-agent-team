@@ -172,13 +172,14 @@ async def lifespan(app: FastAPI):
 
     _register_proposal_handlers(app.state.proposal_registry)
 
-    # HAI-63 — governed mode. When ON (the default — "nothing moves without my
-    # approval"), in-process callers that mutate gated state route through the
-    # approval gate (src.core.in_process_gate) and become proposals instead of
-    # executing. Set GOVERNED_MODE=false to restore legacy autonomous behavior.
-    app.state.governed_mode = os.getenv("GOVERNED_MODE", "true").strip().lower() not in (
-        "false", "0", "no", "off",
-    )
+    # HAI-45/63 — governed mode. When ON, in-process callers that mutate gated
+    # state (auto-dispatch, auto-rollback, …) route through the approval gate and
+    # become proposals a human confirms instead of executing. Resolution: explicit
+    # GOVERNED_MODE env wins; otherwise governed iff a live Hermes service token
+    # exists (no Hermes identity → legacy autonomy, NFR-001).
+    from src.core.governance import resolve_governed_mode
+
+    app.state.governed_mode = await resolve_governed_mode(state, os.getenv("GOVERNED_MODE"))
     logger.info("governance_mode", governed=app.state.governed_mode)
 
     # Decide real-vs-mock at boot, or refuse to boot. Mock mode (fake agent
