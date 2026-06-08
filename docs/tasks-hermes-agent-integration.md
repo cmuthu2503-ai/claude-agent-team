@@ -115,7 +115,7 @@ Unified proposals engine. Goal: no gated action executes without a confirmed pro
 | HAI-30 | One-time approval token (channel approve) | Per-proposal token enabling operator to confirm from a Hermes channel without a full dashboard session, still human-authority. | M | HAI-26 | FR-038, FR-072 | `[x]` |
 | HAI-31 | Pending Approvals UI view | Minimal dashboard read view listing proposals with confirm/reject (reuses API). | M | HAI-28 | FR-081 | `[x]` |
 | HAI-55 | Proposal idempotency | Optional `idempotency_key` on `POST /proposals`; repeat key returns existing proposal (guards Hermes retries/re-prompts). | S | HAI-23 | FR-035a | `[x]` |
-| HAI-56 | Atomic state transitions (CAS) | pending→{confirmed,rejected,expired} as a single atomic compare-and-set; concurrent confirm/reject/expiry resolves to one winner, no double-execute. | M | HAI-22 | FR-035b | `[ ]` |
+| HAI-56 | Atomic state transitions (CAS) | pending→{confirmed,rejected,expired} as a single atomic compare-and-set; concurrent confirm/reject/expiry resolves to one winner, no double-execute. | M | HAI-22 | FR-035b | `[x]` |
 | HAI-57 | Crash-recovery reconciliation | Startup pass over `confirmed`-but-not-`executed` proposals: safely re-drive or mark `failed`; never strand. | M | HAI-26 | FR-035c | `[x]` |
 | HAI-58 | Execution-failure semantics | On partial handler failure, record `failed` + structured result; disallow re-confirm of `failed` (operator re-proposes). | M | HAI-26 | FR-035d | `[x]` |
 | HAI-59 | Target integrity at confirm | Re-validate `target_ref` exists + legal state at confirm time (project not deleted/archived in TTL window); else fail with reason. | S | HAI-26 | FR-035e | `[x]` |
