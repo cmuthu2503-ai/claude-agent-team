@@ -22,12 +22,13 @@ def test_cost_calculation_opus_4_7():
     tracker = TokenTracker.__new__(TokenTracker)
     tracker._catalog = None
     tracker._fallback_pricing = {
-        "claude-opus-4-7": {"input": 16.50, "output": 82.50},
+        "claude-opus-4-7": {"input": 5.50, "output": 27.50},
     }
     tracker._warned_models = set()
     # 1000 input + 2000 output tokens with Opus 4.7 (US-geo) pricing
+    # (corrected: $5/$25 base × 1.1 US-geo = 5.50/27.50, not the old 16.50/82.50).
     cost = tracker.calculate_cost("claude-opus-4-7", 1000, 2000)
-    expected = (1000 * 16.50 + 2000 * 82.50) / 1_000_000
+    expected = (1000 * 5.50 + 2000 * 27.50) / 1_000_000
     assert abs(cost - expected) < 0.0001
 
 

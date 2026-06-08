@@ -24,7 +24,7 @@ import structlog
 
 logger = structlog.get_logger()
 
-DEFAULT_MODEL = os.getenv("PROMPT_STUDIO_MODEL", "claude-opus-4-7")
+DEFAULT_MODEL = os.getenv("PROMPT_STUDIO_MODEL", "claude-opus-4-8")
 
 
 class PromptEngineerError(Exception):

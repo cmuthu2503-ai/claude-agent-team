@@ -34,7 +34,7 @@ from fastapi.testclient import TestClient
 from src.agents.executor import AgentSystemExecutor
 from src.api.routes import agents as agents_route
 from src.api.routes import models as models_route
-from src.auth.service import get_current_user
+from src.auth.service import get_current_user, get_principal
 from src.config.loader import ConfigLoader
 from src.core.events import EventEmitter
 from src.core.token_tracker import TokenTracker
@@ -69,6 +69,9 @@ async def stack():
         def _admin() -> dict[str, Any]:
             return {"sub": "u1", "username": "alice", "role": "admin"}
         app.dependency_overrides[get_current_user] = _admin
+        # HAI-16 — GET /agents now authenticates via get_principal (JWT or service
+        # token); override it too so the no-auth TestClient calls resolve to _admin.
+        app.dependency_overrides[get_principal] = _admin
         for route in app.routes:
             dependant = getattr(route, "dependant", None)
             if dependant is None:

@@ -4,7 +4,7 @@ role: "Tester Specialist"
 team: delivery
 reports_to: devops_specialist
 
-model: claude-opus-4-7
+model: claude-opus-4-8
 
 # Reads multiple files to verify imports + test against real code paths.
 max_iterations: 20

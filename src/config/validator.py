@@ -13,6 +13,10 @@ logger = structlog.get_logger()
 
 SCHEMA_DIR = Path(__file__).parent / "schemas"
 
+# Supported agent models on Claude Platform on AWS. 4.8 is the current default
+# (config/agents/*.yaml); 4.7 stays accepted (same price, still on the account).
+_ALLOWED_AGENT_MODELS = {"claude-opus-4-8", "claude-opus-4-7"}
+
 
 class ValidationError:
     """A single validation error."""
@@ -59,13 +63,16 @@ class ConfigValidator:
                         f"agents/{agent_id}", f"Missing required field: {field}"
                     )
 
-            # Validate model — single shared model for all agents on Claude Platform on AWS.
+            # Validate model — the supported Opus models on Claude Platform on AWS.
+            # 4.8 is the current default; 4.7 is still accepted (same price, valid
+            # on the account) so upgrades/transitions don't trip validation.
             model = config.get("model", "")
-            if model != "claude-opus-4-7":
+            if model not in _ALLOWED_AGENT_MODELS:
                 self._add_error(
                     f"agents/{agent_id}",
-                    f"Invalid model: {model}. All agents must use claude-opus-4-7 "
-                    f"(Claude Platform on AWS). See docs/setup-claude-platform-on-aws.md.",
+                    f"Invalid model: {model}. Agents must use one of "
+                    f"{sorted(_ALLOWED_AGENT_MODELS)} (Claude Platform on AWS). "
+                    f"See docs/setup-claude-platform-on-aws.md.",
                 )
 
             # Validate team exists

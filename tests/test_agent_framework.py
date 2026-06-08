@@ -49,8 +49,8 @@ def test_factory_assigns_correct_models(config):
     factory = AgentFactory(config)
     agents = factory.create_all()
     for agent_id, agent in agents.items():
-        assert agent.model == "claude-opus-4-7", (
-            f"Agent {agent_id} has model {agent.model!r}; expected claude-opus-4-7"
+        assert agent.model == "claude-opus-4-8", (
+            f"Agent {agent_id} has model {agent.model!r}; expected claude-opus-4-8"
         )
 
 

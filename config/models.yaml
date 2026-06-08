@@ -72,7 +72,7 @@
 
 # Fallback when no agent override, no YAML default, and no env var pins
 # a specific model. Keeps the platform working out of the box.
-default_model: claude-opus-4-7
+default_model: claude-opus-4-8
 
 # Map from pre-PAM "provider" identifiers (Request.provider column, env
 # var values) to a concrete model_id. Old persisted Request rows from
@@ -101,6 +101,18 @@ models:
 
   # ── Anthropic / Claude Platform on AWS — current production stack ──────
 
+  claude-opus-4-8:
+    provider_type:    anthropic_aws
+    model_id:         claude-opus-4-8
+    api_key_env:      ANTHROPIC_AWS_API_KEY
+    base_url:         null
+    tool_calling_mode: native
+    tier:             frontier
+    display_name:     "Claude Opus 4.8"
+    pricing_per_million:
+      input:   5.50        # 5.00 × 1.1 US-geo multiplier
+      output: 27.50        # 25.00 × 1.1
+
   claude-opus-4-7:
     provider_type:    anthropic_aws
     model_id:         claude-opus-4-7
@@ -110,8 +122,12 @@ models:
     tier:             frontier
     display_name:     "Claude Opus 4.7"
     pricing_per_million:
-      input:  16.50        # 15.00 × 1.1 US-geo multiplier
-      output: 82.50        # 75.00 × 1.1
+      # CORRECTED: was 16.50/82.50 (the DEPRECATED Opus 4.1/4 rate, $15/$75).
+      # Real Opus 4.7 base is $5/$25 (same as 4.8) → ×1.1 US-geo. Verified
+      # against platform.claude.com/docs pricing 2026-06-08. Old value
+      # over-attributed 4.7 cost ~3×.
+      input:   5.50        # 5.00 × 1.1 US-geo multiplier
+      output: 27.50        # 25.00 × 1.1
 
   claude-sonnet-4-7:
     provider_type:    anthropic_aws
