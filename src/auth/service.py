@@ -2,6 +2,7 @@
 
 import hashlib
 import secrets
+import time
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -161,6 +162,27 @@ def hash_service_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+# HAI-52 (FR-015) — last_used_at write debounce. A chatty service client (the
+# Hermes scheduler polling every few seconds) would otherwise write to the
+# shared SQLite DB on every request, contending with the host supervisor. We
+# coalesce to at most one write per token per window. Process-local: each
+# backend process writes ≤ once/window/token, which is plenty for telemetry.
+_LAST_USED_DEBOUNCE_SECONDS = 60.0
+_last_used_touched: dict[str, float] = {}
+
+
+def _should_touch_last_used(token_id: str, now: float | None = None) -> bool:
+    """Return True if ``last_used_at`` should be written for ``token_id`` now —
+    i.e. it hasn't been written within the debounce window. Records the touch
+    time as a side effect. ``now`` is injectable for tests."""
+    current = now if now is not None else time.monotonic()
+    last = _last_used_touched.get(token_id)
+    if last is not None and (current - last) < _LAST_USED_DEBOUNCE_SECONDS:
+        return False
+    _last_used_touched[token_id] = current
+    return True
+
+
 async def get_service_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
     request: Request = None,
@@ -189,13 +211,15 @@ async def get_service_principal(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Service token has been revoked"
         )
-    # Stamp usage. Best-effort telemetry — a write hiccup must NOT block auth
-    # (mirrors the resolver's "DB blip can't break dispatch" rule). HAI-52 will
-    # debounce this so a chatty client doesn't write on every request.
-    try:
-        await state.touch_service_token_last_used(token.token_id)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("service_token_touch_failed", token_id=token.token_id, error=str(e))
+    # Stamp usage — debounced (HAI-52) to ≤ once/window/token so a chatty client
+    # doesn't write to the shared SQLite DB on every request. Best-effort
+    # telemetry: a write hiccup must NOT block auth (mirrors the resolver's
+    # "DB blip can't break dispatch" rule).
+    if _should_touch_last_used(token.token_id):
+        try:
+            await state.touch_service_token_last_used(token.token_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("service_token_touch_failed", token_id=token.token_id, error=str(e))
 
     return {
         "sub": token.token_id,
