@@ -23,6 +23,7 @@ from src.api.routes import (
     prompts,
     releases,
     requests,
+    service_tokens,
     users,
 )
 from src.api.websocket import router as ws_router
@@ -397,6 +398,7 @@ app.include_router(prompts.router)
 app.include_router(lessons.router)
 app.include_router(ops.router)
 app.include_router(knowledge.router)
+app.include_router(service_tokens.router)
 app.include_router(ws_router)
 
 
