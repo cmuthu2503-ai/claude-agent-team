@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 
-from src.auth.service import get_current_user, require_role
+from src.auth.service import get_current_user, get_principal, require_role
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
@@ -33,7 +33,7 @@ def _resolve_assigned_model(
 @router.get("")
 async def list_agents(
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_principal),  # HAI-16 — JWT or service token (team status)
 ):
     config = request.app.state.config
     state = request.app.state.state_store

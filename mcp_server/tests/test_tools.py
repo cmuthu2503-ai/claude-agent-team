@@ -89,10 +89,45 @@ async def test_monitor_get_project_and_costs():
     assert "project_id=proj-7" in seen["url"]
 
 
+async def test_monitor_recent_failures_filters_status():
+    seen: dict[str, str] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["url"] = str(req.url)
+        return httpx.Response(200, json={"data": [{"request_id": "REQ-F", "status": "failed"}], "meta": None, "error": None})
+
+    impls = build_tool_impls(_client(handler))
+    data = await impls["monitor_recent_failures"](per_page=10)
+    assert data[0]["status"] == "failed"
+    assert "/api/v1/requests" in seen["url"]
+    assert "status=failed" in seen["url"]
+    assert "per_page=10" in seen["url"]
+
+
+async def test_monitor_deploy_health_and_team_status():
+    seen: dict[str, str] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["url"] = str(req.url)
+        if req.url.path.endswith("/ops/latest"):
+            return httpx.Response(200, json={"verdict": "HEALTHY", "deployment_id": "d-1"})
+        return httpx.Response(200, json={"data": [{"agent_id": "backend_specialist"}], "meta": None, "error": None})
+
+    impls = build_tool_impls(_client(handler))
+    health = await impls["monitor_deploy_health"]()
+    assert health["verdict"] == "HEALTHY"           # /ops/latest is not enveloped → returned as-is
+    assert seen["url"].endswith("/api/v1/ops/latest")
+
+    team = await impls["monitor_team_status"]()
+    assert team[0]["agent_id"] == "backend_specialist"
+    assert seen["url"].endswith("/api/v1/agents")
+
+
 def test_registry_has_expected_tools():
     impls = build_tool_impls(_client(lambda req: httpx.Response(200, json={})))
     for name in (
         "monitor_backend_health", "monitor_list_requests", "monitor_get_request",
         "monitor_list_projects", "monitor_get_project", "monitor_get_costs",
+        "monitor_recent_failures", "monitor_deploy_health", "monitor_team_status",
     ):
         assert name in impls

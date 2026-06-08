@@ -80,7 +80,7 @@ async def trigger_ops_monitor(body: OpsMonitorRequest, request: Request) -> dict
     return {"status": "accepted", "request_id": body.request_id}
 
 
-@router.get("/latest", include_in_schema=False)
+@router.get("/latest")  # HAI-15 — schema-visible so the MCP contract test can pin it
 async def get_latest_ops_event(request: Request) -> dict:
     """Return the most recent ops health verdict from the deployment_states table.
 

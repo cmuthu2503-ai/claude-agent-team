@@ -48,3 +48,21 @@ tools:
     min_role: viewer
     method: GET
     path: /api/v1/cost/dashboard
+
+  - name: monitor_recent_failures
+    description: "Recently failed requests (status=failed), newest first. Arg: per_page."
+    min_role: viewer
+    method: GET
+    path: /api/v1/requests
+
+  - name: monitor_deploy_health
+    description: "Latest deploy health verdict (HEALTHY / UNHEALTHY / unknown) + deployment id/step."
+    min_role: viewer
+    method: GET
+    path: /api/v1/ops/latest
+
+  - name: monitor_team_status
+    description: "The 9 agents: resolved/assigned model, override state, tool count, and which are currently busy."
+    min_role: viewer
+    method: GET
+    path: /api/v1/agents
