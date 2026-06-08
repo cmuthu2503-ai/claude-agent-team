@@ -219,6 +219,28 @@ class User(BaseModel):
     last_login_at: datetime | None = None
 
 
+class ServiceToken(BaseModel):
+    """A long-lived service identity (HAI-01 / FR-010) for headless principals
+    such as the Hermes Agent integration.
+
+    The raw token is shown exactly once at creation and never persisted — only
+    its SHA-256 hash lives in the DB, so this model deliberately omits the hash.
+    ``role`` reuses the viewer→developer→admin hierarchy; ``revoked_at`` being
+    set means the token is rejected at authentication time.
+    """
+
+    token_id: str
+    name: str
+    role: UserRole = UserRole.VIEWER
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+    @property
+    def is_revoked(self) -> bool:
+        return self.revoked_at is not None
+
+
 # ── Document Persistence ─────────────────────────
 
 

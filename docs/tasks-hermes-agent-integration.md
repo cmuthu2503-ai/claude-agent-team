@@ -44,12 +44,12 @@
 
 | Phase | Theme | Total | Done | In Progress | Blocked | Not Started |
 |-------|-------|-------|------|-------------|---------|-------------|
-| P0 | Foundations (service token + MCP skeleton) | 12 | 0 | 0 | 0 | 12 |
+| P0 | Foundations (service token + MCP skeleton) | 12 | 1 | 0 | 0 | 11 |
 | P1 | Monitor (read-only + push) | 12 | 0 | 0 | 0 | 12 |
 | P2 | Approval Gate (proposals engine) | 21 | 0 | 0 | 0 | 21 |
 | P3 | Lifecycle Actions (gated) | 12 | 0 | 0 | 0 | 12 |
 | P4 | Autonomous-Loop Reconciliation | 6 | 0 | 0 | 0 | 6 |
-| **Total** | | **63** | **0** | **0** | **0** | **63** |
+| **Total** | | **63** | **1** | **0** | **0** | **62** |
 
 > Task IDs run HAI-01..HAI-63. IDs are unique but **not contiguous per phase** — HAI-51..63 were added in the v1.1 gap-review and slot into their dependency phase (P0: 51–53, P1: 54, P2: 55–63), not at the end. Sort by the Depends-On graph, not by ID number.
 
@@ -61,7 +61,7 @@ Service identity + MCP server skeleton. Goal: `hermes mcp test` succeeds against
 
 | ID | Task | Description | Effort | Depends On | Traces FR | Status |
 |----|------|-------------|--------|-----------|-----------|--------|
-| HAI-01 | `service_tokens` schema | Add `service_tokens` table (id, name, hashed_token, role, created_at, last_used_at, revoked_at) to `SQLiteStateStore`; migration via `ALTER`/`CREATE IF NOT EXISTS`. | M | — | FR-010 | `[ ]` |
+| HAI-01 | `service_tokens` schema | Add `service_tokens` table (id, name, hashed_token, role, created_at, last_used_at, revoked_at) to `SQLiteStateStore`; migration via `ALTER`/`CREATE IF NOT EXISTS`. **Done:** table in `SCHEMA_SQL`, `ServiceToken` model, store CRUD (create/get_by_hash/list/revoke/touch) on the abstract + SQLite store, 6 unit tests. | M | — | FR-010 | `[x]` |
 | HAI-02 | Service-token auth dependency | FastAPI dependency that validates `Authorization: Bearer <token>`, resolves to a synthetic service principal with the token's role; updates `last_used_at`; rejects revoked tokens. | M | HAI-01 | FR-010, FR-011, FR-012 | `[ ]` |
 | HAI-03 | Service-token admin routes | `POST /api/v1/service-tokens` (create, returns raw token once), `GET` (list, no secret), `DELETE /{id}` (revoke). Admin-only. | M | HAI-02 | FR-012 | `[ ]` |
 | HAI-04 | Service-principal attribution | Thread the service identity into `created_by`/actor fields **and structured logs** so DB rows AND logs are attributable to Hermes. | S | HAI-02 | FR-013, FR-082 | `[ ]` |

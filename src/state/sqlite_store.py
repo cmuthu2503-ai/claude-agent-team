@@ -19,6 +19,7 @@ from src.models.base import (
     DeploymentState,
     RollbackRequest,
     Document,
+    ServiceToken,
     Artifact,
     Deployment,
     Epic,
@@ -620,6 +621,21 @@ CREATE TABLE IF NOT EXISTS agent_model_overrides (
     -- programmatic writes). Used by the audit log on the Team
     -- Status overrides panel.
     updated_by TEXT NOT NULL DEFAULT 'system'
+);
+
+-- HAI-01 (FR-010) — long-lived service tokens for headless principals
+-- (e.g. the Hermes Agent integration). Only the SHA-256 hash is stored;
+-- the raw token is shown once at creation. ``role`` reuses the
+-- viewer→developer→admin hierarchy. ``revoked_at`` set = rejected at auth.
+-- hashed_token is UNIQUE so the auth lookup hits an index.
+CREATE TABLE IF NOT EXISTS service_tokens (
+    token_id      TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    hashed_token  TEXT NOT NULL UNIQUE,
+    role          TEXT NOT NULL DEFAULT 'viewer',
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_used_at  TIMESTAMP,
+    revoked_at    TIMESTAMP
 );
 """
 
@@ -4111,3 +4127,78 @@ class SQLiteStateStore(StateStore):
         cursor = await db.execute("DELETE FROM agent_model_overrides")
         await db.commit()
         return cursor.rowcount
+
+    # ── Service Tokens (HAI-01 / FR-010) ──────────────────
+
+    @staticmethod
+    def _row_to_service_token(row: Any) -> ServiceToken:
+        """Map a service_tokens row → ServiceToken. The hash is intentionally
+        not surfaced on the model."""
+        def _ts(val: Any) -> datetime | None:
+            return datetime.fromisoformat(val) if val else None
+
+        return ServiceToken(
+            token_id=row["token_id"],
+            name=row["name"],
+            role=row["role"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            last_used_at=_ts(row["last_used_at"]),
+            revoked_at=_ts(row["revoked_at"]),
+        )
+
+    async def create_service_token(
+        self, token_id: str, name: str, hashed_token: str, role: str,
+    ) -> None:
+        """Insert a new service token. Caller passes the SHA-256 hash of the
+        raw token (the raw value is shown once and never stored). ``role`` is
+        a UserRole value (viewer | developer | admin)."""
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO service_tokens (token_id, name, hashed_token, role)
+               VALUES (?, ?, ?, ?)""",
+            (token_id, name, hashed_token, str(role)),
+        )
+        await db.commit()
+
+    async def get_service_token_by_hash(self, hashed_token: str) -> ServiceToken | None:
+        """Look up a token by its hash — the hot path for service-token auth
+        (HAI-02). Returns the token even when revoked; the caller checks
+        ``is_revoked`` so it can distinguish 'unknown' from 'revoked'."""
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM service_tokens WHERE hashed_token = ?", (hashed_token,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return self._row_to_service_token(row) if row else None
+
+    async def list_service_tokens(self) -> list[ServiceToken]:
+        """All tokens, newest first. Never includes the hash (see model)."""
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM service_tokens ORDER BY created_at DESC, rowid DESC"
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_service_token(r) for r in rows]
+
+    async def revoke_service_token(self, token_id: str) -> bool:
+        """Mark a token revoked. Returns True if a live token was revoked,
+        False if it didn't exist or was already revoked (lets the route
+        report 404/204 correctly). Idempotent."""
+        db = await self._get_db()
+        cursor = await db.execute(
+            "UPDATE service_tokens SET revoked_at = CURRENT_TIMESTAMP "
+            "WHERE token_id = ? AND revoked_at IS NULL",
+            (token_id,),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+    async def touch_service_token_last_used(self, token_id: str) -> None:
+        """Stamp last_used_at = now. Called on each authenticated request
+        (HAI-02). HAI-52 will debounce this to avoid a write per call."""
+        db = await self._get_db()
+        await db.execute(
+            "UPDATE service_tokens SET last_used_at = CURRENT_TIMESTAMP WHERE token_id = ?",
+            (token_id,),
+        )
+        await db.commit()
