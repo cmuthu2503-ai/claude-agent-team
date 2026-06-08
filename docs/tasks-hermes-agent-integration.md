@@ -44,12 +44,12 @@
 
 | Phase | Theme | Total | Done | In Progress | Blocked | Not Started |
 |-------|-------|-------|------|-------------|---------|-------------|
-| P0 | Foundations (service token + MCP skeleton) | 12 | 4 | 0 | 0 | 8 |
+| P0 | Foundations (service token + MCP skeleton) | 12 | 5 | 0 | 0 | 7 |
 | P1 | Monitor (read-only + push) | 12 | 0 | 0 | 0 | 12 |
 | P2 | Approval Gate (proposals engine) | 21 | 0 | 0 | 0 | 21 |
 | P3 | Lifecycle Actions (gated) | 12 | 0 | 0 | 0 | 12 |
 | P4 | Autonomous-Loop Reconciliation | 6 | 0 | 0 | 0 | 6 |
-| **Total** | | **63** | **4** | **0** | **0** | **59** |
+| **Total** | | **63** | **5** | **0** | **0** | **58** |
 
 > Task IDs run HAI-01..HAI-63. IDs are unique but **not contiguous per phase** — HAI-51..63 were added in the v1.1 gap-review and slot into their dependency phase (P0: 51–53, P1: 54, P2: 55–63), not at the end. Sort by the Depends-On graph, not by ID number.
 
@@ -66,7 +66,7 @@ Service identity + MCP server skeleton. Goal: `hermes mcp test` succeeds against
 | HAI-03 | Service-token admin routes | `POST /api/v1/service-tokens` (create, returns raw token once), `GET` (list, no secret), `DELETE /{id}` (revoke). Admin-only. **Done:** `src/api/routes/service_tokens.py` (admin-gated via `require_role`), raw token shown once + hashed for storage, idempotent revoke (204/404), role/name validation (400); router registered in `main.py`; 6 route tests. | M | HAI-02 | FR-012 | `[x]` |
 | HAI-04 | Service-principal attribution | Thread the service identity into `created_by`/actor fields **and structured logs** so DB rows AND logs are attributable to Hermes. | S | HAI-02 | FR-013, FR-082 | `[ ]` |
 | HAI-51 | Service-token write-block | The service-token dependency denies any direct state-changing call that isn't a proposal create/list/read or a read-only route — regardless of route guard. Service principal can only mutate via proposals. **Done:** global `ServiceTokenWriteBlockMiddleware` — a live service token may only `POST /api/v1/proposals`; every other POST/PUT/PATCH/DELETE → 403 (incl. proposal confirm/reject, which are human-only). Human JWT + read traffic untouched; registered in `main.py`; 8 tests. | M | HAI-02 | FR-015a | `[x]` |
-| HAI-52 | `last_used_at` debounce | Coalesce `last_used_at` updates (≤ once/60s per token) to avoid SQLite write contention with the supervisor. | S | HAI-02 | FR-015 | `[ ]` |
+| HAI-52 | `last_used_at` debounce | Coalesce `last_used_at` updates (≤ once/60s per token) to avoid SQLite write contention with the supervisor. **Done:** process-local `_should_touch_last_used` (60s window, time-injectable) gating the touch in `get_service_principal`; 3 tests (incl. two rapid auths → one write). | S | HAI-02 | FR-015 | `[x]` |
 | HAI-53 | MCP↔backend contract test + cov config | Contract test pinning adapter-used endpoint shapes against live backend OpenAPI; give `agent-team-mcp` its own pytest/coverage config (outside backend `--cov=src`). | M | HAI-07 | FR-084, NFR-004 | `[ ]` |
 | HAI-05 | MCP server scaffold | New `agent-team-mcp` service (official MCP Python SDK, streamable HTTP transport). Project skeleton + Dockerfile. | M | — | FR-001, FR-002 | `[ ]` |
 | HAI-06 | Compose wiring | Add `agent-team-mcp` to compose with pinned `name:`, internal network access to backend, env for backend URL + service token. | S | HAI-05 | FR-001, NFR-006 | `[ ]` |
