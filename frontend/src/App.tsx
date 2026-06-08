@@ -21,6 +21,7 @@ import { ProjectsPage } from "./pages/Projects"
 import { ProjectDetailPage } from "./pages/ProjectDetail"
 import { ProjectStoryBoardPage } from "./pages/ProjectStoryBoard"
 import { BoardPreviewPage } from "./pages/BoardPreview"
+import { PendingApprovalsPage } from "./pages/PendingApprovals"
 import "./themes.css"
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -74,6 +75,7 @@ function App() {
                     <Route path="/prompts" element={<PromptStudioPage />} />
                     <Route path="/history" element={<HistoryPage />} />
                     <Route path="/releases" element={<ReleasesPage />} />
+                    <Route path="/approvals" element={<PendingApprovalsPage />} />
                     <Route path="/team" element={<TeamStatusPage />} />
                     <Route path="/cost" element={<CostDashboardPage />} />
                     <Route path="/diagrams" element={<MermaidViewerPage />} />

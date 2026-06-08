@@ -24,6 +24,7 @@ import {
   FolderGit2,
   GraduationCap,
   BookOpen,
+  ShieldCheck,
 } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 import { useAuthStore } from "../../stores/auth"
@@ -50,6 +51,7 @@ const navItems: NavItem[] = [
     path: "/projects", label: "Projects", icon: FolderGit2,
     alsoMatches: ["/stories/project/"],  // per-project StoryBoard wins via longest-prefix
   },
+  { path: "/approvals", label: "Approvals", icon: ShieldCheck },
   { path: "/knowledge", label: "Knowledge Base", icon: BookOpen },
   { path: "/prompts", label: "Prompt Studio", icon: Wand2 },
   { path: "/diagrams", label: "Diagrams", icon: Workflow },
