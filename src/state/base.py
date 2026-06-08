@@ -24,6 +24,7 @@ from src.models.base import (
     PromptSession,
     PromptVariant,
     Request,
+    ServiceToken,
     Story,
     Subtask,
     TaskStatus,
@@ -729,6 +730,27 @@ class StateStore(ABC):
 
     @abstractmethod
     async def clear_all_agent_model_overrides(self) -> int: ...
+
+    # ── Service Tokens (HAI-01 / FR-010) ──────────
+    # Long-lived headless identities (e.g. the Hermes Agent integration).
+    # Only the SHA-256 hash is persisted; the raw token is shown once.
+
+    @abstractmethod
+    async def create_service_token(
+        self, token_id: str, name: str, hashed_token: str, role: str,
+    ) -> None: ...
+
+    @abstractmethod
+    async def get_service_token_by_hash(self, hashed_token: str) -> ServiceToken | None: ...
+
+    @abstractmethod
+    async def list_service_tokens(self) -> list[ServiceToken]: ...
+
+    @abstractmethod
+    async def revoke_service_token(self, token_id: str) -> bool: ...
+
+    @abstractmethod
+    async def touch_service_token_last_used(self, token_id: str) -> None: ...
 
     # ── Lifecycle ────────────────────────────────
 
