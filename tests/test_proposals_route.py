@@ -288,3 +288,78 @@ async def test_approve_token_is_single_use(store):
 async def test_approve_unknown_proposal_404(store):
     client = TestClient(_make_app(store))
     assert client.post("/api/v1/proposals/nope/approve", json={"token": "x"}).status_code == 404
+
+
+# ── HAI-58 — execution-failure semantics + no re-decide of terminal ──────────
+
+async def test_failed_proposal_records_structured_error(store):
+    app = _make_app(store, registry=_registry_with_handler(raises=True))
+    client = TestClient(app)
+    pid = client.post("/api/v1/proposals", json={"action_type": "deploy"}).json()["data"]["proposal_id"]
+    data = client.post(f"/api/v1/proposals/{pid}/confirm").json()["data"]
+    assert data["status"] == "failed"
+    # structured: the persisted error carries the exception TYPE, not just a message
+    assert data["error"].startswith("RuntimeError:")
+    assert data["executed_at"] is not None              # terminal, stamped
+
+
+async def test_cannot_reconfirm_failed_proposal(store):
+    app = _make_app(store, registry=_registry_with_handler(raises=True))
+    client = TestClient(app)
+    pid = client.post("/api/v1/proposals", json={"action_type": "deploy"}).json()["data"]["proposal_id"]
+    assert client.post(f"/api/v1/proposals/{pid}/confirm").json()["data"]["status"] == "failed"
+    # re-confirm a FAILED proposal → 409 with explicit terminal / re-propose semantics
+    r = client.post(f"/api/v1/proposals/{pid}/confirm")
+    assert r.status_code == 409
+    assert "terminal" in r.json()["detail"].lower()
+    assert "FR-035d" in r.json()["detail"]
+
+
+async def test_cannot_reject_failed_proposal(store):
+    app = _make_app(store, registry=_registry_with_handler(raises=True))
+    client = TestClient(app)
+    pid = client.post("/api/v1/proposals", json={"action_type": "deploy"}).json()["data"]["proposal_id"]
+    client.post(f"/api/v1/proposals/{pid}/confirm")     # → failed
+    r = client.post(f"/api/v1/proposals/{pid}/reject")
+    assert r.status_code == 409
+    assert "terminal" in r.json()["detail"].lower()
+
+
+async def test_cannot_reconfirm_executed_proposal(store):
+    app = _make_app(store, registry=_registry_with_handler("OK"))
+    client = TestClient(app)
+    pid = client.post("/api/v1/proposals", json={"action_type": "deploy"}).json()["data"]["proposal_id"]
+    assert client.post(f"/api/v1/proposals/{pid}/confirm").json()["data"]["status"] == "executed"
+    r = client.post(f"/api/v1/proposals/{pid}/confirm")
+    assert r.status_code == 409
+    assert "terminal" in r.json()["detail"].lower()
+
+
+async def test_token_approve_on_failed_is_terminal_409(store):
+    """The one-time-token path also refuses a terminal proposal."""
+    app = _make_app(store, registry=_registry_with_handler(raises=True))
+    client = TestClient(app)
+    pid, token = _create_and_grab_token(client, app, action_type="deploy")
+    # confirm via dashboard first → failed
+    assert client.post(f"/api/v1/proposals/{pid}/confirm").json()["data"]["status"] == "failed"
+    r = client.post(f"/api/v1/proposals/{pid}/approve", json={"token": token})
+    assert r.status_code == 409
+    assert "terminal" in r.json()["detail"].lower()
+
+
+async def test_operator_can_repropose_after_failure(store):
+    """A failed proposal is a dead end, but the SAME action can be re-proposed as a
+    NEW proposal and confirmed independently (FR-035d: operator re-proposes)."""
+    app = _make_app(store, registry=_registry_with_handler("RETRY-OK"))
+    client = TestClient(app)
+    # first attempt fails
+    app.state.proposal_registry = _registry_with_handler(raises=True)
+    pid1 = client.post("/api/v1/proposals", json={"action_type": "deploy"}).json()["data"]["proposal_id"]
+    assert client.post(f"/api/v1/proposals/{pid1}/confirm").json()["data"]["status"] == "failed"
+    # operator re-proposes the same action; this time the handler succeeds
+    app.state.proposal_registry = _registry_with_handler("RETRY-OK")
+    pid2 = client.post("/api/v1/proposals", json={"action_type": "deploy"}).json()["data"]["proposal_id"]
+    assert pid2 != pid1
+    data2 = client.post(f"/api/v1/proposals/{pid2}/confirm").json()["data"]
+    assert data2["status"] == "executed"
+    assert data2["result_ref"] == "RETRY-OK"

@@ -64,16 +64,37 @@ def _public(p: Proposal) -> dict:
 
 # ── shared confirm/reject logic (used by both the JWT and token paths) ────────
 
+async def _load_pending_or_409(state, proposal_id: str) -> Proposal:
+    """Fetch a proposal and require it be PENDING, with explicit terminal-state
+    semantics (HAI-58 / FR-035d): a terminal proposal (failed/executed/rejected/
+    expired) can NEVER be re-decided — the operator must create a new proposal to
+    retry. A non-terminal-but-not-pending proposal (confirmed, mid-execution) is a
+    transient race, not a dead end."""
+    proposal = await state.get_proposal(proposal_id)
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    if proposal.status == ProposalStatus.PENDING:
+        return proposal
+    if proposal.is_terminal:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Proposal {proposal_id} is in terminal state '{proposal.status}' and "
+                "cannot be re-decided; create a new proposal to retry (FR-035d)."
+            ),
+        )
+    raise HTTPException(
+        status_code=409,
+        detail=f"Proposal {proposal_id} is '{proposal.status}', not pending.",
+    )
+
+
 async def _do_confirm(request: Request, proposal_id: str, decided_by: str) -> Proposal:
     state = request.app.state.state_store
     registry = request.app.state.proposal_registry
     events = getattr(request.app.state, "events", None)
 
-    proposal = await state.get_proposal(proposal_id)
-    if proposal is None:
-        raise HTTPException(status_code=404, detail="Proposal not found")
-    if proposal.status != ProposalStatus.PENDING:
-        raise HTTPException(status_code=409, detail=f"Proposal is '{proposal.status}', not pending")
+    await _load_pending_or_409(state, proposal_id)
 
     won = await state.transition_proposal(
         proposal_id, ProposalStatus.PENDING, ProposalStatus.CONFIRMED,
@@ -120,11 +141,7 @@ async def _do_reject(
     state = request.app.state.state_store
     events = getattr(request.app.state, "events", None)
 
-    proposal = await state.get_proposal(proposal_id)
-    if proposal is None:
-        raise HTTPException(status_code=404, detail="Proposal not found")
-    if proposal.status != ProposalStatus.PENDING:
-        raise HTTPException(status_code=409, detail=f"Proposal is '{proposal.status}', not pending")
+    await _load_pending_or_409(state, proposal_id)
 
     won = await state.transition_proposal(
         proposal_id, ProposalStatus.PENDING, ProposalStatus.REJECTED,
