@@ -117,3 +117,43 @@ async def test_custom_event_set_overrides_default():
     assert bridge._queue.qsize() == 0
     await bridge.handler("deploy_health.anomaly_detected", {"environment": "prod"})
     assert bridge._queue.qsize() == 1
+
+
+# ── HAI-20 — EventEmitter → PushBridge integration (the real emit path) ───────
+
+async def test_emit_flows_through_bridge_to_webhook():
+    from src.core.events import EventEmitter
+
+    captured: list = []
+    bridge = PushBridge("http://hermes/webhook", retry_backoff=0, transport=_capturing_transport(captured))
+    bridge.start()
+    emitter = EventEmitter()
+    emitter.on(bridge.handler)
+    try:
+        # Simulate a real failure being broadcast — the operator-visible "alert".
+        await emitter.emit("request.failed", {"request_id": "REQ-INT", "error": "boom"})
+        await asyncio.wait_for(bridge._queue.join(), timeout=2.0)
+    finally:
+        await bridge.stop()
+
+    assert len(captured) == 1
+    body = json.loads(captured[0]["content"])
+    assert body["request_id"] == "REQ-INT" and "FAILED" in body["summary"]
+
+
+# ── HAI-19 — pull-only baseline: the platform runs fine with push OFF ─────────
+
+async def test_pull_only_baseline_no_bridge_registered():
+    from src.core.events import EventEmitter
+
+    emitter = EventEmitter()
+    seen: list = []
+
+    async def other_handler(event_type: str, data: dict) -> None:
+        seen.append(event_type)
+
+    emitter.on(other_handler)  # a non-push handler; NO PushBridge registered
+    # Emit works cleanly with no push wired up — Hermes would reconcile via pull.
+    await emitter.emit("request.failed", {"request_id": "R"})
+    await emitter.emit("request.completed", {"request_id": "R"})
+    assert seen == ["request.failed", "request.completed"]
