@@ -46,10 +46,10 @@
 |-------|-------|-------|------|-------------|---------|-------------|
 | P0 | Foundations (service token + MCP skeleton) | 12 | 12 | 0 | 0 | 0 |
 | P1 | Monitor (read-only + push) | 12 | 12 | 0 | 0 | 0 |
-| P2 | Approval Gate (proposals engine) | 21 | 17 | 0 | 0 | 4 |
+| P2 | Approval Gate (proposals engine) | 21 | 18 | 0 | 0 | 3 |
 | P3 | Lifecycle Actions (gated) | 12 | 0 | 0 | 0 | 12 |
 | P4 | Autonomous-Loop Reconciliation | 6 | 0 | 0 | 0 | 6 |
-| **Total** | | **63** | **41** | **0** | **0** | **22** |
+| **Total** | | **63** | **42** | **0** | **0** | **21** |
 
 > Task IDs run HAI-01..HAI-63. IDs are unique but **not contiguous per phase** — HAI-51..63 were added in the v1.1 gap-review and slot into their dependency phase (P0: 51–53, P1: 54, P2: 55–63), not at the end. Sort by the Depends-On graph, not by ID number.
 
@@ -122,7 +122,7 @@ Unified proposals engine. Goal: no gated action executes without a confirmed pro
 | HAI-60 | 403-on-confirm test | Assert a service-token principal gets **403** on confirm/reject; only human auth / one-time token may approve. | S | HAI-26, HAI-30 | FR-038, NFR-003 | `[x]` |
 | HAI-61 | `proposal.*` forwarding | Forward `proposal.created`/`proposal.expired` via the bridge (deferred from P1 — producers now exist). | S | HAI-23, HAI-29, HAI-17 | FR-070, FR-075 | `[x]` |
 | HAI-62 | Gate observability | Queryable signals: pending-backlog depth, expired-without-action rate, service-token call volume. | M | HAI-28 | FR-083 | `[ ]` |
-| HAI-63 | In-process gate interception | Wrap internal handlers (`orchestrator.submit` from auto_dispatch, `auto_rollback` from ops_heal) so in-process callers also pass the gate — not just HTTP routes. | L | HAI-25 | FR-035 | `[ ]` |
+| HAI-63 | In-process gate interception | Wrap internal handlers (`orchestrator.submit` from auto_dispatch, `auto_rollback` from ops_heal) so in-process callers also pass the gate — not just HTTP routes. | L | HAI-25 | FR-035 | `[x]` |
 | HAI-32 | P2 tests | Coverage ≥80% on proposals engine + guard; explicit test that no gated path (HTTP **and in-process**) executes ungated; idempotency/CAS/recovery covered. | M | HAI-21..30, HAI-55..63 | NFR-004, M1 | `[ ]` |
 
 ---
