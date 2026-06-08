@@ -44,12 +44,12 @@
 
 | Phase | Theme | Total | Done | In Progress | Blocked | Not Started |
 |-------|-------|-------|------|-------------|---------|-------------|
-| P0 | Foundations (service token + MCP skeleton) | 12 | 6 | 0 | 0 | 6 |
+| P0 | Foundations (service token + MCP skeleton) | 12 | 8 | 0 | 0 | 4 |
 | P1 | Monitor (read-only + push) | 12 | 0 | 0 | 0 | 12 |
 | P2 | Approval Gate (proposals engine) | 21 | 0 | 0 | 0 | 21 |
 | P3 | Lifecycle Actions (gated) | 12 | 0 | 0 | 0 | 12 |
 | P4 | Autonomous-Loop Reconciliation | 6 | 0 | 0 | 0 | 6 |
-| **Total** | | **63** | **6** | **0** | **0** | **57** |
+| **Total** | | **63** | **8** | **0** | **0** | **55** |
 
 > Task IDs run HAI-01..HAI-63. IDs are unique but **not contiguous per phase** — HAI-51..63 were added in the v1.1 gap-review and slot into their dependency phase (P0: 51–53, P1: 54, P2: 55–63), not at the end. Sort by the Depends-On graph, not by ID number.
 
@@ -69,8 +69,8 @@ Service identity + MCP server skeleton. Goal: `hermes mcp test` succeeds against
 | HAI-52 | `last_used_at` debounce | Coalesce `last_used_at` updates (≤ once/60s per token) to avoid SQLite write contention with the supervisor. **Done:** process-local `_should_touch_last_used` (60s window, time-injectable) gating the touch in `get_service_principal`; 3 tests (incl. two rapid auths → one write). | S | HAI-02 | FR-015 | `[x]` |
 | HAI-53 | MCP↔backend contract test + cov config | Contract test pinning adapter-used endpoint shapes against live backend OpenAPI; give `agent-team-mcp` its own pytest/coverage config (outside backend `--cov=src`). | M | HAI-07 | FR-084, NFR-004 | `[ ]` |
 | HAI-05 | MCP server scaffold | New `agent-team-mcp` service (official MCP Python SDK, streamable HTTP transport). Project skeleton + Dockerfile. **Done:** `mcp_server/` package (`server.py` FastMCP + `ping` tool, `config.py` env, `requirements.txt`, `Dockerfile`, `README.md`). Verified: image builds, container starts, `StreamableHTTP session manager started`, `/mcp` serves (406 to a bare GET = endpoint live). | M | — | FR-001, FR-002 | `[x]` |
-| HAI-06 | Compose wiring | Add `agent-team-mcp` to compose with pinned `name:`, internal network access to backend, env for backend URL + service token. | S | HAI-05 | FR-001, NFR-006 | `[ ]` |
-| HAI-07 | Thin REST-adapter client | HTTP client in the MCP server that calls backend `/api/v1` with the service token; structured error → recursive root-cause extraction. | M | HAI-05, HAI-02 | FR-003, FR-004, FR-007 | `[ ]` |
+| HAI-06 | Compose wiring | Add `agent-team-mcp` to compose with pinned `name:`, internal network access to backend, env for backend URL + service token. **Done:** `agent-team-mcp` service in `docker-compose.yml` (build `./mcp_server`, on `dev-net`, port 9000 published, `AGENT_TEAM_BACKEND_URL=http://backend:8000` + `AGENT_TEAM_SERVICE_TOKEN`, TCP healthcheck, depends_on backend healthy). Verified: comes up healthy + reaches `backend:8000` over the network. | S | HAI-05 | FR-001, NFR-006 | `[x]` |
+| HAI-07 | Thin REST-adapter client | HTTP client in the MCP server that calls backend `/api/v1` with the service token; structured error → recursive root-cause extraction. **Done:** `mcp_server/backend_client.py` (`BackendClient` get/post, Bearer service-token auth, unwraps the `{data,meta,error}` envelope, `BackendError` with recursive `root_cause` + envelope/`detail` message extraction); 8 tests (httpx.MockTransport) + a live end-to-end call against the backend. | M | HAI-05, HAI-02 | FR-003, FR-004, FR-007 | `[x]` |
 | HAI-08 | Tool manifest loader | YAML manifest declaring exposed tools + minimum role per tool; MCP server registers tools from it (no hardcoding). | M | HAI-05 | FR-005, FR-008, NFR-007 | `[ ]` |
 | HAI-09 | Health/ping + connect docs | MCP `ping`/`GET /healthz` reporting backend reachability + resolved role; ship `~/.hermes/config.yaml` snippet (pinned `transport: streamable_http` + bearer header) **and the token-rotation runbook** in `docs/setup-hermes-integration.md`. | S | HAI-06, HAI-07 | FR-006, FR-009, FR-015b, NFR-008 | `[ ]` |
 
