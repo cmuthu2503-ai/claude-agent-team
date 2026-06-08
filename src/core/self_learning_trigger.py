@@ -207,6 +207,16 @@ def make_self_learning_handler(
 ) -> Any:
     """Returns an async EventHandler bound to (state, executor, events).
 
+    GOVERNANCE (HAI-48 / FR-062): self-learning is DELIBERATELY NOT coupled to
+    governed mode. The analysis loop always runs automatically on a failure — it's
+    a read-only background analysis that produces a lesson, not a state mutation on
+    the product, so gating it behind a human confirm would just lose signal. The
+    SEPARATE question of whether the produced lesson auto-promotes into the canonical
+    doc or queues for human approval is controlled by the independent
+    ``LESSONS_REVIEW_GATE`` flag (AET-13, default review-on) — that is the
+    "flag to require approval" half of FR-062. So: loop automatic by default;
+    output-promotion approval is a flag.
+
     Listens for `request.failed` events ONLY — every other event type
     is ignored cheaply. On hit, builds the failure context and fires
     `agent_executor.single_agent_call(agent_id='self_learning_agent', ...)`
