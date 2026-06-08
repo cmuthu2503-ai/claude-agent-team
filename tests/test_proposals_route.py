@@ -447,3 +447,30 @@ async def test_target_integrity_does_not_touch_non_project_actions(store):
         "/api/v1/proposals", json={"action_type": "deploy", "target_ref": "env:prod"}
     ).json()["data"]["proposal_id"]
     assert client.post(f"/api/v1/proposals/{pid}/confirm").json()["data"]["status"] == "executed"
+
+
+# ── HAI-62 — gate metrics endpoint ───────────────────────────────────────────
+
+async def test_metrics_endpoint_returns_signals(store):
+    app = _make_app(store, registry=_registry_with_handler("OK"))
+    client = TestClient(app)
+    # one pending, one executed
+    client.post("/api/v1/proposals", json={"action_type": "deploy"})
+    pid = client.post("/api/v1/proposals", json={"action_type": "deploy"}).json()["data"]["proposal_id"]
+    client.post(f"/api/v1/proposals/{pid}/confirm")
+
+    r = client.get("/api/v1/proposals/metrics")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["pending_backlog_depth"] == 1
+    assert data["proposals_by_status"]["executed"] == 1
+    assert "expired_without_action_rate" in data
+    assert "service_tokens" in data
+
+
+async def test_metrics_path_not_captured_as_proposal_id(store):
+    # /metrics must hit the metrics route, NOT GET /{proposal_id} (which would 404).
+    client = TestClient(_make_app(store))
+    r = client.get("/api/v1/proposals/metrics")
+    assert r.status_code == 200
+    assert "pending_backlog_depth" in r.json()["data"]

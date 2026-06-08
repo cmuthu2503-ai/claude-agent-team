@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from src.auth.service import get_current_user, get_principal, hash_service_token, principal_actor
+from src.core.gate_metrics import build_gate_metrics
 from src.core.proposal_dispatcher import run_confirmed_proposal
 from src.core.proposal_factory import new_proposal
 from src.core.proposal_target import validate_proposal_target
@@ -306,6 +307,24 @@ async def list_proposals(
         status=status, action_type=action_type, proposed_by=proposed_by, limit=limit
     )
     return {"data": [_public(p) for p in items], "meta": {"count": len(items)}, "error": None}
+
+
+@router.get("/metrics")
+async def gate_metrics(
+    request: Request,
+    window_seconds: int = 86400,
+    # Read — JWT or service token, so Hermes can watch the backlog it's creating.
+    principal: dict = Depends(get_principal),
+):
+    """Gate observability signals (HAI-62 / FR-083): pending-backlog depth,
+    expired-without-action rate, per-status counts, and service-token activity.
+
+    NOTE: declared BEFORE GET /{proposal_id} so the static path wins over the
+    path-param route (otherwise 'metrics' would be captured as a proposal_id).
+    """
+    state = request.app.state.state_store
+    data = await build_gate_metrics(state, recent_window_seconds=window_seconds)
+    return {"data": data, "meta": None, "error": None}
 
 
 @router.get("/{proposal_id}")

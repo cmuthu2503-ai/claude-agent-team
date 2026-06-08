@@ -4356,6 +4356,16 @@ class SQLiteStateStore(StateStore):
             rows = await cur.fetchall()
         return [self._row_to_proposal(r) for r in rows]
 
+    async def proposal_status_counts(self) -> dict[str, int]:
+        """Count proposals grouped by status (HAI-62). One GROUP BY query — cheap
+        signal for the gate-observability endpoint (no row materialization)."""
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT status, COUNT(*) AS n FROM proposals GROUP BY status"
+        ) as cur:
+            rows = await cur.fetchall()
+        return {row["status"]: row["n"] for row in rows}
+
     async def update_proposal(self, proposal_id: str, fields: dict) -> Proposal:
         """Whitelisted field update (status transitions, decision/execution
         stamps, result/error). The ATOMIC compare-and-set transition is HAI-56;
