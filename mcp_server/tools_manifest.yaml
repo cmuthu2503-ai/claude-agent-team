@@ -1,0 +1,20 @@
+# agent-team-mcp tool manifest (HAI-08 / FR-005, FR-008, NFR-007).
+#
+# Declares the tools the server exposes to Hermes and the MINIMUM role each
+# requires. The server registers tools from THIS file (no hardcoding) and only
+# those at or below its own resolved role (resolved via
+# GET /api/v1/service-tokens/me). Monitor tools (HAI-10..16) and gated action
+# tools (HAI-33+) are appended here as they're implemented in tool_impls.py.
+#
+# Each entry:
+#   name:        the MCP tool name Hermes sees (grouped: monitor_* / project_* / ops_*)
+#   description: shown to Hermes for tool selection / filtering
+#   min_role:    viewer | developer | admin
+#   method:      GET (reads are ungated) | POST | ... (informational; impl decides)
+#   path:        the backend /api/v1 path the adapter calls
+tools:
+  - name: monitor_backend_health
+    description: "Agent Team backend health + agent execution mode (real_llm vs mock)."
+    min_role: viewer
+    method: GET
+    path: /api/v1/health

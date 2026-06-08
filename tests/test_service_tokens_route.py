@@ -107,3 +107,22 @@ async def test_admin_gate_blocks_unauthenticated(store):
     client = TestClient(_make_app(store, as_admin=False))
     r = client.post("/api/v1/service-tokens", json={"name": "x", "role": "viewer"})
     assert r.status_code in (401, 403)
+
+
+async def test_whoami_echoes_role(store):
+    # GET /me authenticates with the service token itself (not admin) and echoes
+    # the resolved role — the agent-team-mcp server uses this to learn its role.
+    raw = "whoami-token"
+    await store.create_service_token("stok-me", "hermes-monitor", hash_service_token(raw), "developer")
+    client = TestClient(_make_app(store, as_admin=False))
+    r = client.get("/api/v1/service-tokens/me", headers={"Authorization": f"Bearer {raw}"})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["token_id"] == "stok-me"
+    assert data["role"] == "developer"
+    assert data["is_service_token"] is True
+
+
+async def test_whoami_rejects_no_token(store):
+    client = TestClient(_make_app(store, as_admin=False))
+    assert client.get("/api/v1/service-tokens/me").status_code == 401
