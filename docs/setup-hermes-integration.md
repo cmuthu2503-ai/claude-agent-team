@@ -136,7 +136,30 @@ The bridge forwards a concise payload (`event`, `request_id`, `summary`, …) wi
 the durability guarantee (so a missed alert's gap is ≤ the pull interval). A dead
 webhook never blocks the platform.
 
-## 7. What Hermes can and cannot do
+## 7. Verification checklist (HAI-19/20)
+
+Automated coverage (CI): the 9 monitor tools (`mcp_server/tests/`), the
+`get_principal` auth surface, the MCP↔backend contract, and the push bridge —
+including the emit→bridge→webhook integration and the **pull-only baseline**
+(the platform runs fine with the bridge off, FR-073). Run them with
+`docker compose exec agent-team-mcp ... pytest` and `... backend pytest`.
+
+Once a real Hermes is connected, confirm end-to-end:
+
+1. **Connect** — `hermes mcp test agent-team` lists `ping` / `healthz` / the
+   `monitor_*` tools.
+2. **Health** — call `healthz` → `backend_reachable: true`, your resolved role,
+   and the registered tools.
+3. **Read (pull)** — ask Hermes to run `monitor_team_status` and
+   `monitor_list_requests`; you should see live data. This works with push OFF.
+4. **Alert (push, optional)** — with `PUSH_WEBHOOK_URL` set (§6), submit a
+   request that fails; the `request.failed` alert should arrive at the webhook
+   within seconds, linking back to the `request_id`.
+
+If step 4's webhook is down, the alert is dropped after retries and Hermes
+reconciles on its next pull — so you never silently lose state, only latency.
+
+## 8. What Hermes can and cannot do
 
 - **Read freely** (monitor tools) — no approval needed.
 - **Mutate** — only by creating a proposal (`POST /api/v1/proposals`, P2). Every
