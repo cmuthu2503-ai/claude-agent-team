@@ -1,5 +1,7 @@
 """HAI-22 (FR-030) — Proposal model + store CRUD/transition methods."""
 
+import asyncio
+
 import pytest
 
 from src.models.base import Proposal, ProposalStatus
@@ -93,6 +95,33 @@ async def test_transition_proposal_is_atomic_cas(store):
     got = await store.get_proposal("prop-1")
     assert got.status == ProposalStatus.CONFIRMED
     assert got.decided_by == "bob"
+
+
+# ── HAI-56 (FR-035b) — concurrent transitions resolve to exactly one winner ──
+
+async def test_concurrent_transitions_single_winner(store):
+    """Fire confirm / reject / expiry at one pending proposal CONCURRENTLY; the CAS
+    must let exactly ONE win, so the action can never double-execute (FR-035b)."""
+    await store.create_proposal(_p())
+    attempts = [
+        ("pending", "confirmed"), ("pending", "rejected"), ("pending", "expired"),
+        ("pending", "confirmed"), ("pending", "rejected"), ("pending", "expired"),
+    ]
+    results = await asyncio.gather(
+        *[store.transition_proposal("prop-1", frm, to) for frm, to in attempts]
+    )
+    assert sum(1 for won in results if won) == 1          # exactly one CAS succeeded
+    final = await store.get_proposal("prop-1")
+    assert final.status in (
+        ProposalStatus.CONFIRMED, ProposalStatus.REJECTED, ProposalStatus.EXPIRED,
+    )
+
+
+async def test_transition_only_fires_from_expected_status(store):
+    # Wrong `expected` never transitions (guards against a stale read driving a CAS).
+    await store.create_proposal(_p())
+    assert await store.transition_proposal("prop-1", "confirmed", "executed") is False
+    assert (await store.get_proposal("prop-1")).status == ProposalStatus.PENDING
 
 
 # ── HAI-30 — one-time approval token (single-use, hash-matched) ───────────────
