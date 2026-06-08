@@ -114,7 +114,29 @@ Do step 4 **after** step 3, or in-flight Hermes calls will start 401-ing before
 the new token is in place. (OAuth — which would handle rotation automatically —
 is a deferred hardening item; see PRD §5.)
 
-## 6. What Hermes can and cannot do
+## 6. Real-time alerts (optional push)
+
+By default Hermes learns about state changes on its **scheduled pull**. To also
+get *pinged* the moment something notable happens, point the backend's push
+bridge at a Hermes inbound webhook. Set in `.env`:
+
+```bash
+PUSH_WEBHOOK_URL=https://<your-hermes-inbound-webhook>
+PUSH_WEBHOOK_SECRET=<optional shared secret, sent as X-Push-Secret>
+# optional override; default forwards the three below
+PUSH_EVENTS=request.failed,request.completed,deploy_health.anomaly_detected
+```
+
+Then `docker compose up -d backend`. On boot you'll see `push_bridge_registered`
+(or `push_bridge_disabled` when no URL is set).
+
+The bridge forwards a concise payload (`event`, `request_id`, `summary`, …) with
+**bounded retry**; if the webhook is down, delivery is dropped after retries and
+**Hermes's pull reconciles the gap** — push is best-effort-low-latency, pull is
+the durability guarantee (so a missed alert's gap is ≤ the pull interval). A dead
+webhook never blocks the platform.
+
+## 7. What Hermes can and cannot do
 
 - **Read freely** (monitor tools) — no approval needed.
 - **Mutate** — only by creating a proposal (`POST /api/v1/proposals`, P2). Every
