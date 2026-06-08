@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.middleware.body_size_limit import BodySizeLimitMiddleware
+from src.api.middleware.service_token_write_block import ServiceTokenWriteBlockMiddleware
 from src.api.middleware.sse_headers import SSEHeadersMiddleware
 from src.api.routes import (
     agents,
@@ -382,6 +383,13 @@ app.add_middleware(SSEHeadersMiddleware)
 # the body is buffered, blocking the DOS-001 pen-test probe (1 MB JSON)
 # against refresh/logout. Other routes are untouched.
 app.add_middleware(BodySizeLimitMiddleware)
+
+# HAI-51 (FR-015a) — service-token write-block. A request authenticated by a
+# SERVICE token may only POST /api/v1/proposals; every other state-changing call
+# is rejected 403 here, regardless of the route's own guard. Human (JWT) and read
+# traffic pass through untouched. The security backstop that lets the Hermes
+# service identity mutate state ONLY via the human-approved proposal flow.
+app.add_middleware(ServiceTokenWriteBlockMiddleware)
 
 # Register routers
 app.include_router(auth.router)
