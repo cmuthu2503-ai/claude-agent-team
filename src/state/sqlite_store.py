@@ -4302,14 +4302,27 @@ class SQLiteStateStore(StateStore):
         return self._row_to_proposal(row) if row else None
 
     async def list_proposals(
-        self, status: str | None = None, limit: int = 100,
+        self,
+        status: str | None = None,
+        action_type: str | None = None,
+        proposed_by: str | None = None,
+        limit: int = 100,
     ) -> list[Proposal]:
         db = await self._get_db()
-        sql = "SELECT * FROM proposals"
+        clauses: list[str] = []
         params: list = []
         if status:
-            sql += " WHERE status = ?"
+            clauses.append("status = ?")
             params.append(status)
+        if action_type:
+            clauses.append("action_type = ?")
+            params.append(action_type)
+        if proposed_by:
+            clauses.append("proposed_by = ?")
+            params.append(proposed_by)
+        sql = "SELECT * FROM proposals"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
         params.append(limit)
         async with db.execute(sql, tuple(params)) as cur:

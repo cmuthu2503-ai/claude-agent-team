@@ -46,10 +46,10 @@
 |-------|-------|-------|------|-------------|---------|-------------|
 | P0 | Foundations (service token + MCP skeleton) | 12 | 12 | 0 | 0 | 0 |
 | P1 | Monitor (read-only + push) | 12 | 12 | 0 | 0 | 0 |
-| P2 | Approval Gate (proposals engine) | 21 | 6 | 0 | 0 | 15 |
+| P2 | Approval Gate (proposals engine) | 21 | 8 | 0 | 0 | 13 |
 | P3 | Lifecycle Actions (gated) | 12 | 0 | 0 | 0 | 12 |
 | P4 | Autonomous-Loop Reconciliation | 6 | 0 | 0 | 0 | 6 |
-| **Total** | | **63** | **30** | **0** | **0** | **33** |
+| **Total** | | **63** | **32** | **0** | **0** | **31** |
 
 > Task IDs run HAI-01..HAI-63. IDs are unique but **not contiguous per phase** — HAI-51..63 were added in the v1.1 gap-review and slot into their dependency phase (P0: 51–53, P1: 54, P2: 55–63), not at the end. Sort by the Depends-On graph, not by ID number.
 
@@ -109,8 +109,8 @@ Unified proposals engine. Goal: no gated action executes without a confirmed pro
 | HAI-24 | Gated-action registry | Config of gated `action_type`s (FR-037) + dispatcher mapping each to its internal handler. **Done:** `src/core/proposal_registry.py` — `GATED_ACTION_TYPES` (14 types) + `ProposalActionRegistry` (register/get_handler/is_gated); instance on `app.state.proposal_registry` (P3 registers real handlers). 4 tests. | M | HAI-22 | FR-037 | `[x]` |
 | HAI-25 | Central confirmation guard | Invariant enforcement: a gated action_type cannot execute without a `confirmed` proposal, enforced in the dispatcher (not per-call). **Done:** `src/core/proposal_dispatcher.py::run_confirmed_proposal` — the single chokepoint; raises `ProposalGuardError` on any non-confirmed proposal; no-handler/exception → clean `failed`. 4 tests. (In-process interception of the auto-loops is HAI-63/P4.) | L | HAI-24 | FR-035 | `[x]` |
 | HAI-26 | `POST /proposals/{id}/confirm` | Human-authority guard (reject service-token-only); pending→confirmed→execute via dispatcher; emit `confirmed`+`executed`/`failed`. **Done:** confirm route uses `get_current_user` (human JWT only → service tokens can't self-approve); atomic CAS pending→confirmed (`transition_proposal`); runs the dispatcher; sets executed/failed + emits. 5 route tests + live E2E: an admin-role service token gets **403** on confirm, proposal stays pending. | L | HAI-25 | FR-032, FR-035, FR-038 | `[x]` |
-| HAI-27 | `POST /proposals/{id}/reject` | pending→rejected (+reason); never executes; emit `proposal.rejected`. | S | HAI-22 | FR-033 | `[ ]` |
-| HAI-28 | `GET /proposals` + `GET /{id}` | List/detail with filters; backing for MCP + UI. | S | HAI-22 | FR-034, FR-080 | `[ ]` |
+| HAI-27 | `POST /proposals/{id}/reject` | pending→rejected (+reason); never executes; emit `proposal.rejected`. **Done:** reject route (get_current_user human-only; atomic CAS pending→rejected; reason stored in `error`; emits `proposal.rejected`). 2 route tests. | S | HAI-22 | FR-033 | `[x]` |
+| HAI-28 | `GET /proposals` + `GET /{id}` | List/detail with filters; backing for MCP + UI. **Done:** `GET /proposals` (status/action_type/proposed_by filters, store-side; get_principal so Hermes can poll) + `GET /{id}`. Store `list_proposals` extended with the filters. 2 route + 1 store tests; live: service token reads (200) but can't reject (403). | S | HAI-22 | FR-034, FR-080 | `[x]` |
 | HAI-29 | Auto-expire sweeper | Background task: stale pending→expired after `ttl_seconds` (default 24h); emit `proposal.expired`; never executes. | M | HAI-22 | FR-036 | `[ ]` |
 | HAI-30 | One-time approval token (channel approve) | Per-proposal token enabling operator to confirm from a Hermes channel without a full dashboard session, still human-authority. | M | HAI-26 | FR-038, FR-072 | `[ ]` |
 | HAI-31 | Pending Approvals UI view | Minimal dashboard read view listing proposals with confirm/reject (reuses API). | M | HAI-28 | FR-081 | `[ ]` |

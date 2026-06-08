@@ -70,3 +70,26 @@ async def test_update_no_allowed_fields_returns_existing(store):
     await store.create_proposal(_p())
     same = await store.update_proposal("prop-1", {"bogus": "x"})  # ignored
     assert same.status == ProposalStatus.PENDING
+
+
+async def test_list_filters_by_action_type_and_proposer(store):
+    await store.create_proposal(_p("p1", action_type="deploy", proposed_by="service:hermes"))
+    await store.create_proposal(_p("p2", action_type="deploy", proposed_by="alice"))
+    await store.create_proposal(_p("p3", action_type="rollback", proposed_by="alice"))
+
+    assert {p.proposal_id for p in await store.list_proposals(action_type="deploy")} == {"p1", "p2"}
+    assert {p.proposal_id for p in await store.list_proposals(proposed_by="alice")} == {"p2", "p3"}
+    # combined filters AND together
+    both = await store.list_proposals(action_type="deploy", proposed_by="alice")
+    assert [p.proposal_id for p in both] == ["p2"]
+
+
+async def test_transition_proposal_is_atomic_cas(store):
+    await store.create_proposal(_p())
+    # pending → confirmed wins once
+    assert await store.transition_proposal("prop-1", "pending", "confirmed", decided_by="bob") is True
+    # a second pending→confirmed loses (no longer pending)
+    assert await store.transition_proposal("prop-1", "pending", "confirmed") is False
+    got = await store.get_proposal("prop-1")
+    assert got.status == ProposalStatus.CONFIRMED
+    assert got.decided_by == "bob"
