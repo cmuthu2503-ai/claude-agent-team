@@ -47,6 +47,7 @@
 | — | [Project Workspaces (WS)](#project-workspaces-ws--detailed-task-breakdown) — 20/20 done |
 | — | [Build Plan Decomposition (BPD)](#build-plan-decomposition-bpd--detailed-task-breakdown) — 52/53 done (1 dropped) |
 | — | [Phase AE — Agentic Engineering Enhancements (AET)](#phase-ae--agentic-engineering-enhancements-shipped--4242-done) — 42/42 done |
+| — | [Hermes Agent Integration (HAI)](tasks-hermes-agent-integration.md) — 63 tasks (HAI-01 → HAI-63) across 5 phases (P0–P4); headless-agent identity + MCP + approval gate + governed-mode autonomous-loop reconciliation; **shipped 2026-06-08, 63/63 done** (breakdown in a separate tracker) |
 | **Planning aids** | |
 | — | [Dependency Graph (Phase Level)](#dependency-graph-phase-level) |
 | — | [Implementation Order Recommendation](#implementation-order-recommendation) |
@@ -95,7 +96,7 @@
 
 Each row is a self-contained feature with its own detailed task breakdown
 further down this document. Counts verified against task status markers on
-2026-06-02.
+2026-06-08.
 
 | Feature (prefix) | Total | Done | Dropped | Not Started | Status |
 |---|---|---|---|---|---|
@@ -111,7 +112,8 @@ further down this document. Counts verified against task status markers on
 | Phase AE — Agentic Engineering (AET) | 42 | 42 | 0 | 0 | ✅ Shipped |
 | Per-Agent Dynamic Model Assignment (PAM) | 32 | 26 | 5 | 1 | 🟡 26/26 buildable done; PAM-32 manual smoke pending |
 | Agentic Knowledge Base & Memory (KB) | 33 | 33 | 0 | 0 | ✅ **COMPLETE — all 33 tasks (KB-01..33 + KB-13a) across 5 phases.** Platform KB + per-app isolation + decision provenance + the full episodic-memory lifecycle (capture→recall→consolidate→supersede/as-of→promote) + governance (curator RBAC, retention/forgetting, feedback reranking, cost budgets + cache) + the scale-out seam (KB-33: `IngestionDispatcher` inline/background/queue + validated pgvector→Qdrant / FTS→ParadeDB swap behind the interfaces; see `docs/kb-scale-out.md`). |
-| **Post-release subtotal** | **341** | **329** | **11** | **1** | |
+| Hermes Agent Integration (HAI) | 63 | 63 | 0 | 0 | ✅ **COMPLETE — all 63 tasks (HAI-01..63) across 5 phases (P0–P4).** Headless-agent identity (service tokens + write-block) + MCP server (13 role-filtered read tools incl. lifecycle companions) + push bridge (request.* / deploy / proposal.* with approval-token redaction). Full approval gate: proposals create→confirm/reject/approve(one-time channel token)→list/expire, atomic CAS, crash-recovery reconciliation, terminal-state + target-integrity semantics, idempotency, observability `/proposals/metrics`, and the in-process gate primitive. P3 lifecycle handlers (project create/brief, prd/apispec/epics/features/tasks/buildplan generate, task.dispatch, deploy, rollback, request.submit) invoke the real route fns (zero duplication). P4 governed-mode reconciliation: identity-aware `GOVERNED_MODE`, auto-dispatch→proposal, ops-heal BREACH→rollback proposal (alerts still auto-fire), self-learning stays automatic, backward-compat proof, and the M1 audit query `GET /proposals/audit` proving zero ungated service executions. Default-off when no Hermes identity (NFR-001). Tracker: `docs/tasks-hermes-agent-integration.md`. |
+| **Post-release subtotal** | **404** | **392** | **11** | **1** | |
 
 ### Grand total
 
