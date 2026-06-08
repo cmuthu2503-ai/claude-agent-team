@@ -43,7 +43,29 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
             params["project_id"] = project_id
         return await client.get("/api/v1/requests", params=params)
 
+    async def monitor_get_request(request_id: str) -> Any:
+        """Full detail for one request: status, subtasks/stories, project, timings."""
+        return await client.get(f"/api/v1/requests/{request_id}")
+
+    async def monitor_list_projects(include_archived: bool = False) -> Any:
+        """List projects. Set include_archived=true to include archived ones."""
+        params = {"include_archived": include_archived} if include_archived else None
+        return await client.get("/api/v1/projects", params=params)
+
+    async def monitor_get_project(project_id: str) -> Any:
+        """Project detail: status, build-plan rollup, settings."""
+        return await client.get(f"/api/v1/projects/{project_id}")
+
+    async def monitor_get_costs(project_id: str | None = None) -> Any:
+        """Token/cost rollups across the platform, or scoped to one project."""
+        params = {"project_id": project_id} if project_id else None
+        return await client.get("/api/v1/cost/dashboard", params=params)
+
     return {
         "monitor_backend_health": monitor_backend_health,
         "monitor_list_requests": monitor_list_requests,
+        "monitor_get_request": monitor_get_request,
+        "monitor_list_projects": monitor_list_projects,
+        "monitor_get_project": monitor_get_project,
+        "monitor_get_costs": monitor_get_costs,
     }

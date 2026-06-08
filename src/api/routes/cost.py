@@ -4,7 +4,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
 
-from src.auth.service import get_current_user, require_role
+from src.auth.service import get_current_user, get_principal, require_role
 
 router = APIRouter(prefix="/api/v1/cost", tags=["cost"])
 
@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/v1/cost", tags=["cost"])
 async def cost_dashboard(
     request: Request,
     project_id: str | None = None,  # PM-17 — scope all rollups to a single project
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_principal),  # HAI-13 — JWT or service token
 ):
     state = request.app.state.state_store
 
