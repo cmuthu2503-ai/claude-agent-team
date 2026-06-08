@@ -21,20 +21,29 @@ project flag + dispatchable set).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import structlog
 
+from src.core.in_process_gate import submit_gated_action
 from src.models.base import ArtifactStatus, TaskStatus
 from src.state.base import StateStore
 
 logger = structlog.get_logger()
 
 
-def make_auto_dispatch_handler(state: StateStore, orchestrator, events):
+def make_auto_dispatch_handler(
+    state: StateStore, orchestrator, events, governed: Callable[[], bool] | None = None
+):
     """Build an EventEmitter-compatible handler bound to the state store
     + orchestrator + events. Closure rather than class — matches the
-    pattern of ``make_project_task_status_handler``."""
+    pattern of ``make_project_task_status_handler``.
+
+    ``governed`` is a live predicate (HAI-46): when it returns True the unblocked
+    set becomes a task.dispatch PROPOSAL instead of an immediate dispatch. Defaults
+    to legacy (never governed), so existing call sites/tests are unchanged."""
+    _is_governed: Callable[[], bool] = governed if callable(governed) else (lambda: False)
 
     async def handler(event_type: str, data: dict[str, Any]) -> None:
         # Only act on terminal `deployed` transitions of project tasks.
@@ -96,61 +105,99 @@ def make_auto_dispatch_handler(state: StateStore, orchestrator, events):
         if not ready:
             return
 
-        # Fire each one. We re-check task_status defensively in case
-        # another handler dispatched something between our read and
-        # write (best-effort idempotency — orchestrator.submit is
-        # itself transactional).
-        fired: list[dict[str, str]] = []
-        failures: list[dict[str, str]] = []
+        # Filter to genuinely dispatchable tasks (fresh backlog + finalized) once,
+        # defensively skipping anything a concurrent dispatch already picked up.
+        to_dispatch = []
         for task in ready:
-            # Defensive: skip anything that's no longer backlog (might
-            # have been picked up by a concurrent dispatch).
             fresh = await state.get_task(task.task_id)
             if fresh is None or fresh.task_status != TaskStatus.BACKLOG:
                 continue
             if fresh.list_status != ArtifactStatus.FINALIZED:
                 continue
-            try:
-                new_req = await orchestrator.submit(
-                    description=task.description or task.title,
-                    task_type=task.task_type,
-                    priority=task.priority,
-                    created_by="auto-dispatch",
-                    project_id=project_id,
-                    source_task_id=task.task_id,
-                )
-                await state.set_task_status(
-                    task.task_id, TaskStatus.DISPATCHED,
-                    request_id=new_req.request_id,
-                )
-                fired.append({
-                    "task_id": task.task_id,
-                    "request_id": new_req.request_id,
-                })
-            except Exception as e:  # noqa: BLE001
-                failures.append({"task_id": task.task_id, "error": str(e)})
+            to_dispatch.append(fresh)
+        if not to_dispatch:
+            return
 
-        if fired:
+        async def _legacy_dispatch():
+            """The pre-integration behavior: submit each task directly + emit the
+            cascade event. Runs inline in legacy mode; in governed mode this is what
+            the task.dispatch proposal's handler does on confirm instead."""
+            fired: list[dict[str, str]] = []
+            failures: list[dict[str, str]] = []
+            for task in to_dispatch:
+                try:
+                    new_req = await orchestrator.submit(
+                        description=task.description or task.title,
+                        task_type=task.task_type,
+                        priority=task.priority,
+                        created_by="auto-dispatch",
+                        project_id=project_id,
+                        source_task_id=task.task_id,
+                    )
+                    await state.set_task_status(
+                        task.task_id, TaskStatus.DISPATCHED, request_id=new_req.request_id,
+                    )
+                    fired.append({"task_id": task.task_id, "request_id": new_req.request_id})
+                except Exception as e:  # noqa: BLE001
+                    failures.append({"task_id": task.task_id, "error": str(e)})
+
+            if fired:
+                logger.info(
+                    "project_tasks_auto_dispatched",
+                    project_id=project_id,
+                    trigger_request_id=request_id,
+                    trigger_task_id=req.source_task_id,
+                    fired_count=len(fired),
+                    fired=fired,
+                    failures=failures or None,
+                )
+                try:  # BPD-26 — broadcast for the UI to render the cascade.
+                    await events.emit("project.tasks.auto_dispatched", {
+                        "project_id": project_id,
+                        "trigger_request_id": request_id,
+                        "trigger_task_id": req.source_task_id,
+                        "fired": fired,
+                        "failures": failures or None,
+                    })
+                except Exception as e:  # noqa: BLE001 — emit must never block
+                    logger.warning("auto_dispatch_event_emit_failed", error=str(e))
+            return fired
+
+        # HAI-46 — route through the approval gate. Governed mode turns the whole
+        # unblocked set into ONE task.dispatch proposal (a human confirms it, then
+        # the HAI-41 handler dispatches) + a notification; legacy mode runs
+        # _legacy_dispatch inline (unchanged). Idempotent per (project, trigger) so a
+        # re-emitted trigger can't queue duplicate proposals.
+        outcome = await submit_gated_action(
+            state, events,
+            governed=_is_governed(),
+            action_type="task.dispatch",
+            proposed_by="system:auto-dispatch",
+            target_ref=project_id,
+            payload={
+                "project_id": project_id,
+                "task_ids": [t.task_id for t in to_dispatch],
+                "trigger_request_id": request_id,
+                "trigger_task_id": req.source_task_id,
+            },
+            idempotency_key=f"autodispatch:{project_id}:{request_id}",
+            execute=_legacy_dispatch,
+        )
+        if outcome.gated:
             logger.info(
-                "project_tasks_auto_dispatched",
+                "project_tasks_dispatch_proposed",
                 project_id=project_id,
-                trigger_request_id=request_id,
-                trigger_task_id=req.source_task_id,
-                fired_count=len(fired),
-                fired=fired,
-                failures=failures or None,
+                proposal_id=outcome.proposal_id,
+                task_count=len(to_dispatch),
             )
-            # BPD-26 — broadcast for the UI to render the cascade.
             try:
-                await events.emit("project.tasks.auto_dispatched", {
+                await events.emit("project.tasks.dispatch_proposed", {
                     "project_id": project_id,
+                    "proposal_id": outcome.proposal_id,
+                    "task_ids": [t.task_id for t in to_dispatch],
                     "trigger_request_id": request_id,
-                    "trigger_task_id": req.source_task_id,
-                    "fired": fired,
-                    "failures": failures or None,
                 })
-            except Exception as e:  # noqa: BLE001
-                # Event emit must never block; surface as warning only.
-                logger.warning("auto_dispatch_event_emit_failed", error=str(e))
+            except Exception as e:  # noqa: BLE001 — emit must never block
+                logger.warning("dispatch_proposed_emit_failed", error=str(e))
 
     return handler

@@ -281,7 +281,13 @@ async def lifespan(app: FastAPI):
     # (BPD-26) so the UI can render the cascade live.
     from src.core.auto_dispatch import make_auto_dispatch_handler
 
-    events.on(make_auto_dispatch_handler(state, orchestrator, events))
+    # HAI-46 — pass a live governed predicate so auto-dispatch proposes (vs submits)
+    # when governance is on. Reads app.state so a runtime token change is honored.
+    events.on(
+        make_auto_dispatch_handler(
+            state, orchestrator, events, governed=lambda: getattr(app.state, "governed_mode", False)
+        )
+    )
     logger.info("auto_dispatch_handler_registered")
 
     # AET-11 — self-learning handler. Listens for request.failed events
