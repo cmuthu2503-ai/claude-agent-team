@@ -47,9 +47,9 @@
 | P0 | Foundations (service token + MCP skeleton) | 12 | 12 | 0 | 0 | 0 |
 | P1 | Monitor (read-only + push) | 12 | 12 | 0 | 0 | 0 |
 | P2 | Approval Gate (proposals engine) | 21 | 21 | 0 | 0 | 0 |
-| P3 | Lifecycle Actions (gated) | 12 | 4 | 0 | 0 | 8 |
+| P3 | Lifecycle Actions (gated) | 12 | 5 | 0 | 0 | 7 |
 | P4 | Autonomous-Loop Reconciliation | 6 | 0 | 0 | 0 | 6 |
-| **Total** | | **63** | **49** | **0** | **0** | **14** |
+| **Total** | | **63** | **50** | **0** | **0** | **13** |
 
 > Task IDs run HAI-01..HAI-63. IDs are unique but **not contiguous per phase** — HAI-51..63 were added in the v1.1 gap-review and slot into their dependency phase (P0: 51–53, P1: 54, P2: 55–63), not at the end. Sort by the Depends-On graph, not by ID number.
 
@@ -140,7 +140,7 @@ Gated MCP tools for full project lifecycle + project-inference parked tasks. Goa
 | HAI-37 | `project_set_brief` | `project.brief.set` proposal → `PUT /projects/{id}/brief`. | S | HAI-26 | FR-051 | `[x]` |
 | HAI-38 | `project_generate_prd` | `prd.generate` proposal → PRD generate endpoint. | S | HAI-26 | FR-052 | `[x]` |
 | HAI-39 | `project_generate_apispec` | `apispec.generate` proposal → API-spec generate endpoint. | S | HAI-26 | FR-053 | `[x]` |
-| HAI-40 | `project_generate_buildplan` | `buildplan.generate` (or discrete epics/features/tasks) proposals → generate endpoints. | M | HAI-26 | FR-054 | `[ ]` |
+| HAI-40 | `project_generate_buildplan` | `buildplan.generate` (or discrete epics/features/tasks) proposals → generate endpoints. | M | HAI-26 | FR-054 | `[x]` |
 | HAI-41 | `task_dispatch` + finalize | `task.dispatch` proposal → build/dispatch endpoints; finalize gated. | M | HAI-26 | FR-055 | `[ ]` |
 | HAI-42 | `ops_deploy` / `ops_rollback` | `deploy`/`rollback` proposals at admin scope → deploy/stop endpoints. | M | HAI-26 | FR-056 | `[ ]` |
 | HAI-43 | Lifecycle read companions | `project_get_prd/apispec/buildplan/tasks` as Monitor-tier for review between gated steps. | S | HAI-07 | FR-057 | `[ ]` |
