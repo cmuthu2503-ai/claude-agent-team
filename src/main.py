@@ -312,6 +312,17 @@ async def lifespan(app: FastAPI):
     )
     logger.info("anomaly_sweeper_started")
 
+    # HAI-57 — crash-recovery reconciliation. A proposal confirmed but not yet
+    # executed when the process died is stranded in `confirmed`; mark it failed
+    # so it never silently hangs (and per HAI-58 the operator re-proposes). Runs
+    # ONCE at startup, before we begin serving, and is awaited so a stranded
+    # proposal is resolved before any new traffic arrives.
+    from src.core.proposal_recovery import reconcile_confirmed_proposals_once
+
+    _reconciled = await reconcile_confirmed_proposals_once(state, events)
+    if _reconciled:
+        logger.warning("proposal_crash_recovery", count=len(_reconciled), proposal_ids=_reconciled)
+
     # HAI-29 — proposal auto-expire sweeper. Expires PENDING proposals past their
     # TTL (atomic CAS → never executes) and emits proposal.expired, so an
     # unanswered approval queue can't pile up invisibly.
