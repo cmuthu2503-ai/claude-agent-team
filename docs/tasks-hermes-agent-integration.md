@@ -46,10 +46,10 @@
 |-------|-------|-------|------|-------------|---------|-------------|
 | P0 | Foundations (service token + MCP skeleton) | 12 | 12 | 0 | 0 | 0 |
 | P1 | Monitor (read-only + push) | 12 | 12 | 0 | 0 | 0 |
-| P2 | Approval Gate (proposals engine) | 21 | 9 | 0 | 0 | 12 |
+| P2 | Approval Gate (proposals engine) | 21 | 10 | 0 | 0 | 11 |
 | P3 | Lifecycle Actions (gated) | 12 | 0 | 0 | 0 | 12 |
 | P4 | Autonomous-Loop Reconciliation | 6 | 0 | 0 | 0 | 6 |
-| **Total** | | **63** | **33** | **0** | **0** | **30** |
+| **Total** | | **63** | **34** | **0** | **0** | **29** |
 
 > Task IDs run HAI-01..HAI-63. IDs are unique but **not contiguous per phase** — HAI-51..63 were added in the v1.1 gap-review and slot into their dependency phase (P0: 51–53, P1: 54, P2: 55–63), not at the end. Sort by the Depends-On graph, not by ID number.
 
@@ -112,7 +112,7 @@ Unified proposals engine. Goal: no gated action executes without a confirmed pro
 | HAI-27 | `POST /proposals/{id}/reject` | pending→rejected (+reason); never executes; emit `proposal.rejected`. **Done:** reject route (get_current_user human-only; atomic CAS pending→rejected; reason stored in `error`; emits `proposal.rejected`). 2 route tests. | S | HAI-22 | FR-033 | `[x]` |
 | HAI-28 | `GET /proposals` + `GET /{id}` | List/detail with filters; backing for MCP + UI. **Done:** `GET /proposals` (status/action_type/proposed_by filters, store-side; get_principal so Hermes can poll) + `GET /{id}`. Store `list_proposals` extended with the filters. 2 route + 1 store tests; live: service token reads (200) but can't reject (403). | S | HAI-22 | FR-034, FR-080 | `[x]` |
 | HAI-29 | Auto-expire sweeper | Background task: stale pending→expired after `ttl_seconds` (default 24h); emit `proposal.expired`; never executes. **Done:** `src/core/proposal_expiry.py` (`sweep_expired_once` + `make_proposal_expiry_sweeper`); expires via atomic CAS (never executes; won't clobber a just-confirmed one); emits `proposal.expired`; registered as a lifespan task (interval env, default 60s), cancelled on shutdown. 4 tests; sweeper boots. | M | HAI-22 | FR-036 | `[x]` |
-| HAI-30 | One-time approval token (channel approve) | Per-proposal token enabling operator to confirm from a Hermes channel without a full dashboard session, still human-authority. | M | HAI-26 | FR-038, FR-072 | `[ ]` |
+| HAI-30 | One-time approval token (channel approve) | Per-proposal token enabling operator to confirm from a Hermes channel without a full dashboard session, still human-authority. | M | HAI-26 | FR-038, FR-072 | `[x]` |
 | HAI-31 | Pending Approvals UI view | Minimal dashboard read view listing proposals with confirm/reject (reuses API). | M | HAI-28 | FR-081 | `[ ]` |
 | HAI-55 | Proposal idempotency | Optional `idempotency_key` on `POST /proposals`; repeat key returns existing proposal (guards Hermes retries/re-prompts). | S | HAI-23 | FR-035a | `[ ]` |
 | HAI-56 | Atomic state transitions (CAS) | pending→{confirmed,rejected,expired} as a single atomic compare-and-set; concurrent confirm/reject/expiry resolves to one winner, no double-execute. | M | HAI-22 | FR-035b | `[ ]` |
