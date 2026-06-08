@@ -48,8 +48,8 @@
 | P1 | Monitor (read-only + push) | 12 | 12 | 0 | 0 | 0 |
 | P2 | Approval Gate (proposals engine) | 21 | 21 | 0 | 0 | 0 |
 | P3 | Lifecycle Actions (gated) | 12 | 12 | 0 | 0 | 0 |
-| P4 | Autonomous-Loop Reconciliation | 6 | 4 | 0 | 0 | 2 |
-| **Total** | | **63** | **61** | **0** | **0** | **2** |
+| P4 | Autonomous-Loop Reconciliation | 6 | 5 | 0 | 0 | 1 |
+| **Total** | | **63** | **62** | **0** | **0** | **1** |
 
 > Task IDs run HAI-01..HAI-63. IDs are unique but **not contiguous per phase** — HAI-51..63 were added in the v1.1 gap-review and slot into their dependency phase (P0: 51–53, P1: 54, P2: 55–63), not at the end. Sort by the Depends-On graph, not by ID number.
 
@@ -158,7 +158,7 @@ Bring the three existing auto-loops under the gate in Hermes-governed mode; pres
 | HAI-46 | Auto-dispatch → proposal | In governed mode, BPD-24 (fires on **`request.completed`/`status_changed`** for `source_task_id` requests — **not** a `request.deployed` event, which doesn't exist) emits one `task.dispatch` proposal for unblocked tasks + notification instead of calling `orchestrator.submit()`. Reuses the in-process interception (HAI-63). | M | HAI-45, HAI-41, HAI-63 | FR-060 | `[x]` |
 | HAI-47 | Auto-rollback → proposal | In governed mode, AET-31 `ANOMALY` (deterministic, no LLM) emits a `rollback` proposal + push alert; on confirm the executor **enqueues a `RollbackRequest` row** for the host supervisor (there is **no `/rollback` REST endpoint**). Pure alerts may still auto-fire. Reuses in-process interception (HAI-63). | M | HAI-45, HAI-42, HAI-63 | FR-061 | `[x]` |
 | HAI-48 | Self-learning gate flag | Keep AET-11 automatic by default; flag to require approval. | S | HAI-45 | FR-062 | `[x]` |
-| HAI-49 | Backward-compat verification | Prove no-Hermes-identity config behaves as pre-integration across the existing suite. | M | HAI-45..48 | NFR-001, M4 | `[ ]` |
+| HAI-49 | Backward-compat verification | Prove no-Hermes-identity config behaves as pre-integration across the existing suite. | M | HAI-45..48 | NFR-001, M4 | `[x]` |
 | HAI-50 | P4 tests + audit query | Loop-mode tests; audit query proving zero ungated executions by the service principal (M1). | M | HAI-45..49 | NFR-004, M1, M5 | `[ ]` |
 
 ---
