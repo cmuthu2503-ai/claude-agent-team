@@ -774,6 +774,11 @@ class StateStore(ABC):
     @abstractmethod
     async def update_proposal(self, proposal_id: str, fields: dict) -> Proposal: ...
 
+    @abstractmethod
+    async def transition_proposal(
+        self, proposal_id: str, expected_status: str, new_status: str, **fields,
+    ) -> bool: ...
+
     # ── Lifecycle ────────────────────────────────
 
     @abstractmethod

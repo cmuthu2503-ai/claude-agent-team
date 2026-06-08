@@ -158,6 +158,14 @@ async def lifespan(app: FastAPI):
     # PDB-05's single_agent_call) can reach the executor directly without
     # going through the workflow runner.
     app.state.agent_executor = agent_executor
+
+    # HAI-24 — the approval gate's action registry. Gated action handlers are
+    # registered into this by the P3 lifecycle tasks; the confirm endpoint
+    # (HAI-26) executes a confirmed proposal through it.
+    from src.core.proposal_registry import ProposalActionRegistry
+
+    app.state.proposal_registry = ProposalActionRegistry()
+
     # Decide real-vs-mock at boot, or refuse to boot. Mock mode (fake agent
     # output) is now OPT-IN: missing credentials hard-fail by default, and are
     # forbidden outright in staging/production, so a misconfigured deploy can

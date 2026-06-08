@@ -9,8 +9,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.routes import proposals as proposals_route
-from src.auth.service import get_principal
+from src.auth.service import get_current_user, get_principal
 from src.core.events import EventEmitter
+from src.core.proposal_registry import ProposalActionRegistry
 from src.state.sqlite_store import SQLiteStateStore
 
 
@@ -25,10 +26,11 @@ async def store():
             await s.close()
 
 
-def _make_app(store, principal: dict | None = None) -> FastAPI:
+def _make_app(store, principal: dict | None = None, registry: ProposalActionRegistry | None = None) -> FastAPI:
     app = FastAPI()
     app.include_router(proposals_route.router)
     app.state.state_store = store
+    app.state.proposal_registry = registry or ProposalActionRegistry()
     events = EventEmitter()
     app.state.events = events
     app.state.captured: list = []
@@ -44,7 +46,9 @@ def _make_app(store, principal: dict | None = None) -> FastAPI:
             "role": "developer", "is_service_token": True,
         }
 
+    # create → get_principal (JWT or service token); confirm → get_current_user (human).
     app.dependency_overrides[get_principal] = _principal
+    app.dependency_overrides[get_current_user] = lambda: {"sub": "u1", "username": "alice", "role": "admin"}
     return app
 
 
@@ -85,3 +89,69 @@ async def test_human_proposer_attribution(store):
     client = TestClient(_make_app(store, principal={"sub": "u1", "username": "alice", "role": "admin"}))
     r = client.post("/api/v1/proposals", json={"action_type": "deploy"})
     assert r.json()["data"]["proposed_by"] == "alice"
+
+
+# ── HAI-26 — confirm + execute ───────────────────────────────────────────────
+
+def _registry_with_handler(result_ref="REQ-NEW", raises=False):
+    reg = ProposalActionRegistry()
+
+    async def handler(proposal, ctx):
+        if raises:
+            raise RuntimeError("handler boom")
+        return {"result_ref": result_ref}
+
+    reg.register("deploy", handler)
+    return reg
+
+
+async def test_confirm_executes_and_emits(store):
+    app = _make_app(store, registry=_registry_with_handler("DEPLOY-OK"))
+    client = TestClient(app)
+    pid = client.post("/api/v1/proposals", json={"action_type": "deploy"}).json()["data"]["proposal_id"]
+
+    r = client.post(f"/api/v1/proposals/{pid}/confirm")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["status"] == "executed"
+    assert data["result_ref"] == "DEPLOY-OK"
+    assert data["decided_by"] == "alice"
+    assert data["executed_at"] is not None
+    types = [et for et, _ in app.state.captured]
+    assert "proposal.confirmed" in types and "proposal.executed" in types
+
+
+async def test_confirm_failing_handler_marks_failed(store):
+    app = _make_app(store, registry=_registry_with_handler(raises=True))
+    client = TestClient(app)
+    pid = client.post("/api/v1/proposals", json={"action_type": "deploy"}).json()["data"]["proposal_id"]
+
+    r = client.post(f"/api/v1/proposals/{pid}/confirm")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["status"] == "failed"
+    assert "boom" in data["error"]
+    assert "proposal.failed" in [et for et, _ in app.state.captured]
+
+
+async def test_confirm_no_handler_fails(store):
+    # registry has no handler for 'project.create' → failed (not executed)
+    app = _make_app(store)
+    client = TestClient(app)
+    pid = client.post("/api/v1/proposals", json={"action_type": "project.create"}).json()["data"]["proposal_id"]
+    data = client.post(f"/api/v1/proposals/{pid}/confirm").json()["data"]
+    assert data["status"] == "failed"
+    assert "No handler" in data["error"]
+
+
+async def test_confirm_unknown_404(store):
+    client = TestClient(_make_app(store))
+    assert client.post("/api/v1/proposals/nope/confirm").status_code == 404
+
+
+async def test_confirm_non_pending_409(store):
+    app = _make_app(store, registry=_registry_with_handler())
+    client = TestClient(app)
+    pid = client.post("/api/v1/proposals", json={"action_type": "deploy"}).json()["data"]["proposal_id"]
+    assert client.post(f"/api/v1/proposals/{pid}/confirm").status_code == 200   # first confirm OK
+    assert client.post(f"/api/v1/proposals/{pid}/confirm").status_code == 409   # already executed

@@ -4349,3 +4349,27 @@ class SQLiteStateStore(StateStore):
         if result is None:
             raise ValueError(f"Proposal {proposal_id!r} not found.")
         return result
+
+    async def transition_proposal(
+        self, proposal_id: str, expected_status: str, new_status: str, **fields,
+    ) -> bool:
+        """Atomic compare-and-set on status (HAI-26; the CAS primitive HAI-56
+        builds on). Sets status expected→new ONLY if it's currently `expected`,
+        in one UPDATE. Returns True if THIS call made the transition, False if it
+        lost the race (already decided/expired). Optional decision/execution
+        fields are stamped in the same statement so a confirm can't half-apply."""
+        sets = ["status = ?"]
+        params: list = [str(new_status)]
+        for k, v in fields.items():
+            if k in {"decided_by", "decided_at", "executed_at", "result_ref", "error"}:
+                sets.append(f"{k} = ?")
+                params.append(v)
+        params += [proposal_id, str(expected_status)]
+        db = await self._get_db()
+        cur = await db.execute(
+            f"UPDATE proposals SET {', '.join(sets)} "
+            f"WHERE proposal_id = ? AND status = ?",
+            tuple(params),
+        )
+        await db.commit()
+        return cur.rowcount > 0
