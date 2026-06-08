@@ -23,6 +23,7 @@ from src.models.base import (
     ProjectTask,
     PromptSession,
     PromptVariant,
+    Proposal,
     Request,
     ServiceToken,
     Story,
@@ -751,6 +752,27 @@ class StateStore(ABC):
 
     @abstractmethod
     async def touch_service_token_last_used(self, token_id: str) -> None: ...
+
+    # ── Proposals (HAI-22 / FR-030) — the approval gate ──────────
+    # Hermes can only mutate state by creating a Proposal; it executes only
+    # after a human confirms it.
+
+    @abstractmethod
+    async def create_proposal(self, proposal: Proposal) -> str: ...
+
+    @abstractmethod
+    async def get_proposal(self, proposal_id: str) -> Proposal | None: ...
+
+    @abstractmethod
+    async def get_proposal_by_idempotency_key(self, key: str) -> Proposal | None: ...
+
+    @abstractmethod
+    async def list_proposals(
+        self, status: str | None = None, limit: int = 100,
+    ) -> list[Proposal]: ...
+
+    @abstractmethod
+    async def update_proposal(self, proposal_id: str, fields: dict) -> Proposal: ...
 
     # ── Lifecycle ────────────────────────────────
 

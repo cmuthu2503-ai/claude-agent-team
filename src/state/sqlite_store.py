@@ -20,6 +20,7 @@ from src.models.base import (
     RollbackRequest,
     Document,
     ServiceToken,
+    Proposal,
     Artifact,
     Deployment,
     Epic,
@@ -4235,3 +4236,116 @@ class SQLiteStateStore(StateStore):
             (token_id,),
         )
         await db.commit()
+
+    # ── Proposals (HAI-22 / FR-030) ──────────────────────
+
+    @staticmethod
+    def _row_to_proposal(row: Any) -> Proposal:
+        def _ts(v: Any) -> datetime | None:
+            return datetime.fromisoformat(v) if v else None
+
+        return Proposal(
+            proposal_id=row["proposal_id"],
+            action_type=row["action_type"],
+            target_ref=row["target_ref"],
+            payload=json.loads(row["payload_json"] or "{}"),
+            status=row["status"],
+            proposed_by=row["proposed_by"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            decided_by=row["decided_by"],
+            decided_at=_ts(row["decided_at"]),
+            executed_at=_ts(row["executed_at"]),
+            ttl_seconds=int(row["ttl_seconds"]),
+            result_ref=row["result_ref"],
+            error=row["error"],
+            idempotency_key=row["idempotency_key"],
+        )
+
+    async def create_proposal(self, proposal: Proposal) -> str:
+        db = await self._get_db()
+        await db.execute(
+            """INSERT INTO proposals
+               (proposal_id, action_type, target_ref, payload_json, status,
+                proposed_by, created_at, ttl_seconds, idempotency_key)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                proposal.proposal_id,
+                proposal.action_type,
+                proposal.target_ref,
+                json.dumps(proposal.payload or {}),
+                str(proposal.status),
+                proposal.proposed_by,
+                proposal.created_at.isoformat(),
+                proposal.ttl_seconds,
+                proposal.idempotency_key,
+            ),
+        )
+        await db.commit()
+        return proposal.proposal_id
+
+    async def get_proposal(self, proposal_id: str) -> Proposal | None:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM proposals WHERE proposal_id = ?", (proposal_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return self._row_to_proposal(row) if row else None
+
+    async def get_proposal_by_idempotency_key(self, key: str) -> Proposal | None:
+        """FR-035a — lets POST /proposals return the existing proposal instead of
+        creating a duplicate on a client retry."""
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM proposals WHERE idempotency_key = ?", (key,)
+        ) as cur:
+            row = await cur.fetchone()
+        return self._row_to_proposal(row) if row else None
+
+    async def list_proposals(
+        self, status: str | None = None, limit: int = 100,
+    ) -> list[Proposal]:
+        db = await self._get_db()
+        sql = "SELECT * FROM proposals"
+        params: list = []
+        if status:
+            sql += " WHERE status = ?"
+            params.append(status)
+        sql += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
+        params.append(limit)
+        async with db.execute(sql, tuple(params)) as cur:
+            rows = await cur.fetchall()
+        return [self._row_to_proposal(r) for r in rows]
+
+    async def update_proposal(self, proposal_id: str, fields: dict) -> Proposal:
+        """Whitelisted field update (status transitions, decision/execution
+        stamps, result/error). The ATOMIC compare-and-set transition is HAI-56;
+        this is the plain setter the confirm/reject/expire paths build on."""
+        allowed = {
+            "status", "decided_by", "decided_at", "executed_at",
+            "result_ref", "error", "target_ref", "payload_json",
+        }
+        sets: list[str] = []
+        params: list = []
+        for k, v in fields.items():
+            if k not in allowed:
+                continue
+            if k == "status":
+                v = str(v)
+            sets.append(f"{k} = ?")
+            params.append(v)
+        if not sets:
+            existing = await self.get_proposal(proposal_id)
+            if existing is None:
+                raise ValueError(f"Proposal {proposal_id!r} not found.")
+            return existing
+        params.append(proposal_id)
+        db = await self._get_db()
+        await db.execute(
+            f"UPDATE proposals SET {', '.join(sets)} WHERE proposal_id = ?",
+            tuple(params),
+        )
+        await db.commit()
+        result = await self.get_proposal(proposal_id)
+        if result is None:
+            raise ValueError(f"Proposal {proposal_id!r} not found.")
+        return result
