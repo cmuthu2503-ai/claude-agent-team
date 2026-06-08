@@ -45,11 +45,11 @@
 | Phase | Theme | Total | Done | In Progress | Blocked | Not Started |
 |-------|-------|-------|------|-------------|---------|-------------|
 | P0 | Foundations (service token + MCP skeleton) | 12 | 12 | 0 | 0 | 0 |
-| P1 | Monitor (read-only + push) | 12 | 4 | 0 | 0 | 8 |
+| P1 | Monitor (read-only + push) | 12 | 7 | 0 | 0 | 5 |
 | P2 | Approval Gate (proposals engine) | 21 | 0 | 0 | 0 | 21 |
 | P3 | Lifecycle Actions (gated) | 12 | 0 | 0 | 0 | 12 |
 | P4 | Autonomous-Loop Reconciliation | 6 | 0 | 0 | 0 | 6 |
-| **Total** | | **63** | **16** | **0** | **0** | **47** |
+| **Total** | | **63** | **19** | **0** | **0** | **44** |
 
 > Task IDs run HAI-01..HAI-63. IDs are unique but **not contiguous per phase** — HAI-51..63 were added in the v1.1 gap-review and slot into their dependency phase (P0: 51–53, P1: 54, P2: 55–63), not at the end. Sort by the Depends-On graph, not by ID number.
 
@@ -86,9 +86,9 @@ Read-only observation tools + outbound push. Goal: Hermes reports live state and
 | HAI-11 | `monitor_get_request` | Request detail + status + stories/subtasks. **Done:** tool → `GET /api/v1/requests/{id}` (get_principal). | S | HAI-10 | FR-021, FR-027 | `[x]` |
 | HAI-12 | `monitor_list_projects` / `monitor_get_project` | Project catalog + detail (feeds project inference). **Done:** tools → `GET /api/v1/projects` + `/{id}` (get_principal). | S | HAI-07 | FR-022, FR-027 | `[x]` |
 | HAI-13 | `monitor_get_costs` | Cost/spend rollups by request + project. Uses **only** the viewer-readable `/cost/dashboard` — never the admin-only orphan/reconcile endpoints (would 403). **Done:** tool → `GET /api/v1/cost/dashboard` (get_principal), optional project_id. | S | HAI-07 | FR-023, FR-027 | `[x]` |
-| HAI-14 | `monitor_recent_failures` | Recent failed requests + fingerprints. | S | HAI-07 | FR-024, FR-027 | `[ ]` |
-| HAI-15 | `monitor_deploy_health` | Per-env deploy health / anomaly state. | S | HAI-07 | FR-025, FR-027 | `[ ]` |
-| HAI-16 | `monitor_team_status` | Agents, resolved models, current activity. | S | HAI-07 | FR-026, FR-027 | `[ ]` |
+| HAI-14 | `monitor_recent_failures` | Recent failed requests + fingerprints. **Done:** tool → `GET /api/v1/requests?status=failed` (reuses the HAI-10 route). | S | HAI-07 | FR-024, FR-027 | `[x]` |
+| HAI-15 | `monitor_deploy_health` | Per-env deploy health / anomaly state. **Done:** tool → `GET /api/v1/ops/latest` (latest verdict; made schema-visible so the contract test pins it). | S | HAI-07 | FR-025, FR-027 | `[x]` |
+| HAI-16 | `monitor_team_status` | Agents, resolved models, current activity. **Done:** tool → `GET /api/v1/agents` (broadened to get_principal; test_agents_route_v2 harness updated). | S | HAI-07 | FR-026, FR-027 | `[x]` |
 | HAI-17 | Outbound bridge core | EventEmitter subscriber that forwards curated events to a configured webhook; soft-fail, retry/drop, never blocks broadcasting. | M | HAI-02 | FR-070, FR-071, NFR-002 | `[ ]` |
 | HAI-18 | Push event selection + payloads | Config-driven forwarding of the **three real existing events only** in P1 (`request.failed`, `request.completed`, `deploy_health.anomaly_detected`); concise payloads linking back to ids. **No `request.deployed`** (never emitted). `proposal.*` forwarding is deferred to P2 (HAI-61). | S | HAI-17 | FR-070, FR-072, FR-075 | `[ ]` |
 | HAI-19 | Pull-only fallback verify | Confirm Monitor tools + Hermes scheduler reconcile state with the bridge disabled. | S | HAI-10..16 | FR-073 | `[ ]` |

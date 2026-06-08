@@ -24,7 +24,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.routes import agents as agents_route
-from src.auth.service import get_current_user
+from src.auth.service import get_current_user, get_principal
 from src.models.catalog import ModelCatalog, default_catalog_path
 from src.state.sqlite_store import SQLiteStateStore
 
@@ -90,6 +90,9 @@ def _make_app(
     def _user() -> dict[str, Any]:
         return {"sub": "u1", "username": "tester", "role": role}
     app.dependency_overrides[get_current_user] = _user
+    # HAI-16 — list_agents now authenticates via get_principal (JWT or service
+    # token); override it too so the no-auth TestClient calls resolve to _user.
+    app.dependency_overrides[get_principal] = _user
 
     # Override every require_role('admin') dependable so admin-gated
     # routes resolve to the same user.

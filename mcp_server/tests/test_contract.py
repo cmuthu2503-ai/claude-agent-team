@@ -27,6 +27,9 @@ REQUIRED_ENDPOINTS = [
     ("get", "/api/v1/projects"),                  # HAI-12 monitor_list_projects
     ("get", "/api/v1/projects/{project_id}"),     # HAI-12 monitor_get_project
     ("get", "/api/v1/cost/dashboard"),            # HAI-13 monitor_get_costs
+    # HAI-14 monitor_recent_failures reuses /api/v1/requests (already pinned).
+    ("get", "/api/v1/ops/latest"),                # HAI-15 monitor_deploy_health
+    ("get", "/api/v1/agents"),                    # HAI-16 monitor_team_status
 ]
 
 

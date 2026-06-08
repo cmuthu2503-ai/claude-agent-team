@@ -61,6 +61,18 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
         params = {"project_id": project_id} if project_id else None
         return await client.get("/api/v1/cost/dashboard", params=params)
 
+    async def monitor_recent_failures(per_page: int = 20) -> Any:
+        """Recently failed requests (status=failed), newest first."""
+        return await client.get("/api/v1/requests", params={"status": "failed", "per_page": per_page})
+
+    async def monitor_deploy_health() -> Any:
+        """Latest deploy health verdict (HEALTHY / UNHEALTHY / unknown) + deployment id/step."""
+        return await client.get("/api/v1/ops/latest")
+
+    async def monitor_team_status() -> Any:
+        """The agents with their resolved/assigned model, override state, tool count, and busy state."""
+        return await client.get("/api/v1/agents")
+
     return {
         "monitor_backend_health": monitor_backend_health,
         "monitor_list_requests": monitor_list_requests,
@@ -68,4 +80,7 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
         "monitor_list_projects": monitor_list_projects,
         "monitor_get_project": monitor_get_project,
         "monitor_get_costs": monitor_get_costs,
+        "monitor_recent_failures": monitor_recent_failures,
+        "monitor_deploy_health": monitor_deploy_health,
+        "monitor_team_status": monitor_team_status,
     }
