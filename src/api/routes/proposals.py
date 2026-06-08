@@ -8,8 +8,6 @@ change), then a HUMAN confirms or rejects it. Two human paths:
 Reads (list/get) are open to JWT or service token so Hermes can poll the queue.
 """
 
-import secrets
-import uuid
 from datetime import datetime
 from typing import Any, Literal
 
@@ -18,12 +16,11 @@ from pydantic import BaseModel
 
 from src.auth.service import get_current_user, get_principal, hash_service_token, principal_actor
 from src.core.proposal_dispatcher import run_confirmed_proposal
+from src.core.proposal_factory import new_proposal
 from src.core.proposal_target import validate_proposal_target
 from src.models.base import Proposal, ProposalStatus
 
 router = APIRouter(prefix="/api/v1/proposals", tags=["proposals"])
-
-_DEFAULT_TTL_SECONDS = 86400  # 24h
 
 
 class CreateProposalBody(BaseModel):
@@ -214,20 +211,13 @@ async def create_proposal(
         if existing is not None:
             return {"data": _public(existing), "meta": {"idempotent_replay": True}, "error": None}
 
-    raw_approval_token = secrets.token_urlsafe(32)
-    proposal = Proposal(
-        proposal_id=f"prop-{uuid.uuid4().hex[:12]}",
+    proposal, raw_approval_token = new_proposal(
         action_type=action_type,
-        target_ref=body.target_ref,
-        payload=body.payload or {},
         proposed_by=principal_actor(principal),
-        ttl_seconds=(
-            body.ttl_seconds
-            if (body.ttl_seconds and body.ttl_seconds > 0)
-            else _DEFAULT_TTL_SECONDS
-        ),
+        target_ref=body.target_ref,
+        payload=body.payload,
+        ttl_seconds=body.ttl_seconds,
         idempotency_key=body.idempotency_key,
-        approval_token_hash=hash_service_token(raw_approval_token),
     )
     await state.create_proposal(proposal)
 

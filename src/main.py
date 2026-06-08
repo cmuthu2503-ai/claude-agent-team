@@ -166,6 +166,15 @@ async def lifespan(app: FastAPI):
 
     app.state.proposal_registry = ProposalActionRegistry()
 
+    # HAI-63 — governed mode. When ON (the default — "nothing moves without my
+    # approval"), in-process callers that mutate gated state route through the
+    # approval gate (src.core.in_process_gate) and become proposals instead of
+    # executing. Set GOVERNED_MODE=false to restore legacy autonomous behavior.
+    app.state.governed_mode = os.getenv("GOVERNED_MODE", "true").strip().lower() not in (
+        "false", "0", "no", "off",
+    )
+    logger.info("governance_mode", governed=app.state.governed_mode)
+
     # Decide real-vs-mock at boot, or refuse to boot. Mock mode (fake agent
     # output) is now OPT-IN: missing credentials hard-fail by default, and are
     # forbidden outright in staging/production, so a misconfigured deploy can
