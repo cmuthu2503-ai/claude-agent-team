@@ -116,3 +116,40 @@ async def test_prd_generate_passes_target_and_body(monkeypatch):
     proposal = _confirmed("prd.generate", target_ref="proj-1", payload={})
     out = await ph.prd_generate(proposal, ctx=None)
     assert out["result_ref"] == "prd-9" and seen["project_id"] == "proj-1"
+
+
+# ── HAI-40 — build-plan family ───────────────────────────────────────────────
+
+async def test_buildplan_family_registered():
+    reg = ProposalActionRegistry()
+    ph.register_all(reg)
+    assert {"epics.generate", "features.generate", "tasks.generate", "buildplan.generate"} <= set(
+        reg.registered_action_types()
+    )
+
+
+async def test_features_generate_threads_epic_id_from_payload(monkeypatch):
+    seen = {}
+
+    async def fake_generate_features(*, project_id, epic_id, request, body, user):
+        seen.update(project_id=project_id, epic_id=epic_id)
+        return {"data": {"artifact_id": "feat-list-1"}}
+
+    monkeypatch.setattr(projects_mod, "generate_features", fake_generate_features)
+    proposal = _confirmed("features.generate", target_ref="proj-1", payload={"epic_id": "epic-7"})
+    out = await ph.features_generate(proposal, ctx=None)
+    assert out["result_ref"] == "feat-list-1"
+    assert seen["project_id"] == "proj-1" and seen["epic_id"] == "epic-7"
+
+
+async def test_epics_and_buildplan_target_the_project(monkeypatch):
+    async def fake_epics(*, project_id, request, body, user):
+        return {"data": {"artifact_id": "epics-1"}}
+
+    async def fake_bp(*, project_id, request, body, user):
+        return {"data": {"id": "bp-1"}}
+
+    monkeypatch.setattr(projects_mod, "generate_epics", fake_epics)
+    monkeypatch.setattr(projects_mod, "generate_build_plan", fake_bp)
+    assert (await ph.epics_generate(_confirmed("epics.generate", "proj-1"), None))["result_ref"] == "epics-1"
+    assert (await ph.buildplan_generate(_confirmed("buildplan.generate", "proj-1"), None))["result_ref"] == "bp-1"

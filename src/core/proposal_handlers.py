@@ -121,6 +121,52 @@ async def apispec_generate(proposal: Any, ctx: Any) -> dict[str, Any]:
     return {"result_ref": _id_from(resp, "artifact_id", "document_id", "id", "version")}
 
 
+# ── HAI-40 — build-plan family (epics / features / tasks / buildplan) ────────
+# target_ref is the project id for all of these (consistent with the HAI-59 target
+# validator); sub-ids like epic_id ride in the payload.
+
+async def epics_generate(proposal: Any, ctx: Any) -> dict[str, Any]:
+    resp = await _invoke(
+        _projects.generate_epics(
+            project_id=proposal.target_ref, request=ctx,
+            body=dict(proposal.payload or {}), user=_system_principal(),
+        )
+    )
+    return {"result_ref": _id_from(resp, "artifact_id", "id") or proposal.target_ref}
+
+
+async def features_generate(proposal: Any, ctx: Any) -> dict[str, Any]:
+    payload = proposal.payload or {}
+    resp = await _invoke(
+        _projects.generate_features(
+            project_id=proposal.target_ref, epic_id=payload.get("epic_id"),
+            request=ctx, body=dict(payload), user=_system_principal(),
+        )
+    )
+    return {"result_ref": _id_from(resp, "artifact_id", "id") or payload.get("epic_id")}
+
+
+async def tasks_generate(proposal: Any, ctx: Any) -> dict[str, Any]:
+    payload = _payload_for(_projects.TasksGenerateBody, proposal.payload)
+    body = _projects.TasksGenerateBody(**payload) if payload else None
+    resp = await _invoke(
+        _projects.generate_tasks(
+            project_id=proposal.target_ref, request=ctx, body=body, user=_system_principal()
+        )
+    )
+    return {"result_ref": _id_from(resp, "artifact_id", "id", "version") or proposal.target_ref}
+
+
+async def buildplan_generate(proposal: Any, ctx: Any) -> dict[str, Any]:
+    resp = await _invoke(
+        _projects.generate_build_plan(
+            project_id=proposal.target_ref, request=ctx,
+            body=dict(proposal.payload or {}), user=_system_principal(),
+        )
+    )
+    return {"result_ref": _id_from(resp, "id", "summary") or proposal.target_ref}
+
+
 # ── registration ─────────────────────────────────────────────────────────────
 
 # action_type -> handler. Only the P3 actions with a real handler today; the rest
@@ -130,6 +176,10 @@ _HANDLERS = {
     "project.brief.set": project_set_brief,
     "prd.generate": prd_generate,
     "apispec.generate": apispec_generate,
+    "epics.generate": epics_generate,
+    "features.generate": features_generate,
+    "tasks.generate": tasks_generate,
+    "buildplan.generate": buildplan_generate,
 }
 
 
