@@ -159,6 +159,42 @@ services:
       start_period: 15s
       retries: 3
 
+  # ── HAI-06 — agent-team-mcp: the MCP server Hermes connects to ──────────
+  # Thin MCP adapter over the backend REST API (streamable-HTTP, FR-002). On
+  # dev-net so it reaches the backend at the service hostname `backend:8000`;
+  # port 9000 is published so a Hermes instance on the host can connect to
+  # http://localhost:9000/mcp. AGENT_TEAM_SERVICE_TOKEN is minted via
+  # POST /api/v1/service-tokens and set in .env (empty until then — the server
+  # still starts; the adapter just can't authenticate yet).
+  agent-team-mcp:
+    build:
+      context: ./mcp_server
+      dockerfile: Dockerfile
+    container_name: agent-team-mcp
+    ports:
+      - "9000:9000"
+    volumes:
+      # Bind-mount the source for dev (deps stay in the image's site-packages).
+      - ./mcp_server:/app
+    environment:
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=9000
+      - AGENT_TEAM_BACKEND_URL=http://backend:8000
+      - AGENT_TEAM_SERVICE_TOKEN=${AGENT_TEAM_SERVICE_TOKEN:-}
+    networks:
+      - dev-net
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      # The /mcp endpoint returns 406 to a bare GET, so probe the TCP port
+      # instead — "is the server listening" is the right liveness signal.
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 9000), 3).close()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
 volumes:
   # agent-team-data is now bind-mounted to ./data (see backend.volumes above)
   agent-team-reports:
