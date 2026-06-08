@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 logger = structlog.get_logger()
 
-from src.auth.service import get_current_user, require_role
+from src.auth.service import get_current_user, get_principal, require_role
 from src.core import project_templates as templates_mod
 from src.core.github_publisher import (
     GitHubPublishError,
@@ -215,7 +215,7 @@ async def list_templates(user: dict = Depends(get_current_user)):
 async def list_projects(
     request: Request,
     include_archived: bool = False,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_principal),  # HAI-12 — JWT or service token
 ):
     state = request.app.state.state_store
     projects = await state.list_projects(include_archived=include_archived)
@@ -478,7 +478,7 @@ async def create_project(
 async def get_project_detail(
     project_id: str,
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_principal),  # HAI-12 — JWT or service token
 ):
     state = request.app.state.state_store
     project = await state.get_project(project_id)

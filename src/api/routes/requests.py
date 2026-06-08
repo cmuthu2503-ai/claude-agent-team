@@ -252,7 +252,7 @@ async def list_requests(
 async def get_request_detail(
     request_id: str,
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_principal),  # HAI-11 — JWT or service token
 ):
     state = request.app.state.state_store
     req = await state.get_request(request_id)

@@ -24,3 +24,27 @@ tools:
     min_role: viewer
     method: GET
     path: /api/v1/requests
+
+  - name: monitor_get_request
+    description: "Full detail for one request: status, subtasks/stories, project, timings. Arg: request_id."
+    min_role: viewer
+    method: GET
+    path: /api/v1/requests/{request_id}
+
+  - name: monitor_list_projects
+    description: "List projects (optionally include archived)."
+    min_role: viewer
+    method: GET
+    path: /api/v1/projects
+
+  - name: monitor_get_project
+    description: "Project detail: status, build-plan rollup, settings. Arg: project_id."
+    min_role: viewer
+    method: GET
+    path: /api/v1/projects/{project_id}
+
+  - name: monitor_get_costs
+    description: "Token/cost rollups across the platform, or scoped to one project (arg: project_id)."
+    min_role: viewer
+    method: GET
+    path: /api/v1/cost/dashboard
