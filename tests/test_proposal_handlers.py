@@ -12,6 +12,7 @@ from src.models.base import (
     ProjectStatus,
     Proposal,
     ProposalStatus,
+    TaskStatus,
 )
 from src.state.sqlite_store import SQLiteStateStore
 
@@ -30,6 +31,12 @@ class _Ctx:
 
     def __init__(self, store):
         self.app = type("A", (), {"state": type("S", (), {"state_store": store})()})()
+
+
+def _reg() -> ProposalActionRegistry:
+    r = ProposalActionRegistry()
+    ph.register_all(r)
+    return r
 
 
 def _confirmed(action_type, target_ref=None, payload=None) -> Proposal:
@@ -153,3 +160,100 @@ async def test_epics_and_buildplan_target_the_project(monkeypatch):
     monkeypatch.setattr(projects_mod, "generate_build_plan", fake_bp)
     assert (await ph.epics_generate(_confirmed("epics.generate", "proj-1"), None))["result_ref"] == "epics-1"
     assert (await ph.buildplan_generate(_confirmed("buildplan.generate", "proj-1"), None))["result_ref"] == "bp-1"
+
+
+# ── HAI-41 — task.dispatch ───────────────────────────────────────────────────
+
+class _Task:
+    def __init__(self, tid):
+        self.task_id = tid
+        self.description = f"do {tid}"
+        self.title = tid
+        self.task_type = "feature_request"
+        self.priority = "medium"
+
+
+class _Req:
+    def __init__(self, rid):
+        self.request_id = rid
+
+
+class _DispatchCtx:
+    """ctx with a fake orchestrator + state recording dispatch calls."""
+
+    def __init__(self, tasks):
+        self._tasks = {t.task_id: t for t in tasks}
+        self.set_status = []
+        self.submitted = []
+        outer = self
+
+        class _State:
+            async def get_task(self, tid):
+                return outer._tasks.get(tid)
+
+            async def set_task_status(self, tid, status, request_id=None):
+                outer.set_status.append((tid, status, request_id))
+
+        class _Orch:
+            async def submit(self, **kw):
+                outer.submitted.append(kw)
+                return _Req(f"REQ-{len(outer.submitted)}")
+
+        self.app = type("A", (), {"state": type("S", (), {
+            "state_store": _State(), "orchestrator": _Orch(),
+        })()})()
+
+
+async def test_task_dispatch_submits_and_marks_dispatched():
+    ctx = _DispatchCtx([_Task("t1"), _Task("t2")])
+    proposal = _confirmed("task.dispatch", target_ref="proj-1", payload={"task_ids": ["t1", "t2"]})
+    out = await ph.task_dispatch(proposal, ctx)
+    assert out["result_ref"] == "REQ-1,REQ-2"
+    assert len(ctx.submitted) == 2
+    assert ctx.submitted[0]["project_id"] == "proj-1" and ctx.submitted[0]["source_task_id"] == "t1"
+    assert [s[1] for s in ctx.set_status] == [TaskStatus.DISPATCHED, TaskStatus.DISPATCHED]
+
+
+async def test_task_dispatch_no_tasks_fails():
+    ctx = _DispatchCtx([])
+    proposal = _confirmed("task.dispatch", target_ref="proj-1", payload={"task_ids": ["ghost"]})
+    out = await run_confirmed_proposal(proposal, _reg(), ctx)
+    assert out["status"] == "failed" and "no dispatchable" in out["error"]
+
+
+# ── HAI-42 — deploy / rollback ───────────────────────────────────────────────
+
+async def test_rollback_enqueues_and_is_idempotent(store):
+    reg = ProposalActionRegistry()
+    ph.register_all(reg)
+    p = _confirmed("rollback", target_ref="env:staging", payload={"env": "staging", "deploy_id": "d1"})
+
+    out1 = await run_confirmed_proposal(p, reg, ctx=_Ctx(store))
+    assert out1["status"] == "executed" and out1["result_ref"].startswith("rb-")
+    queued = await store.get_in_flight_rollback_for_env("staging")
+    assert queued is not None and queued.env == "staging"
+
+    # second confirmed rollback for the same env → returns the SAME row (idempotent)
+    out2 = await run_confirmed_proposal(p, reg, ctx=_Ctx(store))
+    assert out2["result_ref"] == out1["result_ref"]
+    assert len(await store.list_pending_rollback_requests()) == 1
+
+
+async def test_rollback_requires_env(store):
+    reg = ProposalActionRegistry()
+    ph.register_all(reg)
+    p = _confirmed("rollback", payload={})
+    out = await run_confirmed_proposal(p, reg, ctx=_Ctx(store))
+    assert out["status"] == "failed" and "env" in out["error"]
+
+
+async def test_deploy_invokes_route(monkeypatch):
+    seen = {}
+
+    async def fake_deploy(*, project_id, request, user):
+        seen["project_id"] = project_id
+        return {"data": {"status": "pending_deploy"}}
+
+    monkeypatch.setattr(projects_mod, "deploy_project", fake_deploy)
+    out = await ph.ops_deploy(_confirmed("deploy", target_ref="proj-1"), ctx=None)
+    assert out["result_ref"] == "proj-1" and seen["project_id"] == "proj-1"

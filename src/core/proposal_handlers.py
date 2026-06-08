@@ -18,12 +18,14 @@ the state store, orchestrator, etc.). Route functions are referenced via the
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import structlog
 from fastapi import HTTPException
 
 from src.api.routes import projects as _projects
+from src.models.base import RollbackRequest, TaskStatus
 
 logger = structlog.get_logger()
 
@@ -167,6 +169,77 @@ async def buildplan_generate(proposal: Any, ctx: Any) -> dict[str, Any]:
     return {"result_ref": _id_from(resp, "id", "summary") or proposal.target_ref}
 
 
+# ── HAI-41 — task.dispatch ───────────────────────────────────────────────────
+
+async def task_dispatch(proposal: Any, ctx: Any) -> dict[str, Any]:
+    """Dispatch one or more project tasks (payload: project_id + task_ids/task_id).
+    Mirrors auto_dispatch (BPD-24): orchestrator.submit per task, then mark it
+    DISPATCHED. This is the handler HAI-46 routes governed auto-dispatch through."""
+    state = ctx.app.state.state_store
+    orchestrator = ctx.app.state.orchestrator
+    payload = proposal.payload or {}
+    project_id = proposal.target_ref or payload.get("project_id")
+    task_ids = payload.get("task_ids") or ([payload["task_id"]] if payload.get("task_id") else [])
+
+    dispatched: list[str] = []
+    for tid in task_ids:
+        task = await state.get_task(tid)
+        if task is None:
+            continue
+        new_req = await orchestrator.submit(
+            description=task.description or task.title,
+            task_type=getattr(task, "task_type", "feature_request"),
+            priority=getattr(task, "priority", "medium"),
+            created_by="proposal:task.dispatch",
+            project_id=project_id,
+            source_task_id=task.task_id,
+        )
+        await state.set_task_status(tid, TaskStatus.DISPATCHED, request_id=new_req.request_id)
+        dispatched.append(new_req.request_id)
+
+    if not dispatched:
+        raise RuntimeError("task.dispatch: no dispatchable task resolved from payload")
+    return {"result_ref": ",".join(dispatched)}
+
+
+# ── HAI-42 — deploy / rollback (admin scope) ─────────────────────────────────
+
+async def ops_deploy(proposal: Any, ctx: Any) -> dict[str, Any]:
+    """Deploy a project (target_ref = project id) via the existing 202 deploy route;
+    the host supervisor picks it up."""
+    await _invoke(
+        _projects.deploy_project(
+            project_id=proposal.target_ref, request=ctx, user=_system_principal()
+        )
+    )
+    return {"result_ref": proposal.target_ref}
+
+
+async def ops_rollback(proposal: Any, ctx: Any) -> dict[str, Any]:
+    """Enqueue a RollbackRequest row for the host supervisor (there is no /rollback
+    REST endpoint — AET-29 hand-off). Idempotent: if a rollback is already in flight
+    for the env, return that one instead of queuing a duplicate. HAI-47 routes
+    governed auto-rollback through here."""
+    state = ctx.app.state.state_store
+    payload = proposal.payload or {}
+    env = payload.get("env")
+    if not env:
+        raise RuntimeError("rollback: 'env' is required in payload")
+
+    existing = await state.get_in_flight_rollback_for_env(env)
+    if existing is not None:
+        return {"result_ref": existing.request_id}
+
+    req = RollbackRequest(
+        request_id=f"rb-{uuid.uuid4().hex[:12]}",
+        deploy_id=payload.get("deploy_id", ""),
+        env=env,
+        reason=payload.get("reason", "operator-confirmed rollback proposal"),
+    )
+    await state.insert_rollback_request(req)
+    return {"result_ref": req.request_id}
+
+
 # ── registration ─────────────────────────────────────────────────────────────
 
 # action_type -> handler. Only the P3 actions with a real handler today; the rest
@@ -180,6 +253,9 @@ _HANDLERS = {
     "features.generate": features_generate,
     "tasks.generate": tasks_generate,
     "buildplan.generate": buildplan_generate,
+    "task.dispatch": task_dispatch,
+    "deploy": ops_deploy,
+    "rollback": ops_rollback,
 }
 
 
