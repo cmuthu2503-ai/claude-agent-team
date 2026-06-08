@@ -76,6 +76,12 @@ services:
       # local dev works without Claude Platform on AWS creds. Real creds, if
       # present, always win. NEVER set this in staging/prod (those hard-fail).
       - ALLOW_MOCK_MODE=${ALLOW_MOCK_MODE:-true}
+      # HAI-17/18/54 — outbound push bridge. Set PUSH_WEBHOOK_URL (a Hermes
+      # inbound webhook) in .env to forward request.failed / request.completed /
+      # deploy_health.anomaly_detected. Empty = off (Hermes uses scheduled pull).
+      - PUSH_WEBHOOK_URL=${PUSH_WEBHOOK_URL:-}
+      - PUSH_WEBHOOK_SECRET=${PUSH_WEBHOOK_SECRET:-}
+      - PUSH_EVENTS=${PUSH_EVENTS:-}
       # Claude Platform on AWS — see docs/setup-claude-platform-on-aws.md.
       # ANTHROPIC_AWS_API_KEY and ANTHROPIC_AWS_WORKSPACE_ID come from .env.
       - AWS_REGION=${AWS_REGION:-us-east-1}

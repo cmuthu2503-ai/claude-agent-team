@@ -303,6 +303,33 @@ async def lifespan(app: FastAPI):
     )
     logger.info("anomaly_sweeper_started")
 
+    # HAI-17/18 — outbound push bridge. Forwards curated events (request.failed,
+    # request.completed, deploy_health.anomaly_detected) to a Hermes inbound
+    # webhook so Hermes is pinged in real time. Registered ONLY when
+    # PUSH_WEBHOOK_URL is set; otherwise push is off and Hermes relies on its
+    # scheduled pull (FR-073). Soft-fails — a delivery error never blocks events.
+    _push_url = os.getenv("PUSH_WEBHOOK_URL", "").strip()
+    if _push_url:
+        from src.core.push_bridge import PushBridge
+
+        _push_events_env = os.getenv("PUSH_EVENTS", "").strip()
+        _push_events = (
+            {e.strip() for e in _push_events_env.split(",") if e.strip()}
+            if _push_events_env
+            else None
+        )
+        push_bridge = PushBridge(
+            _push_url,
+            events=_push_events,
+            secret=os.getenv("PUSH_WEBHOOK_SECRET") or None,
+        )
+        events.on(push_bridge.handler)
+        push_bridge.start()  # background delivery worker (HAI-54)
+        app.state.push_bridge = push_bridge
+        logger.info("push_bridge_registered", events=sorted(_push_events) if _push_events else "default")
+    else:
+        logger.info("push_bridge_disabled", reason="PUSH_WEBHOOK_URL not set; Hermes uses pull")
+
     logger.info("backend_started", environment=ENVIRONMENT)
     yield
 
@@ -312,6 +339,11 @@ async def lifespan(app: FastAPI):
         sweeper.cancel()
         with suppress(asyncio.CancelledError, Exception):
             await sweeper
+
+    # HAI-17/54 — stop the push-bridge worker cleanly.
+    push_bridge = getattr(app.state, "push_bridge", None)
+    if push_bridge is not None:
+        await push_bridge.stop()
 
     # KB-26 — cancel the consolidation job cleanly.
     consolidation = getattr(app.state, "kb_consolidation_task", None)
