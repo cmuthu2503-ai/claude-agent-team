@@ -93,3 +93,24 @@ async def test_transition_proposal_is_atomic_cas(store):
     got = await store.get_proposal("prop-1")
     assert got.status == ProposalStatus.CONFIRMED
     assert got.decided_by == "bob"
+
+
+# ── HAI-30 — one-time approval token (single-use, hash-matched) ───────────────
+
+async def test_consume_approval_token_single_use(store):
+    await store.create_proposal(_p(approval_token_hash="hash-abc"))
+    # correct hash, unused → spent once
+    assert await store.consume_approval_token("prop-1", "hash-abc") is True
+    # reuse → False (already spent)
+    assert await store.consume_approval_token("prop-1", "hash-abc") is False
+    assert (await store.get_proposal("prop-1")).approval_token_used is True
+
+
+async def test_consume_approval_token_wrong_hash(store):
+    await store.create_proposal(_p(approval_token_hash="hash-abc"))
+    assert await store.consume_approval_token("prop-1", "wrong-hash") is False
+    assert (await store.get_proposal("prop-1")).approval_token_used is False
+
+
+async def test_consume_approval_token_unknown_proposal(store):
+    assert await store.consume_approval_token("nope", "hash-abc") is False

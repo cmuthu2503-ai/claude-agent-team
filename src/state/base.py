@@ -783,6 +783,9 @@ class StateStore(ABC):
         self, proposal_id: str, expected_status: str, new_status: str, **fields,
     ) -> bool: ...
 
+    @abstractmethod
+    async def consume_approval_token(self, proposal_id: str, hashed_token: str) -> bool: ...
+
     # ── Lifecycle ────────────────────────────────
 
     @abstractmethod

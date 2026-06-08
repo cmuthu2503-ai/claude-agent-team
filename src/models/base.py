@@ -275,6 +275,11 @@ class Proposal(BaseModel):
     result_ref: str | None = None
     error: str | None = None
     idempotency_key: str | None = None
+    # HAI-30 — one-time channel-approval token (hash only; raw is delivered to the
+    # human via the proposal.created event, never the API response). Never exposed
+    # by the route's _public serializer.
+    approval_token_hash: str | None = None
+    approval_token_used: bool = False
 
     @property
     def is_terminal(self) -> bool:

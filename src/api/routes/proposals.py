@@ -1,20 +1,22 @@
-"""Proposal endpoints (HAI-23 / FR-031).
+"""Proposal endpoints — the approval gate (HAI-23/26/27/28/30).
 
-Create a PENDING proposal — the ONLY way a service principal (Hermes) can request
-a state change (the write-block, HAI-51, lets a service token reach exactly this
-route and nothing else mutating). Creating a proposal has NO side effects beyond
-persisting it and emitting ``proposal.created``; it executes only after a human
-confirms it (HAI-26). Confirm/reject and list land in later P2 tasks.
+Create a PENDING proposal (the ONLY way a service principal can request a state
+change), then a HUMAN confirms or rejects it. Two human paths:
+  * Dashboard: POST /{id}/confirm | /{id}/reject  (JWT, get_current_user)
+  * Channel:   POST /{id}/approve {token, decision} (a one-time token delivered to
+               the human via the proposal.created event — never to the proposer)
+Reads (list/get) are open to JWT or service token so Hermes can poll the queue.
 """
 
+import secrets
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from src.auth.service import get_current_user, get_principal, principal_actor
+from src.auth.service import get_current_user, get_principal, hash_service_token, principal_actor
 from src.core.proposal_dispatcher import run_confirmed_proposal
 from src.models.base import Proposal, ProposalStatus
 
@@ -35,7 +37,14 @@ class RejectProposalBody(BaseModel):
     reason: str | None = None
 
 
+class ApproveProposalBody(BaseModel):
+    token: str
+    decision: Literal["confirm", "reject"] = "confirm"
+    reason: str | None = None
+
+
 def _public(p: Proposal) -> dict:
+    # NOTE: never exposes approval_token_hash.
     return {
         "proposal_id": p.proposal_id,
         "action_type": p.action_type,
@@ -53,71 +62,9 @@ def _public(p: Proposal) -> dict:
     }
 
 
-@router.post("", status_code=201)
-async def create_proposal(
-    body: CreateProposalBody,
-    request: Request,
-    # JWT or service token — Hermes (service) reaches this via the write-block
-    # allow-list; humans can also propose.
-    principal: dict = Depends(get_principal),
-):
-    """Create a pending proposal. No side effects beyond persisting + emitting
-    ``proposal.created`` (FR-031). Idempotent on ``idempotency_key`` (FR-035a):
-    a repeat returns the existing proposal instead of a duplicate."""
-    action_type = (body.action_type or "").strip()
-    if not action_type:
-        raise HTTPException(status_code=400, detail="action_type is required")
+# ── shared confirm/reject logic (used by both the JWT and token paths) ────────
 
-    state = request.app.state.state_store
-    events = getattr(request.app.state, "events", None)
-
-    # FR-035a — dedup on idempotency key (guards client retries / re-prompts).
-    if body.idempotency_key:
-        existing = await state.get_proposal_by_idempotency_key(body.idempotency_key)
-        if existing is not None:
-            return {
-                "data": _public(existing),
-                "meta": {"idempotent_replay": True},
-                "error": None,
-            }
-
-    proposal = Proposal(
-        proposal_id=f"prop-{uuid.uuid4().hex[:12]}",
-        action_type=action_type,
-        target_ref=body.target_ref,
-        payload=body.payload or {},
-        proposed_by=principal_actor(principal),
-        ttl_seconds=body.ttl_seconds if (body.ttl_seconds and body.ttl_seconds > 0) else _DEFAULT_TTL_SECONDS,
-        idempotency_key=body.idempotency_key,
-    )
-    await state.create_proposal(proposal)
-
-    if events is not None:
-        await events.emit(
-            "proposal.created",
-            {
-                "proposal_id": proposal.proposal_id,
-                "action_type": proposal.action_type,
-                "proposed_by": proposal.proposed_by,
-                "target_ref": proposal.target_ref,
-            },
-        )
-    return {"data": _public(proposal), "meta": None, "error": None}
-
-
-@router.post("/{proposal_id}/confirm")
-async def confirm_proposal(
-    proposal_id: str,
-    request: Request,
-    # HUMAN-ONLY (FR-038): get_current_user accepts a JWT only — a service token
-    # is not a JWT, so it fails auth here and can never self-approve. (The
-    # write-block middleware also rejects a service token on this path.)
-    user: dict = Depends(get_current_user),
-):
-    """Confirm a pending proposal and execute it. pending→confirmed (atomic CAS)
-    → run the action via the central guarded dispatcher (HAI-25) → executed |
-    failed. Emits proposal.confirmed, then proposal.executed | proposal.failed.
-    """
+async def _do_confirm(request: Request, proposal_id: str, decided_by: str) -> Proposal:
     state = request.app.state.state_store
     registry = request.app.state.proposal_registry
     events = getattr(request.app.state, "events", None)
@@ -126,18 +73,11 @@ async def confirm_proposal(
     if proposal is None:
         raise HTTPException(status_code=404, detail="Proposal not found")
     if proposal.status != ProposalStatus.PENDING:
-        raise HTTPException(
-            status_code=409, detail=f"Proposal is '{proposal.status}', not pending"
-        )
+        raise HTTPException(status_code=409, detail=f"Proposal is '{proposal.status}', not pending")
 
-    decided_by = principal_actor(user)
-    # Atomic pending→confirmed — one winner if two confirms race or expiry fires.
     won = await state.transition_proposal(
-        proposal_id,
-        ProposalStatus.PENDING,
-        ProposalStatus.CONFIRMED,
-        decided_by=decided_by,
-        decided_at=datetime.utcnow().isoformat(),
+        proposal_id, ProposalStatus.PENDING, ProposalStatus.CONFIRMED,
+        decided_by=decided_by, decided_at=datetime.utcnow().isoformat(),
     )
     if not won:
         current = await state.get_proposal(proposal_id)
@@ -146,9 +86,10 @@ async def confirm_proposal(
             detail=f"Proposal is no longer pending (now '{current.status if current else 'gone'}')",
         )
     if events is not None:
-        await events.emit("proposal.confirmed", {"proposal_id": proposal_id, "decided_by": decided_by})
+        await events.emit(
+            "proposal.confirmed", {"proposal_id": proposal_id, "decided_by": decided_by}
+        )
 
-    # Execute through the central guard (refuses anything not confirmed).
     confirmed = await state.get_proposal(proposal_id)
     outcome = await run_confirmed_proposal(confirmed, registry, request)
     await state.update_proposal(
@@ -170,40 +111,24 @@ async def confirm_proposal(
                 "error": outcome["error"],
             },
         )
-
-    final = await state.get_proposal(proposal_id)
-    return {"data": _public(final), "meta": None, "error": None}
+    return await state.get_proposal(proposal_id)
 
 
-@router.post("/{proposal_id}/reject")
-async def reject_proposal(
-    proposal_id: str,
-    request: Request,
-    body: RejectProposalBody | None = None,
-    user: dict = Depends(get_current_user),   # HUMAN-ONLY (FR-038), like confirm
-):
-    """Reject a pending proposal — the action never runs (FR-033). The optional
-    reason is stored in ``error`` and broadcast on proposal.rejected."""
+async def _do_reject(
+    request: Request, proposal_id: str, decided_by: str, reason: str | None
+) -> Proposal:
     state = request.app.state.state_store
     events = getattr(request.app.state, "events", None)
-    reason = (body.reason if body else None) or None
 
     proposal = await state.get_proposal(proposal_id)
     if proposal is None:
         raise HTTPException(status_code=404, detail="Proposal not found")
     if proposal.status != ProposalStatus.PENDING:
-        raise HTTPException(
-            status_code=409, detail=f"Proposal is '{proposal.status}', not pending"
-        )
+        raise HTTPException(status_code=409, detail=f"Proposal is '{proposal.status}', not pending")
 
-    decided_by = principal_actor(user)
     won = await state.transition_proposal(
-        proposal_id,
-        ProposalStatus.PENDING,
-        ProposalStatus.REJECTED,
-        decided_by=decided_by,
-        decided_at=datetime.utcnow().isoformat(),
-        error=reason,
+        proposal_id, ProposalStatus.PENDING, ProposalStatus.REJECTED,
+        decided_by=decided_by, decided_at=datetime.utcnow().isoformat(), error=reason,
     )
     if not won:
         current = await state.get_proposal(proposal_id)
@@ -216,7 +141,119 @@ async def reject_proposal(
             "proposal.rejected",
             {"proposal_id": proposal_id, "decided_by": decided_by, "reason": reason},
         )
-    final = await state.get_proposal(proposal_id)
+    return await state.get_proposal(proposal_id)
+
+
+# ── routes ───────────────────────────────────────────────────────────────────
+
+@router.post("", status_code=201)
+async def create_proposal(
+    body: CreateProposalBody,
+    request: Request,
+    principal: dict = Depends(get_principal),   # JWT or service token
+):
+    """Create a pending proposal. No side effects beyond persisting + emitting
+    ``proposal.created`` (FR-031). Idempotent on ``idempotency_key`` (FR-035a).
+
+    Generates a one-time approval token (HAI-30): only its hash is stored; the RAW
+    token is included in the ``proposal.created`` event (delivered to the human via
+    push/dashboard) but NEVER in this API response — so the proposer can't get it.
+    """
+    action_type = (body.action_type or "").strip()
+    if not action_type:
+        raise HTTPException(status_code=400, detail="action_type is required")
+
+    state = request.app.state.state_store
+    events = getattr(request.app.state, "events", None)
+
+    if body.idempotency_key:
+        existing = await state.get_proposal_by_idempotency_key(body.idempotency_key)
+        if existing is not None:
+            return {"data": _public(existing), "meta": {"idempotent_replay": True}, "error": None}
+
+    raw_approval_token = secrets.token_urlsafe(32)
+    proposal = Proposal(
+        proposal_id=f"prop-{uuid.uuid4().hex[:12]}",
+        action_type=action_type,
+        target_ref=body.target_ref,
+        payload=body.payload or {},
+        proposed_by=principal_actor(principal),
+        ttl_seconds=(
+            body.ttl_seconds
+            if (body.ttl_seconds and body.ttl_seconds > 0)
+            else _DEFAULT_TTL_SECONDS
+        ),
+        idempotency_key=body.idempotency_key,
+        approval_token_hash=hash_service_token(raw_approval_token),
+    )
+    await state.create_proposal(proposal)
+
+    if events is not None:
+        await events.emit(
+            "proposal.created",
+            {
+                "proposal_id": proposal.proposal_id,
+                "action_type": proposal.action_type,
+                "proposed_by": proposal.proposed_by,
+                "target_ref": proposal.target_ref,
+                # Delivered to the HUMAN (push/dashboard). Hermes only gets the API
+                # response below, which omits it.
+                "approval_token": raw_approval_token,
+            },
+        )
+    return {"data": _public(proposal), "meta": None, "error": None}
+
+
+@router.post("/{proposal_id}/confirm")
+async def confirm_proposal(
+    proposal_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),   # HUMAN-ONLY (FR-038)
+):
+    """Confirm + execute a pending proposal (dashboard path). pending→confirmed
+    (atomic CAS) → run via the guarded dispatcher → executed | failed."""
+    final = await _do_confirm(request, proposal_id, principal_actor(user))
+    return {"data": _public(final), "meta": None, "error": None}
+
+
+@router.post("/{proposal_id}/reject")
+async def reject_proposal(
+    proposal_id: str,
+    request: Request,
+    body: RejectProposalBody | None = None,
+    user: dict = Depends(get_current_user),   # HUMAN-ONLY (FR-038)
+):
+    """Reject a pending proposal — the action never runs (FR-033)."""
+    reason = (body.reason if body else None) or None
+    final = await _do_reject(request, proposal_id, principal_actor(user), reason)
+    return {"data": _public(final), "meta": None, "error": None}
+
+
+@router.post("/{proposal_id}/approve")
+async def approve_proposal(
+    proposal_id: str,
+    body: ApproveProposalBody,
+    request: Request,
+):
+    """Approve (confirm or reject) a proposal with the one-time channel token
+    (HAI-30 / FR-038) — no dashboard JWT needed. The token IS the authority: it was
+    delivered only to the human via the proposal.created event, is single-use, and
+    a service-token bearer is blocked from this path by the write-block. Still human
+    authority — Hermes never has the token, so it can't self-approve.
+    """
+    state = request.app.state.state_store
+    if await state.get_proposal(proposal_id) is None:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+
+    # Spend the token atomically (single-use). Wrong/used token → 403.
+    ok = await state.consume_approval_token(proposal_id, hash_service_token(body.token))
+    if not ok:
+        raise HTTPException(status_code=403, detail="Invalid or already-used approval token")
+
+    if body.decision == "reject":
+        final = await _do_reject(request, proposal_id, "channel:one-time-token", body.reason)
+    else:
+        final = await _do_confirm(request, proposal_id, "channel:one-time-token")
     return {"data": _public(final), "meta": None, "error": None}
 
 
@@ -227,8 +264,7 @@ async def list_proposals(
     action_type: str | None = None,
     proposed_by: str | None = None,
     limit: int = 100,
-    # Read — JWT or service token, so Hermes can poll "what's awaiting approval".
-    principal: dict = Depends(get_principal),
+    principal: dict = Depends(get_principal),   # JWT or service token (Hermes polls)
 ):
     """List proposals (newest first) with optional status / action_type /
     proposed_by filters (FR-034, FR-080)."""

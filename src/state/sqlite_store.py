@@ -667,7 +667,13 @@ CREATE TABLE IF NOT EXISTS proposals (
     ttl_seconds      INTEGER NOT NULL DEFAULT 86400,
     result_ref       TEXT,
     error            TEXT,
-    idempotency_key  TEXT UNIQUE
+    idempotency_key  TEXT UNIQUE,
+    -- HAI-30 (FR-038) — one-time channel-approval token. Only the SHA-256 hash
+    -- is stored; the raw token is delivered to the HUMAN via the proposal.created
+    -- event (push/dashboard), never in the API create response, so the service
+    -- principal that created the proposal can't obtain it to self-approve.
+    approval_token_hash  TEXT,
+    approval_token_used  INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
 CREATE INDEX IF NOT EXISTS idx_proposals_created ON proposals(created_at);
@@ -887,6 +893,10 @@ class SQLiteStateStore(StateStore):
             # users non-curators; admins/developers are implicit curators in
             # the app layer regardless of this column.
             "ALTER TABLE users ADD COLUMN kb_curator_scopes TEXT NOT NULL DEFAULT '[]'",
+            # HAI-30 — one-time channel-approval token on proposals (the table was
+            # added the same session, so existing dev DBs need these columns).
+            "ALTER TABLE proposals ADD COLUMN approval_token_hash TEXT",
+            "ALTER TABLE proposals ADD COLUMN approval_token_used INTEGER NOT NULL DEFAULT 0",
         ]
         for stmt in migrations:
             try:
@@ -4259,6 +4269,8 @@ class SQLiteStateStore(StateStore):
             result_ref=row["result_ref"],
             error=row["error"],
             idempotency_key=row["idempotency_key"],
+            approval_token_hash=row["approval_token_hash"],
+            approval_token_used=bool(row["approval_token_used"]),
         )
 
     async def create_proposal(self, proposal: Proposal) -> str:
@@ -4266,8 +4278,9 @@ class SQLiteStateStore(StateStore):
         await db.execute(
             """INSERT INTO proposals
                (proposal_id, action_type, target_ref, payload_json, status,
-                proposed_by, created_at, ttl_seconds, idempotency_key)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                proposed_by, created_at, ttl_seconds, idempotency_key,
+                approval_token_hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 proposal.proposal_id,
                 proposal.action_type,
@@ -4278,10 +4291,24 @@ class SQLiteStateStore(StateStore):
                 proposal.created_at.isoformat(),
                 proposal.ttl_seconds,
                 proposal.idempotency_key,
+                proposal.approval_token_hash,
             ),
         )
         await db.commit()
         return proposal.proposal_id
+
+    async def consume_approval_token(self, proposal_id: str, hashed_token: str) -> bool:
+        """HAI-30 — atomically spend a proposal's one-time approval token. Returns
+        True only if the token matches AND was unused (single-use); sets used=1 in
+        the same statement so two channel-approvals can't both win."""
+        db = await self._get_db()
+        cur = await db.execute(
+            "UPDATE proposals SET approval_token_used = 1 "
+            "WHERE proposal_id = ? AND approval_token_hash = ? AND approval_token_used = 0",
+            (proposal_id, hashed_token),
+        )
+        await db.commit()
+        return cur.rowcount > 0
 
     async def get_proposal(self, proposal_id: str) -> Proposal | None:
         db = await self._get_db()
