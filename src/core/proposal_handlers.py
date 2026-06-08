@@ -240,6 +240,32 @@ async def ops_rollback(proposal: Any, ctx: Any) -> dict[str, Any]:
     return {"result_ref": req.request_id}
 
 
+# ── HAI-33/34/35 — request.submit (service submits forced through the gate) ──
+
+async def request_submit(proposal: Any, ctx: Any) -> dict[str, Any]:
+    """Submit a Request from a CONFIRMED request.submit proposal. A service token
+    can't POST /requests directly (the write-block forces it to propose, HAI-35);
+    this is the execution side. The proposed project_id + rationale ride in the
+    payload (HAI-33); a missing project_id falls through to Unassigned via
+    orchestrator.submit's default, so the operator consciously confirmed an
+    Unassigned submit (HAI-34). Human dashboard submits are unchanged (still direct).
+    """
+    orchestrator = ctx.app.state.orchestrator
+    payload = proposal.payload or {}
+    description = (payload.get("description") or "").strip()
+    if not description:
+        raise RuntimeError("request.submit: 'description' is required in payload")
+
+    req = await orchestrator.submit(
+        description=description,
+        task_type=payload.get("task_type", "feature_request"),
+        priority=payload.get("priority", "medium"),
+        created_by=proposal.proposed_by or "proposal:request.submit",
+        project_id=payload.get("project_id") or proposal.target_ref,  # None → Unassigned
+    )
+    return {"result_ref": req.request_id}
+
+
 # ── registration ─────────────────────────────────────────────────────────────
 
 # action_type -> handler. Only the P3 actions with a real handler today; the rest
@@ -256,6 +282,7 @@ _HANDLERS = {
     "task.dispatch": task_dispatch,
     "deploy": ops_deploy,
     "rollback": ops_rollback,
+    "request.submit": request_submit,
 }
 
 

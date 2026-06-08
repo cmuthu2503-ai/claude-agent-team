@@ -257,3 +257,42 @@ async def test_deploy_invokes_route(monkeypatch):
     monkeypatch.setattr(projects_mod, "deploy_project", fake_deploy)
     out = await ph.ops_deploy(_confirmed("deploy", target_ref="proj-1"), ctx=None)
     assert out["result_ref"] == "proj-1" and seen["project_id"] == "proj-1"
+
+
+# ── HAI-33/34/35 — request.submit ────────────────────────────────────────────
+
+class _SubmitCtx:
+    def __init__(self):
+        self.calls = []
+        outer = self
+
+        class _Orch:
+            async def submit(self, **kw):
+                outer.calls.append(kw)
+                return _Req("REQ-NEW")
+
+        self.app = type("A", (), {"state": type("S", (), {"orchestrator": _Orch()})()})()
+
+
+async def test_request_submit_uses_inferred_project(monkeypatch):
+    ctx = _SubmitCtx()
+    proposal = _confirmed(
+        "request.submit", payload={"description": "build X", "project_id": "proj-7", "rationale": "guess"}
+    )
+    out = await ph.request_submit(proposal, ctx)
+    assert out["result_ref"] == "REQ-NEW"
+    assert ctx.calls[0]["project_id"] == "proj-7" and ctx.calls[0]["description"] == "build X"
+
+
+async def test_request_submit_unassigned_when_no_project():
+    ctx = _SubmitCtx()
+    proposal = _confirmed("request.submit", payload={"description": "build X"})
+    await ph.request_submit(proposal, ctx)
+    # None project_id → orchestrator.submit defaults it to Unassigned (HAI-34)
+    assert ctx.calls[0]["project_id"] is None
+
+
+async def test_request_submit_requires_description():
+    ctx = _SubmitCtx()
+    out = await run_confirmed_proposal(_confirmed("request.submit", payload={}), _reg(), ctx)
+    assert out["status"] == "failed" and "description" in out["error"]
