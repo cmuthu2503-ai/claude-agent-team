@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from src.auth.service import get_current_user, get_principal, hash_service_token, principal_actor
+from src.core.gate_audit import audit_service_principal_gating
 from src.core.gate_metrics import build_gate_metrics
 from src.core.proposal_dispatcher import run_confirmed_proposal
 from src.core.proposal_factory import new_proposal
@@ -324,6 +325,22 @@ async def gate_metrics(
     """
     state = request.app.state.state_store
     data = await build_gate_metrics(state, recent_window_seconds=window_seconds)
+    return {"data": data, "meta": None, "error": None}
+
+
+@router.get("/audit")
+async def gate_audit(
+    request: Request,
+    # Read — JWT or service token; the evidence is non-sensitive (ids + counts).
+    principal: dict = Depends(get_principal),
+):
+    """M1 audit evidence (HAI-50): proves a service principal never executed a gated
+    action without a human decision. Returns counts of service-proposed proposals
+    and any self-approved breach (must be empty). Declared BEFORE GET /{proposal_id}
+    so the static path wins over the path-param route.
+    """
+    state = request.app.state.state_store
+    data = await audit_service_principal_gating(state)
     return {"data": data, "meta": None, "error": None}
 
 

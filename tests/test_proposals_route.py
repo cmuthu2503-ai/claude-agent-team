@@ -474,3 +474,28 @@ async def test_metrics_path_not_captured_as_proposal_id(store):
     r = client.get("/api/v1/proposals/metrics")
     assert r.status_code == 200
     assert "pending_backlog_depth" in r.json()["data"]
+
+
+# ── HAI-50 — gate audit endpoint ─────────────────────────────────────────────
+
+async def test_audit_endpoint_returns_m1_evidence(store):
+    app = _make_app(store, registry=_registry_with_handler("OK"))
+    client = TestClient(app)
+    # service proposes (principal override is a service token), human confirms
+    pid = client.post("/api/v1/proposals", json={"action_type": "deploy"}).json()["data"]["proposal_id"]
+    client.post(f"/api/v1/proposals/{pid}/confirm")
+
+    r = client.get("/api/v1/proposals/audit")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["clean"] is True
+    assert data["ungated_executions"] == 0
+    assert data["service_proposed_executed"] == 1
+    assert data["executed_decided_by"] == ["alice"]      # the human confirmer
+
+
+async def test_audit_path_not_captured_as_proposal_id(store):
+    client = TestClient(_make_app(store))
+    r = client.get("/api/v1/proposals/audit")
+    assert r.status_code == 200
+    assert "ungated_executions" in r.json()["data"]
