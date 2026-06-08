@@ -1,5 +1,6 @@
 """Auth service — JWT tokens, password hashing, RBAC middleware."""
 
+import hashlib
 import secrets
 import uuid
 from datetime import datetime, timedelta
@@ -148,3 +149,59 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     auth_service: AuthService = request.app.state.auth_service
     return auth_service.decode_token(credentials.credentials)
+
+
+# ── Service-token auth (HAI-02 / FR-010..012) ────────────────────────────────
+
+
+def hash_service_token(raw: str) -> str:
+    """SHA-256 hex digest of a raw service token — the form persisted in the
+    ``service_tokens`` table. The raw token is never stored; auth re-hashes the
+    presented value and looks the hash up."""
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+async def get_service_principal(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
+    request: Request = None,
+) -> dict[str, Any]:
+    """FastAPI dependency: authenticate a long-lived SERVICE token presented as
+    ``Authorization: Bearer <token>`` (HAI-02, used by the headless Hermes Agent
+    integration).
+
+    Returns a principal payload shaped like a user payload (``sub`` / ``role`` /
+    ``kb_curator_scopes``) so existing route guards can treat it uniformly, but
+    tagged ``is_service_token=True`` so later layers can tell a MACHINE principal
+    from a human (the write-block FR-015a and the human-only proposal confirm
+    FR-038 both rely on this flag). Unknown and revoked tokens are rejected 401.
+    """
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+        )
+    state: StateStore = request.app.state.state_store
+    token = await state.get_service_token_by_hash(hash_service_token(credentials.credentials))
+    if token is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid service token"
+        )
+    if token.is_revoked:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Service token has been revoked"
+        )
+    # Stamp usage. Best-effort telemetry — a write hiccup must NOT block auth
+    # (mirrors the resolver's "DB blip can't break dispatch" rule). HAI-52 will
+    # debounce this so a chatty client doesn't write on every request.
+    try:
+        await state.touch_service_token_last_used(token.token_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("service_token_touch_failed", token_id=token.token_id, error=str(e))
+
+    return {
+        "sub": token.token_id,
+        "token_id": token.token_id,
+        "username": token.name,
+        "role": str(token.role),
+        "kb_curator_scopes": [],
+        "is_service_token": True,
+    }
