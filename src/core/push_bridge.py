@@ -14,8 +14,8 @@ Design (HAI-54 — bounded, non-blocking, durable-by-pull):
     scheduled PULL (FR-073) — any dropped/missed alert is reconciled on the next
     poll, so the gap window is ≤ the pull interval (FR-074).
 
-Scope in P1 (FR-075): only the three real, already-emitted events. ``proposal.*``
-forwarding is added in P2 (HAI-61).
+Scope: the three real request/deploy events PLUS the full ``proposal.*`` lifecycle
+(HAI-61), so Hermes is pinged when an action needs approval and when it resolves.
 """
 
 from __future__ import annotations
@@ -30,12 +30,59 @@ import structlog
 
 logger = structlog.get_logger()
 
-# Verified to be really emitted today: request.failed / request.completed
-# (orchestrator) and deploy_health.anomaly_detected (anomaly sweeper). NO
-# request.deployed (never emitted), NO proposal.* (don't exist until P2).
-DEFAULT_PUSH_EVENTS: frozenset[str] = frozenset(
+# Request/deploy events verified to be really emitted: request.failed /
+# request.completed (orchestrator) and deploy_health.anomaly_detected (anomaly
+# sweeper). NO request.deployed (never emitted).
+_REQUEST_PUSH_EVENTS: frozenset[str] = frozenset(
     {"request.failed", "request.completed", "deploy_health.anomaly_detected"}
 )
+
+# HAI-61 — the proposal lifecycle. proposal.created tells Hermes "an action needs
+# human approval"; the terminal ones tell it how its request resolved, so it can
+# stop waiting / react. (Producers: the proposals route + expiry sweeper + crash
+# recovery.)
+_PROPOSAL_PUSH_EVENTS: frozenset[str] = frozenset(
+    {
+        "proposal.created",
+        "proposal.confirmed",
+        "proposal.executed",
+        "proposal.failed",
+        "proposal.rejected",
+        "proposal.expired",
+    }
+)
+
+DEFAULT_PUSH_EVENTS: frozenset[str] = _REQUEST_PUSH_EVENTS | _PROPOSAL_PUSH_EVENTS
+
+# SECURITY (HAI-30 + HAI-61): the proposal.created event carries the raw one-time
+# approval token, which is delivered to the HUMAN's dashboard/event stream. The
+# push bridge forwards to HERMES — the *proposer*. Forwarding the token here would
+# let Hermes self-approve its own proposal, breaking the gate's core invariant.
+# So these keys are stripped from every forwarded payload, no exceptions.
+_REDACT_KEYS: frozenset[str] = frozenset({"approval_token", "approval_token_hash"})
+
+
+def _summarize_proposal(event_type: str, data: dict[str, Any]) -> str:
+    pid = data.get("proposal_id") or "?"
+    action = data.get("action_type")
+    tail = f" [{action}]" if action else ""
+    if event_type == "proposal.created":
+        tgt = data.get("target_ref")
+        return f"Approval needed: {action or 'action'} ({pid})" + (f" on {tgt}" if tgt else "")
+    if event_type == "proposal.confirmed":
+        return f"Proposal {pid} confirmed by {data.get('decided_by') or '?'}"
+    if event_type == "proposal.executed":
+        rr = data.get("result_ref")
+        return f"Proposal {pid} executed" + (f" → {rr}" if rr else "") + tail
+    if event_type == "proposal.failed":
+        err = str(data.get("error") or "").strip()
+        return f"Proposal {pid} FAILED" + (f": {err[:160]}" if err else "") + tail
+    if event_type == "proposal.rejected":
+        reason = str(data.get("reason") or "").strip()
+        return f"Proposal {pid} rejected" + (f": {reason[:160]}" if reason else "")
+    if event_type == "proposal.expired":
+        return f"Proposal {pid} expired unactioned" + tail
+    return f"{event_type} ({pid})"
 
 
 def _summarize(event_type: str, data: dict[str, Any]) -> str:
@@ -49,18 +96,24 @@ def _summarize(event_type: str, data: dict[str, Any]) -> str:
         env = data.get("environment") or data.get("env") or "?"
         verdict = data.get("verdict") or "ANOMALY"
         return f"Deploy anomaly in {env}: {verdict}"
+    if event_type.startswith("proposal."):
+        return _summarize_proposal(event_type, data)
     return f"{event_type} ({rid})"
 
 
 def _build_payload(event_type: str, data: dict[str, Any]) -> dict[str, Any]:
-    """Concise payload linking back to the request id (FR-072)."""
+    """Concise payload linking back to the request/proposal id (FR-072). Strips
+    secret keys (the one-time approval token) so the forwarded copy can never be
+    used to self-approve — see _REDACT_KEYS."""
+    detail = {k: v for k, v in data.items() if k not in _REDACT_KEYS}
     return {
         "source": "agent-team",
         "event": event_type,
         "request_id": data.get("request_id"),
+        "proposal_id": data.get("proposal_id"),
         "project_id": data.get("project_id"),
         "summary": _summarize(event_type, data),
-        "detail": data,
+        "detail": detail,
         "ts": datetime.utcnow().isoformat() + "Z",
     }
 
@@ -131,7 +184,9 @@ class PushBridge:
         Soft-fail: exhausting retries drops the event (logged) — pull reconciles."""
         for attempt in range(self._max_retries + 1):
             try:
-                async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+                async with httpx.AsyncClient(
+                    timeout=self._timeout, transport=self._transport
+                ) as client:
                     resp = await client.post(self._url, json=payload, headers=self._headers)
                 if resp.status_code < 400:
                     return True
