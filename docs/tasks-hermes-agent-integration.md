@@ -44,12 +44,12 @@
 
 | Phase | Theme | Total | Done | In Progress | Blocked | Not Started |
 |-------|-------|-------|------|-------------|---------|-------------|
-| P0 | Foundations (service token + MCP skeleton) | 12 | 8 | 0 | 0 | 4 |
+| P0 | Foundations (service token + MCP skeleton) | 12 | 10 | 0 | 0 | 2 |
 | P1 | Monitor (read-only + push) | 12 | 0 | 0 | 0 | 12 |
 | P2 | Approval Gate (proposals engine) | 21 | 0 | 0 | 0 | 21 |
 | P3 | Lifecycle Actions (gated) | 12 | 0 | 0 | 0 | 12 |
 | P4 | Autonomous-Loop Reconciliation | 6 | 0 | 0 | 0 | 6 |
-| **Total** | | **63** | **8** | **0** | **0** | **55** |
+| **Total** | | **63** | **10** | **0** | **0** | **53** |
 
 > Task IDs run HAI-01..HAI-63. IDs are unique but **not contiguous per phase** — HAI-51..63 were added in the v1.1 gap-review and slot into their dependency phase (P0: 51–53, P1: 54, P2: 55–63), not at the end. Sort by the Depends-On graph, not by ID number.
 
@@ -71,8 +71,8 @@ Service identity + MCP server skeleton. Goal: `hermes mcp test` succeeds against
 | HAI-05 | MCP server scaffold | New `agent-team-mcp` service (official MCP Python SDK, streamable HTTP transport). Project skeleton + Dockerfile. **Done:** `mcp_server/` package (`server.py` FastMCP + `ping` tool, `config.py` env, `requirements.txt`, `Dockerfile`, `README.md`). Verified: image builds, container starts, `StreamableHTTP session manager started`, `/mcp` serves (406 to a bare GET = endpoint live). | M | — | FR-001, FR-002 | `[x]` |
 | HAI-06 | Compose wiring | Add `agent-team-mcp` to compose with pinned `name:`, internal network access to backend, env for backend URL + service token. **Done:** `agent-team-mcp` service in `docker-compose.yml` (build `./mcp_server`, on `dev-net`, port 9000 published, `AGENT_TEAM_BACKEND_URL=http://backend:8000` + `AGENT_TEAM_SERVICE_TOKEN`, TCP healthcheck, depends_on backend healthy). Verified: comes up healthy + reaches `backend:8000` over the network. | S | HAI-05 | FR-001, NFR-006 | `[x]` |
 | HAI-07 | Thin REST-adapter client | HTTP client in the MCP server that calls backend `/api/v1` with the service token; structured error → recursive root-cause extraction. **Done:** `mcp_server/backend_client.py` (`BackendClient` get/post, Bearer service-token auth, unwraps the `{data,meta,error}` envelope, `BackendError` with recursive `root_cause` + envelope/`detail` message extraction); 8 tests (httpx.MockTransport) + a live end-to-end call against the backend. | M | HAI-05, HAI-02 | FR-003, FR-004, FR-007 | `[x]` |
-| HAI-08 | Tool manifest loader | YAML manifest declaring exposed tools + minimum role per tool; MCP server registers tools from it (no hardcoding). | M | HAI-05 | FR-005, FR-008, NFR-007 | `[ ]` |
-| HAI-09 | Health/ping + connect docs | MCP `ping`/`GET /healthz` reporting backend reachability + resolved role; ship `~/.hermes/config.yaml` snippet (pinned `transport: streamable_http` + bearer header) **and the token-rotation runbook** in `docs/setup-hermes-integration.md`. | S | HAI-06, HAI-07 | FR-006, FR-009, FR-015b, NFR-008 | `[ ]` |
+| HAI-08 | Tool manifest loader | YAML manifest declaring exposed tools + minimum role per tool; MCP server registers tools from it (no hardcoding). **Done:** `tools_manifest.yaml` + `manifest.py` (`load_manifest`, `role_allows` viewer⊂developer⊂admin, `tools_for_role`, `register_tools`) + `tool_impls.py` registry; server registers only role-allowed tools that have an impl. 4 tests. | M | HAI-05 | FR-005, FR-008, NFR-007 | `[x]` |
+| HAI-09 | Health/ping + connect docs | MCP `ping`/`GET /healthz` reporting backend reachability + resolved role; ship `~/.hermes/config.yaml` snippet (pinned `transport: streamable_http` + bearer header) **and the token-rotation runbook** in `docs/setup-hermes-integration.md`. **Done:** `ping` + `healthz` MCP tools (backend reachability + resolved role + registered tools); backend `GET /api/v1/service-tokens/me` whoami for role resolution; `docs/setup-hermes-integration.md` (config snippet + rotation runbook). Verified E2E: seeded viewer token → server resolved `role=viewer` and registered the tool. | S | HAI-06, HAI-07 | FR-006, FR-009, FR-015b, NFR-008 | `[x]` |
 
 ---
 

@@ -11,7 +11,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from src.auth.service import hash_service_token, require_role
+from src.auth.service import get_service_principal, hash_service_token, require_role
 from src.models.base import ServiceToken, UserRole
 
 router = APIRouter(prefix="/api/v1/service-tokens", tags=["service-tokens"])
@@ -34,6 +34,25 @@ def _public(t: ServiceToken) -> dict:
         "last_used_at": t.last_used_at.isoformat() if t.last_used_at else None,
         "revoked_at": t.revoked_at.isoformat() if t.revoked_at else None,
         "revoked": t.is_revoked,
+    }
+
+
+@router.get("/me")
+async def whoami(principal: dict = Depends(get_service_principal)):
+    """Echo the calling SERVICE token's own identity + resolved role (HAI-09 /
+    FR-006). Lets the agent-team-mcp server learn which role it holds so it can
+    register only the tools it's allowed to. Authenticated by the service token
+    itself (not admin) — a token can always read its own identity. GET, so the
+    write-block doesn't apply."""
+    return {
+        "data": {
+            "token_id": principal.get("token_id"),
+            "name": principal.get("username"),
+            "role": principal.get("role"),
+            "is_service_token": True,
+        },
+        "meta": None,
+        "error": None,
     }
 
 

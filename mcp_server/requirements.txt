@@ -1,5 +1,7 @@
-# agent-team-mcp dependencies (HAI-05)
+# agent-team-mcp dependencies (HAI-05/07/08)
 # Official MCP Python SDK — provides FastMCP + the streamable-HTTP transport.
 mcp>=1.2.0
 # HTTP client for the REST adapter (HAI-07) that calls the Agent Team backend.
 httpx>=0.27
+# Tool manifest parsing (HAI-08).
+pyyaml>=6.0
