@@ -1,0 +1,118 @@
+"""P3 (HAI-36..39) — gated-action handlers execute via the real route functions."""
+
+import pytest
+
+from src.api.routes import projects as projects_mod
+from src.core import proposal_handlers as ph
+from src.core.proposal_dispatcher import run_confirmed_proposal
+from src.core.proposal_registry import GATED_ACTION_TYPES, ProposalActionRegistry
+from src.models.base import (
+    ArtifactKind,
+    Project,
+    ProjectStatus,
+    Proposal,
+    ProposalStatus,
+)
+from src.state.sqlite_store import SQLiteStateStore
+
+
+@pytest.fixture
+async def store(tmp_path):
+    s = SQLiteStateStore(db_path=str(tmp_path / "ph.db"))
+    await s.initialize()
+    yield s
+    await s.close()
+
+
+class _Ctx:
+    """Minimal stand-in for the FastAPI Request the dispatcher passes as ctx —
+    route functions only touch request.app.state.state_store here."""
+
+    def __init__(self, store):
+        self.app = type("A", (), {"state": type("S", (), {"state_store": store})()})()
+
+
+def _confirmed(action_type, target_ref=None, payload=None) -> Proposal:
+    return Proposal(
+        proposal_id="p1", action_type=action_type, target_ref=target_ref,
+        payload=payload or {}, proposed_by="service:hermes", status=ProposalStatus.CONFIRMED,
+    )
+
+
+# ── registration ─────────────────────────────────────────────────────────────
+
+def test_register_all_only_registers_gated_actions():
+    reg = ProposalActionRegistry()
+    ph.register_all(reg)
+    registered = set(reg.registered_action_types())
+    assert {"project.create", "project.brief.set", "prd.generate", "apispec.generate"} <= registered
+    # every handler we register must be a real gated action_type
+    assert registered <= GATED_ACTION_TYPES
+
+
+# ── end-to-end through the dispatcher (real route, real store) ───────────────
+
+async def test_brief_set_runs_real_route_end_to_end(store):
+    await store.create_project(Project(project_id="proj-1", name="Atlas", status=ProjectStatus.ACTIVE))
+    reg = ProposalActionRegistry()
+    ph.register_all(reg)
+    proposal = _confirmed("project.brief.set", target_ref="proj-1", payload={"content": "x" * 120})
+
+    out = await run_confirmed_proposal(proposal, reg, ctx=_Ctx(store))
+    assert out["status"] == "executed"
+    assert out["result_ref"]                                   # an artifact id
+    # the brief artifact really landed in the store
+    art = await store.get_artifact("proj-1", ArtifactKind.BRIEF)
+    assert art is not None and art.content == "x" * 120
+
+
+async def test_brief_set_too_short_fails_cleanly(store):
+    await store.create_project(Project(project_id="proj-1", name="Atlas"))
+    reg = ProposalActionRegistry()
+    ph.register_all(reg)
+    proposal = _confirmed("project.brief.set", target_ref="proj-1", payload={"content": "short"})
+
+    out = await run_confirmed_proposal(proposal, reg, ctx=_Ctx(store))
+    assert out["status"] == "failed"
+    assert "at least" in out["error"]                          # route's 400 detail, readable
+
+
+async def test_brief_set_missing_project_fails_cleanly(store):
+    reg = ProposalActionRegistry()
+    ph.register_all(reg)
+    proposal = _confirmed("project.brief.set", target_ref="ghost", payload={"content": "x" * 120})
+    out = await run_confirmed_proposal(proposal, reg, ctx=_Ctx(store))
+    assert out["status"] == "failed"
+
+
+# ── payload → route mapping (monkeypatched routes, no LLM/network) ───────────
+
+async def test_project_create_defaults_create_repo_off(monkeypatch):
+    seen = {}
+
+    async def fake_create_project(*, body, request, user):
+        seen["create_repo"] = body.create_repo
+        seen["name"] = body.name
+        seen["role"] = user["role"]
+        return {"data": {"project_id": "proj-new"}}
+
+    monkeypatch.setattr(projects_mod, "create_project", fake_create_project)
+    proposal = _confirmed("project.create", payload={"name": "Atlas"})
+    out = await ph.project_create(proposal, ctx=None)
+    assert out["result_ref"] == "proj-new"
+    assert seen["create_repo"] is False                        # no surprise GitHub repo
+    assert seen["name"] == "Atlas"
+    assert seen["role"] == "admin"                             # system principal
+
+
+async def test_prd_generate_passes_target_and_body(monkeypatch):
+    seen = {}
+
+    async def fake_generate_prd(*, project_id, request, body, user):
+        seen["project_id"] = project_id
+        return {"data": {"artifact_id": "prd-9"}}
+
+    monkeypatch.setattr(projects_mod, "generate_prd", fake_generate_prd)
+    proposal = _confirmed("prd.generate", target_ref="proj-1", payload={})
+    out = await ph.prd_generate(proposal, ctx=None)
+    assert out["result_ref"] == "prd-9" and seen["project_id"] == "proj-1"

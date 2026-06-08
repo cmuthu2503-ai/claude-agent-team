@@ -166,6 +166,12 @@ async def lifespan(app: FastAPI):
 
     app.state.proposal_registry = ProposalActionRegistry()
 
+    # P3 (HAI-33..42) — register the gated-action handlers a confirmed proposal
+    # executes. Actions without a handler stay gated-but-unhandled (fail cleanly).
+    from src.core.proposal_handlers import register_all as _register_proposal_handlers
+
+    _register_proposal_handlers(app.state.proposal_registry)
+
     # HAI-63 — governed mode. When ON (the default — "nothing moves without my
     # approval"), in-process callers that mutate gated state route through the
     # approval gate (src.core.in_process_gate) and become proposals instead of
