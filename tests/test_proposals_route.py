@@ -86,6 +86,27 @@ async def test_idempotent_replay_returns_same_proposal(store):
     assert len(await store.list_proposals()) == 1               # no duplicate row
 
 
+async def test_idempotent_replay_emits_no_duplicate_event(store):
+    # HAI-55 — a retried create must NOT re-emit proposal.created, or Hermes/the
+    # push bridge would get a duplicate "approval needed" ping for one proposal.
+    app = _make_app(store)
+    client = TestClient(app)
+    client.post("/api/v1/proposals", json={"action_type": "deploy", "idempotency_key": "idem-1"})
+    client.post("/api/v1/proposals", json={"action_type": "deploy", "idempotency_key": "idem-1"})
+    created = [et for et, _ in app.state.captured if et == "proposal.created"]
+    assert created == ["proposal.created"]                      # exactly one, not two
+
+
+async def test_idempotency_key_persisted_for_dedup(store):
+    # The key is stored so the dedup survives a process restart (lookup is by DB).
+    client = TestClient(_make_app(store))
+    pid = client.post(
+        "/api/v1/proposals", json={"action_type": "deploy", "idempotency_key": "idem-persist"}
+    ).json()["data"]["proposal_id"]
+    again = await store.get_proposal_by_idempotency_key("idem-persist")
+    assert again is not None and again.proposal_id == pid
+
+
 async def test_human_proposer_attribution(store):
     client = TestClient(_make_app(store, principal={"sub": "u1", "username": "alice", "role": "admin"}))
     r = client.post("/api/v1/proposals", json={"action_type": "deploy"})
