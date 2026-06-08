@@ -12,7 +12,7 @@ from src.api.routes import proposals as proposals_route
 from src.auth.service import get_current_user, get_principal
 from src.core.events import EventEmitter
 from src.core.proposal_registry import ProposalActionRegistry
-from src.models.base import ProposalStatus
+from src.models.base import Project, ProjectStatus, ProposalStatus
 from src.state.sqlite_store import SQLiteStateStore
 
 
@@ -384,3 +384,66 @@ async def test_operator_can_repropose_after_failure(store):
     data2 = client.post(f"/api/v1/proposals/{pid2}/confirm").json()["data"]
     assert data2["status"] == "executed"
     assert data2["result_ref"] == "RETRY-OK"
+
+
+# ── HAI-59 — target integrity at confirm ─────────────────────────────────────
+
+def _project_registry(result_ref="PRD-OK"):
+    reg = ProposalActionRegistry()
+
+    async def handler(proposal, ctx):
+        return {"result_ref": result_ref}
+
+    reg.register("prd.generate", handler)
+    return reg
+
+
+async def test_confirm_fails_when_target_project_archived(store):
+    await store.create_project(Project(project_id="proj-1", name="Atlas", status=ProjectStatus.ARCHIVED))
+    app = _make_app(store, registry=_project_registry())
+    client = TestClient(app)
+    pid = client.post(
+        "/api/v1/proposals", json={"action_type": "prd.generate", "target_ref": "proj-1"}
+    ).json()["data"]["proposal_id"]
+
+    data = client.post(f"/api/v1/proposals/{pid}/confirm").json()["data"]
+    assert data["status"] == "failed"
+    assert "archived" in data["error"]
+    # emitted proposal.failed flagged as a target-integrity failure, NOT executed
+    evs = [(et, d) for et, d in app.state.captured]
+    assert any(et == "proposal.failed" and d.get("target_invalid") for et, d in evs)
+    assert "proposal.executed" not in [et for et, _ in evs]
+
+
+async def test_confirm_fails_when_target_project_deleted(store):
+    # no project created at all → get_project returns None
+    app = _make_app(store, registry=_project_registry())
+    client = TestClient(app)
+    pid = client.post(
+        "/api/v1/proposals", json={"action_type": "prd.generate", "target_ref": "ghost"}
+    ).json()["data"]["proposal_id"]
+    data = client.post(f"/api/v1/proposals/{pid}/confirm").json()["data"]
+    assert data["status"] == "failed"
+    assert "no longer exists" in data["error"]
+
+
+async def test_confirm_succeeds_when_target_project_active(store):
+    await store.create_project(Project(project_id="proj-1", name="Atlas", status=ProjectStatus.ACTIVE))
+    app = _make_app(store, registry=_project_registry("PRD-123"))
+    client = TestClient(app)
+    pid = client.post(
+        "/api/v1/proposals", json={"action_type": "prd.generate", "target_ref": "proj-1"}
+    ).json()["data"]["proposal_id"]
+    data = client.post(f"/api/v1/proposals/{pid}/confirm").json()["data"]
+    assert data["status"] == "executed"
+    assert data["result_ref"] == "PRD-123"
+
+
+async def test_target_integrity_does_not_touch_non_project_actions(store):
+    # a 'deploy' proposal isn't project-validated; with a handler it executes fine
+    app = _make_app(store, registry=_registry_with_handler("DEPLOYED"))
+    client = TestClient(app)
+    pid = client.post(
+        "/api/v1/proposals", json={"action_type": "deploy", "target_ref": "env:prod"}
+    ).json()["data"]["proposal_id"]
+    assert client.post(f"/api/v1/proposals/{pid}/confirm").json()["data"]["status"] == "executed"

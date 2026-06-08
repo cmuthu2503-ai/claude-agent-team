@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from src.auth.service import get_current_user, get_principal, hash_service_token, principal_actor
 from src.core.proposal_dispatcher import run_confirmed_proposal
+from src.core.proposal_target import validate_proposal_target
 from src.models.base import Proposal, ProposalStatus
 
 router = APIRouter(prefix="/api/v1/proposals", tags=["proposals"])
@@ -94,7 +95,32 @@ async def _do_confirm(request: Request, proposal_id: str, decided_by: str) -> Pr
     registry = request.app.state.proposal_registry
     events = getattr(request.app.state, "events", None)
 
-    await _load_pending_or_409(state, proposal_id)
+    proposal = await _load_pending_or_409(state, proposal_id)
+
+    # HAI-59 — target integrity: the target may have been deleted/archived during
+    # the approval window. Re-validate at confirm time; if invalid, fail the
+    # proposal with the reason (terminal — operator re-proposes) rather than
+    # executing against a stale target.
+    target_reason = await validate_proposal_target(state, proposal)
+    if target_reason is not None:
+        now = datetime.utcnow().isoformat()
+        won = await state.transition_proposal(
+            proposal_id, ProposalStatus.PENDING, ProposalStatus.FAILED,
+            decided_by=decided_by, decided_at=now, error=target_reason, executed_at=now,
+        )
+        if not won:
+            current = await state.get_proposal(proposal_id)
+            now_status = current.status if current else "gone"
+            raise HTTPException(
+                status_code=409,
+                detail=f"Proposal is no longer pending (now '{now_status}')",
+            )
+        if events is not None:
+            await events.emit(
+                "proposal.failed",
+                {"proposal_id": proposal_id, "error": target_reason, "target_invalid": True},
+            )
+        return await state.get_proposal(proposal_id)
 
     won = await state.transition_proposal(
         proposal_id, ProposalStatus.PENDING, ProposalStatus.CONFIRMED,
