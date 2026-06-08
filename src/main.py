@@ -22,6 +22,7 @@ from src.api.routes import (
     ops,
     projects,
     prompts,
+    proposals,
     releases,
     requests,
     service_tokens,
@@ -439,6 +440,7 @@ app.include_router(lessons.router)
 app.include_router(ops.router)
 app.include_router(knowledge.router)
 app.include_router(service_tokens.router)
+app.include_router(proposals.router)
 app.include_router(ws_router)
 
 

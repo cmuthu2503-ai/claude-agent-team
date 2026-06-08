@@ -29,6 +29,17 @@ class SubtaskStatus(StrEnum):
     CANCELLED = "cancelled"  # parent request was cancelled while this was running
 
 
+class ProposalStatus(StrEnum):
+    """Approval-gate proposal lifecycle (HAI-21/22 / FR-030)."""
+
+    PENDING = "pending"      # awaiting a human decision
+    CONFIRMED = "confirmed"  # approved; about to execute
+    REJECTED = "rejected"    # human said no — never runs
+    EXPIRED = "expired"      # TTL elapsed before a decision — never runs
+    EXECUTED = "executed"    # the underlying action ran successfully
+    FAILED = "failed"        # confirmed but the action's handler failed
+
+
 class TaskType(StrEnum):
     FEATURE = "feature_request"
     BUG = "bug_report"
@@ -239,6 +250,40 @@ class ServiceToken(BaseModel):
     @property
     def is_revoked(self) -> bool:
         return self.revoked_at is not None
+
+
+class Proposal(BaseModel):
+    """An action awaiting human approval (HAI-21/22 / FR-030).
+
+    The unit of the approval gate: a service principal (Hermes) can only mutate
+    state by creating one of these, and it executes ONLY after a human confirms
+    it (FR-038). ``payload`` carries the action handler's args; ``status`` walks
+    the ProposalStatus lifecycle.
+    """
+
+    proposal_id: str
+    action_type: str
+    target_ref: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    status: ProposalStatus = ProposalStatus.PENDING
+    proposed_by: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    decided_by: str | None = None
+    decided_at: datetime | None = None
+    executed_at: datetime | None = None
+    ttl_seconds: int = 86400
+    result_ref: str | None = None
+    error: str | None = None
+    idempotency_key: str | None = None
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in (
+            ProposalStatus.REJECTED,
+            ProposalStatus.EXPIRED,
+            ProposalStatus.EXECUTED,
+            ProposalStatus.FAILED,
+        )
 
 
 # ── Document Persistence ─────────────────────────
