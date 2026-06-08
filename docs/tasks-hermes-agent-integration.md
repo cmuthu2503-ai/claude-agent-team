@@ -47,9 +47,9 @@
 | P0 | Foundations (service token + MCP skeleton) | 12 | 12 | 0 | 0 | 0 |
 | P1 | Monitor (read-only + push) | 12 | 12 | 0 | 0 | 0 |
 | P2 | Approval Gate (proposals engine) | 21 | 21 | 0 | 0 | 0 |
-| P3 | Lifecycle Actions (gated) | 12 | 10 | 0 | 0 | 2 |
+| P3 | Lifecycle Actions (gated) | 12 | 12 | 0 | 0 | 0 |
 | P4 | Autonomous-Loop Reconciliation | 6 | 0 | 0 | 0 | 6 |
-| **Total** | | **63** | **55** | **0** | **0** | **8** |
+| **Total** | | **63** | **57** | **0** | **0** | **6** |
 
 > Task IDs run HAI-01..HAI-63. IDs are unique but **not contiguous per phase** — HAI-51..63 were added in the v1.1 gap-review and slot into their dependency phase (P0: 51–53, P1: 54, P2: 55–63), not at the end. Sort by the Depends-On graph, not by ID number.
 
@@ -143,8 +143,8 @@ Gated MCP tools for full project lifecycle + project-inference parked tasks. Goa
 | HAI-40 | `project_generate_buildplan` | `buildplan.generate` (or discrete epics/features/tasks) proposals → generate endpoints. | M | HAI-26 | FR-054 | `[x]` |
 | HAI-41 | `task_dispatch` + finalize | `task.dispatch` proposal → build/dispatch endpoints; finalize gated. | M | HAI-26 | FR-055 | `[x]` |
 | HAI-42 | `ops_deploy` / `ops_rollback` | `deploy`/`rollback` proposals at admin scope → deploy/stop endpoints. | M | HAI-26 | FR-056 | `[x]` |
-| HAI-43 | Lifecycle read companions | `project_get_prd/apispec/buildplan/tasks` as Monitor-tier for review between gated steps. | S | HAI-07 | FR-057 | `[ ]` |
-| HAI-44 | Per-tier identities + P3 E2E | Optional `hermes-monitor` vs `hermes-operator` tokens; full lifecycle E2E via Hermes, each step confirmed. | M | HAI-03, HAI-36..42 | FR-014, M2 | `[ ]` |
+| HAI-43 | Lifecycle read companions | `project_get_prd/apispec/buildplan/tasks` as Monitor-tier for review between gated steps. | S | HAI-07 | FR-057 | `[x]` |
+| HAI-44 | Per-tier identities + P3 E2E | Optional `hermes-monitor` vs `hermes-operator` tokens; full lifecycle E2E via Hermes, each step confirmed. | M | HAI-03, HAI-36..42 | FR-014, M2 | `[x]` |
 
 ---
 
