@@ -768,7 +768,11 @@ class StateStore(ABC):
 
     @abstractmethod
     async def list_proposals(
-        self, status: str | None = None, limit: int = 100,
+        self,
+        status: str | None = None,
+        action_type: str | None = None,
+        proposed_by: str | None = None,
+        limit: int = 100,
     ) -> list[Proposal]: ...
 
     @abstractmethod

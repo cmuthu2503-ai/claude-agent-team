@@ -31,6 +31,10 @@ class CreateProposalBody(BaseModel):
     idempotency_key: str | None = None
 
 
+class RejectProposalBody(BaseModel):
+    reason: str | None = None
+
+
 def _public(p: Proposal) -> dict:
     return {
         "proposal_id": p.proposal_id,
@@ -169,3 +173,81 @@ async def confirm_proposal(
 
     final = await state.get_proposal(proposal_id)
     return {"data": _public(final), "meta": None, "error": None}
+
+
+@router.post("/{proposal_id}/reject")
+async def reject_proposal(
+    proposal_id: str,
+    request: Request,
+    body: RejectProposalBody | None = None,
+    user: dict = Depends(get_current_user),   # HUMAN-ONLY (FR-038), like confirm
+):
+    """Reject a pending proposal — the action never runs (FR-033). The optional
+    reason is stored in ``error`` and broadcast on proposal.rejected."""
+    state = request.app.state.state_store
+    events = getattr(request.app.state, "events", None)
+    reason = (body.reason if body else None) or None
+
+    proposal = await state.get_proposal(proposal_id)
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    if proposal.status != ProposalStatus.PENDING:
+        raise HTTPException(
+            status_code=409, detail=f"Proposal is '{proposal.status}', not pending"
+        )
+
+    decided_by = principal_actor(user)
+    won = await state.transition_proposal(
+        proposal_id,
+        ProposalStatus.PENDING,
+        ProposalStatus.REJECTED,
+        decided_by=decided_by,
+        decided_at=datetime.utcnow().isoformat(),
+        error=reason,
+    )
+    if not won:
+        current = await state.get_proposal(proposal_id)
+        raise HTTPException(
+            status_code=409,
+            detail=f"Proposal is no longer pending (now '{current.status if current else 'gone'}')",
+        )
+    if events is not None:
+        await events.emit(
+            "proposal.rejected",
+            {"proposal_id": proposal_id, "decided_by": decided_by, "reason": reason},
+        )
+    final = await state.get_proposal(proposal_id)
+    return {"data": _public(final), "meta": None, "error": None}
+
+
+@router.get("")
+async def list_proposals(
+    request: Request,
+    status: str | None = None,
+    action_type: str | None = None,
+    proposed_by: str | None = None,
+    limit: int = 100,
+    # Read — JWT or service token, so Hermes can poll "what's awaiting approval".
+    principal: dict = Depends(get_principal),
+):
+    """List proposals (newest first) with optional status / action_type /
+    proposed_by filters (FR-034, FR-080)."""
+    state = request.app.state.state_store
+    items = await state.list_proposals(
+        status=status, action_type=action_type, proposed_by=proposed_by, limit=limit
+    )
+    return {"data": [_public(p) for p in items], "meta": {"count": len(items)}, "error": None}
+
+
+@router.get("/{proposal_id}")
+async def get_proposal(
+    proposal_id: str,
+    request: Request,
+    principal: dict = Depends(get_principal),
+):
+    """Fetch one proposal (FR-034)."""
+    state = request.app.state.state_store
+    proposal = await state.get_proposal(proposal_id)
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    return {"data": _public(proposal), "meta": None, "error": None}

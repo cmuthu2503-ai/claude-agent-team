@@ -155,3 +155,56 @@ async def test_confirm_non_pending_409(store):
     pid = client.post("/api/v1/proposals", json={"action_type": "deploy"}).json()["data"]["proposal_id"]
     assert client.post(f"/api/v1/proposals/{pid}/confirm").status_code == 200   # first confirm OK
     assert client.post(f"/api/v1/proposals/{pid}/confirm").status_code == 409   # already executed
+
+
+# ── HAI-27 — reject ──────────────────────────────────────────────────────────
+
+async def test_reject_pending_marks_rejected_and_emits(store):
+    app = _make_app(store)
+    client = TestClient(app)
+    pid = client.post("/api/v1/proposals", json={"action_type": "deploy"}).json()["data"]["proposal_id"]
+
+    r = client.post(f"/api/v1/proposals/{pid}/reject", json={"reason": "too risky"})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["status"] == "rejected"
+    assert data["decided_by"] == "alice"
+    assert data["error"] == "too risky"        # reason stored in error
+    assert "proposal.rejected" in [et for et, _ in app.state.captured]
+
+
+async def test_reject_unknown_404_and_non_pending_409(store):
+    app = _make_app(store, registry=_registry_with_handler())
+    client = TestClient(app)
+    assert client.post("/api/v1/proposals/nope/reject").status_code == 404
+    pid = client.post("/api/v1/proposals", json={"action_type": "deploy"}).json()["data"]["proposal_id"]
+    client.post(f"/api/v1/proposals/{pid}/confirm")               # now executed
+    assert client.post(f"/api/v1/proposals/{pid}/reject").status_code == 409
+
+
+# ── HAI-28 — list / get ──────────────────────────────────────────────────────
+
+async def test_list_and_filter(store):
+    client = TestClient(_make_app(store))
+    client.post("/api/v1/proposals", json={"action_type": "deploy"})
+    client.post("/api/v1/proposals", json={"action_type": "project.create"})
+
+    all_ = client.get("/api/v1/proposals").json()
+    assert all_["meta"]["count"] == 2
+    # newest first
+    assert all_["data"][0]["action_type"] == "project.create"
+    # filter by action_type
+    deploys = client.get("/api/v1/proposals", params={"action_type": "deploy"}).json()["data"]
+    assert [p["action_type"] for p in deploys] == ["deploy"]
+    # filter by status
+    pending = client.get("/api/v1/proposals", params={"status": "pending"}).json()["data"]
+    assert len(pending) == 2
+
+
+async def test_get_one_and_404(store):
+    client = TestClient(_make_app(store))
+    pid = client.post("/api/v1/proposals", json={"action_type": "deploy"}).json()["data"]["proposal_id"]
+    r = client.get(f"/api/v1/proposals/{pid}")
+    assert r.status_code == 200
+    assert r.json()["data"]["proposal_id"] == pid
+    assert client.get("/api/v1/proposals/nope").status_code == 404
