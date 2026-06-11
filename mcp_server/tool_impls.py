@@ -122,45 +122,77 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
         """Full detail + current status of one proposal."""
         return await client.get(f"/api/v1/proposals/{proposal_id}")
 
-    # ── HAI-61 — gated ACTION tools (developer-tier) ───────────────────────────
-    # Each creates a PENDING proposal; a human confirms it in /approvals before
-    # the backend executes. Hermes never mutates directly.
+    # ── HAI-61/65 — gated ACTION tools (developer-tier), named for natural
+    # language so a local model routes "create a project" → create_project. Each
+    # files a governed proposal (POST /api/v1/proposals); whether it then runs
+    # immediately or waits for a human in /approvals is the backend's auto-approve
+    # policy (PROPOSAL_REQUIRE_APPROVAL). Hermes never mutates state directly.
 
-    async def propose_create_project(name: str, description: str | None = None) -> Any:
-        """Propose creating a new project. Requires human approval before creation.
+    async def _propose(action_type: str, target_ref: str | None = None,
+                       payload: dict[str, Any] | None = None) -> Any:
+        body: dict[str, Any] = {"action_type": action_type}
+        if target_ref is not None:
+            body["target_ref"] = target_ref
+        if payload:
+            body["payload"] = payload
+        return await client.post("/api/v1/proposals", json=body)
 
-        Args:
-          name:        project name (required; no spaces/filesystem-unsafe chars)
-          description: optional one-line description
-
-        Returns the pending proposal (incl. proposal_id + status) — tell the user
-        to approve it in the dashboard.
-        """
+    async def create_project(name: str, description: str | None = None) -> Any:
+        """Create a new project (governed). Args: name (required), description
+        (optional). Returns the proposal — auto-approved or pending per policy."""
         payload: dict[str, Any] = {"name": name}
         if description:
             payload["description"] = description
-        return await client.post(
-            "/api/v1/proposals",
-            json={"action_type": "project.create", "payload": payload},
-        )
+        return await _propose("project.create", payload=payload)
 
-    async def propose_submit_request(
+    async def set_project_brief(project_id: str, content: str) -> Any:
+        """Set or update a project's brief (its description/summary). Args:
+        project_id, content."""
+        return await _propose("project.brief.set", target_ref=project_id,
+                              payload={"content": content})
+
+    async def generate_prd(project_id: str) -> Any:
+        """Generate (create) the project's PRD. Arg: project_id."""
+        return await _propose("prd.generate", target_ref=project_id)
+
+    async def generate_api_spec(project_id: str) -> Any:
+        """Generate (create) the project's API specification. Arg: project_id."""
+        return await _propose("apispec.generate", target_ref=project_id)
+
+    async def generate_epics(project_id: str) -> Any:
+        """Generate the project's epics. Arg: project_id."""
+        return await _propose("epics.generate", target_ref=project_id)
+
+    async def generate_features(project_id: str, epic_id: str | None = None) -> Any:
+        """Generate features for the project (optionally scoped to one epic).
+        Args: project_id, epic_id (optional)."""
+        payload = {"epic_id": epic_id} if epic_id else None
+        return await _propose("features.generate", target_ref=project_id, payload=payload)
+
+    async def generate_tasks(project_id: str) -> Any:
+        """Generate the project's task list. Arg: project_id."""
+        return await _propose("tasks.generate", target_ref=project_id)
+
+    async def generate_build_plan(project_id: str) -> Any:
+        """Generate the project's build plan (epics → features → tasks rollup).
+        Arg: project_id."""
+        return await _propose("buildplan.generate", target_ref=project_id)
+
+    async def dispatch_tasks(project_id: str, task_ids: list[str] | None = None) -> Any:
+        """Dispatch the project's tasks to the agents to start building. Args:
+        project_id; task_ids (optional — omit to dispatch all dispatchable tasks)."""
+        payload = {"task_ids": task_ids} if task_ids else None
+        return await _propose("task.dispatch", target_ref=project_id, payload=payload)
+
+    async def submit_request(
         description: str,
         task_type: str = "feature_request",
         priority: str = "medium",
         project_id: str | None = None,
     ) -> Any:
-        """Propose submitting a work request to the agent team. Requires human
-        approval before it runs.
-
-        Args:
-          description: what to build/fix (required)
-          task_type:  feature_request (default), bug_fix, research, etc.
-          priority:   low | medium (default) | high
-          project_id: optional; omitted → the request lands under Unassigned
-
-        Returns the pending proposal (incl. proposal_id + status).
-        """
+        """Submit a work request to the agent team (governed). Args: description
+        (required); task_type (feature_request default, bug_fix, research, …);
+        priority (low|medium|high); project_id (optional → Unassigned)."""
         payload: dict[str, Any] = {
             "description": description,
             "task_type": task_type,
@@ -168,14 +200,7 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
         }
         if project_id:
             payload["project_id"] = project_id
-        return await client.post(
-            "/api/v1/proposals",
-            json={
-                "action_type": "request.submit",
-                "target_ref": project_id,
-                "payload": payload,
-            },
-        )
+        return await _propose("request.submit", target_ref=project_id, payload=payload)
 
     return {
         "monitor_backend_health": monitor_backend_health,
@@ -193,6 +218,15 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
         "project_get_tasks": project_get_tasks,
         "monitor_list_proposals": monitor_list_proposals,
         "monitor_get_proposal": monitor_get_proposal,
-        "propose_create_project": propose_create_project,
-        "propose_submit_request": propose_submit_request,
+        # HAI-65 — natural-named gated action tools
+        "create_project": create_project,
+        "set_project_brief": set_project_brief,
+        "generate_prd": generate_prd,
+        "generate_api_spec": generate_api_spec,
+        "generate_epics": generate_epics,
+        "generate_features": generate_features,
+        "generate_tasks": generate_tasks,
+        "generate_build_plan": generate_build_plan,
+        "dispatch_tasks": dispatch_tasks,
+        "submit_request": submit_request,
     }
