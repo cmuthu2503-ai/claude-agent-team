@@ -243,6 +243,17 @@ async def test_set_project_brief():
     assert seen["body"]["payload"] == {"content": "A todo app."}
 
 
+async def test_update_project_description_is_alias_of_set_brief():
+    # Same governed action (project.brief.set) under a natural 'update' name.
+    seen, handler = _capture_body()
+    impls = build_tool_impls(_client(handler))
+    assert impls["update_project_description"] is impls["set_project_brief"]
+    await impls["update_project_description"](project_id="proj-2", content="Now with auth.")
+    assert seen["body"]["action_type"] == "project.brief.set"
+    assert seen["body"]["target_ref"] == "proj-2"
+    assert seen["body"]["payload"] == {"content": "Now with auth."}
+
+
 async def test_generate_tools_target_ref_and_action_type():
     # the five plain project-scoped generators: target_ref=project_id, no payload
     cases = [
@@ -313,7 +324,8 @@ def test_registry_has_action_and_proposal_read_tools():
     impls = build_tool_impls(_client(lambda req: httpx.Response(200, json={})))
     for name in (
         "monitor_list_proposals", "monitor_get_proposal",
-        "create_project", "set_project_brief", "generate_prd", "generate_api_spec",
+        "create_project", "set_project_brief", "update_project_description",
+        "generate_prd", "generate_api_spec",
         "generate_epics", "generate_features", "generate_tasks", "generate_build_plan",
         "dispatch_tasks", "submit_request",
     ):
