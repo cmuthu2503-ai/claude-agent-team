@@ -188,8 +188,15 @@ per §3 with `{"role":"developer"}`) — a `viewer` token never sees them.
 | `generate_build_plan` | developer | `buildplan.generate` |
 | `dispatch_tasks` | developer | `task.dispatch` |
 | `submit_request` | developer | `request.submit` |
+| `finalize_prd` | developer | `prd.finalize` (saves to disk + GitHub) |
+| `finalize_api_spec` | developer | `apispec.finalize` |
+| `finalize_tasks` | developer | `tasks.finalize` |
+| `finalize_epics` | developer | `epics.finalize` (all epics; cascades) |
+| `finalize_features` | developer | `features.finalize` (all features; cascades) |
 | `monitor_list_proposals` | viewer | list proposals + status |
 | `monitor_get_proposal` | viewer | one proposal's detail/status |
+| `get_startable_tasks` | viewer | first set of tasks that can start now |
+| `get_next_wave_tasks` | viewer | next set, one dependency layer ahead |
 
 Each action tool files a **governed proposal** (`POST /api/v1/proposals`) — it
 never mutates state directly. Whether the proposal then runs immediately or waits

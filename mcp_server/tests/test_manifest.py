@@ -107,6 +107,9 @@ def test_propose_tools_are_developer_gated():
         "create_project", "set_project_brief", "generate_prd", "generate_api_spec",
         "generate_epics", "generate_features", "generate_tasks", "generate_build_plan",
         "dispatch_tasks", "submit_request",
+        # HAI-66 finalize actions
+        "finalize_prd", "finalize_api_spec", "finalize_tasks", "finalize_epics",
+        "finalize_features",
     }
 
     for spec in specs:
@@ -128,7 +131,11 @@ def test_proposal_read_companions_are_viewer_tier():
 
     manifest_path = Path(__file__).resolve().parents[1] / "tools_manifest.yaml"
     specs = load_manifest(manifest_path)
-    reads = {"monitor_list_proposals", "monitor_get_proposal"}
+    reads = {
+        "monitor_list_proposals", "monitor_get_proposal",
+        # HAI-66 startable-task reads
+        "get_startable_tasks", "get_next_wave_tasks",
+    }
     for spec in specs:
         if spec.name in reads:
             assert spec.min_role == "viewer", f"{spec.name} should be viewer-tier"

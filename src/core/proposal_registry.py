@@ -33,6 +33,12 @@ GATED_ACTION_TYPES: frozenset[str] = frozenset(
         "agent.model.set",
         "deploy",
         "rollback",
+        # HAI-66 — finalize actions
+        "prd.finalize",
+        "apispec.finalize",
+        "tasks.finalize",
+        "epics.finalize",
+        "features.finalize",
     }
 )
 

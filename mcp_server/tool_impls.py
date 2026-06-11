@@ -202,6 +202,38 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
             payload["project_id"] = project_id
         return await _propose("request.submit", target_ref=project_id, payload=payload)
 
+    # ── HAI-66 — finalize actions (save artifact to disk + GitHub) ─────────────
+
+    async def finalize_prd(project_id: str) -> Any:
+        """Finalize the project's PRD and save it to the local machine. Arg: project_id."""
+        return await _propose("prd.finalize", target_ref=project_id)
+
+    async def finalize_api_spec(project_id: str) -> Any:
+        """Finalize the project's API spec and save it to the local machine. Arg: project_id."""
+        return await _propose("apispec.finalize", target_ref=project_id)
+
+    async def finalize_tasks(project_id: str) -> Any:
+        """Finalize the project's task list and save it to the local machine. Arg: project_id."""
+        return await _propose("tasks.finalize", target_ref=project_id)
+
+    async def finalize_epics(project_id: str) -> Any:
+        """Finalize all of the project's epics (cascades to features + tasks). Arg: project_id."""
+        return await _propose("epics.finalize", target_ref=project_id)
+
+    async def finalize_features(project_id: str) -> Any:
+        """Finalize all of the project's features (cascades to tasks). Arg: project_id."""
+        return await _propose("features.finalize", target_ref=project_id)
+
+    # ── HAI-66 — startable-task reads (viewer-tier) ────────────────────────────
+
+    async def get_startable_tasks(project_id: str) -> Any:
+        """The first set of tasks that can be started now (all deps satisfied)."""
+        return await client.get(f"/api/v1/projects/{project_id}/tasks/startable")
+
+    async def get_next_wave_tasks(project_id: str) -> Any:
+        """The next set of tasks that become startable after the current set finishes."""
+        return await client.get(f"/api/v1/projects/{project_id}/tasks/next-wave")
+
     return {
         "monitor_backend_health": monitor_backend_health,
         "monitor_list_requests": monitor_list_requests,
@@ -229,4 +261,12 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
         "generate_build_plan": generate_build_plan,
         "dispatch_tasks": dispatch_tasks,
         "submit_request": submit_request,
+        # HAI-66 — finalize actions + startable-task reads
+        "finalize_prd": finalize_prd,
+        "finalize_api_spec": finalize_api_spec,
+        "finalize_tasks": finalize_tasks,
+        "finalize_epics": finalize_epics,
+        "finalize_features": finalize_features,
+        "get_startable_tasks": get_startable_tasks,
+        "get_next_wave_tasks": get_next_wave_tasks,
     }
