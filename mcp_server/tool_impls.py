@@ -128,12 +128,39 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
     # immediately or waits for a human in /approvals is the backend's auto-approve
     # policy (PROPOSAL_REQUIRE_APPROVAL). Hermes never mutates state directly.
 
+    async def _resolve_project_id(project: str | None) -> str | None:
+        """Accept a project id OR name and return the id, so a user/model can say
+        "testProject" instead of an opaque id. Names match case-insensitively. If
+        it's already a known id, or no unique name match is found, it's returned
+        unchanged (the backend then reports if it's missing). Best-effort: a lookup
+        error never blocks an explicit id."""
+        if not project:
+            return project
+        try:
+            projects = await client.get("/api/v1/projects")
+        except Exception:  # noqa: BLE001 — don't let a lookup hiccup block the action
+            return project
+        if not isinstance(projects, list):
+            return project
+        ids = {p.get("project_id") for p in projects if isinstance(p, dict)}
+        if project in ids:
+            return project
+        matches = [
+            p for p in projects
+            if isinstance(p, dict) and (p.get("name") or "").strip().lower() == project.strip().lower()
+        ]
+        if len(matches) == 1:
+            return matches[0]["project_id"]
+        return project  # 0 or >1 name matches → pass through; backend reports if missing
+
     async def _propose(action_type: str, target_ref: str | None = None,
                        payload: dict[str, Any] | None = None) -> Any:
         body: dict[str, Any] = {"action_type": action_type}
         if target_ref is not None:
-            body["target_ref"] = target_ref
+            body["target_ref"] = await _resolve_project_id(target_ref)
         if payload:
+            if payload.get("project_id"):
+                payload = {**payload, "project_id": await _resolve_project_id(payload["project_id"])}
             body["payload"] = payload
         return await client.post("/api/v1/proposals", json=body)
 
@@ -227,12 +254,16 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
     # ── HAI-66 — startable-task reads (viewer-tier) ────────────────────────────
 
     async def get_startable_tasks(project_id: str) -> Any:
-        """The first set of tasks that can be started now (all deps satisfied)."""
-        return await client.get(f"/api/v1/projects/{project_id}/tasks/startable")
+        """The first set of tasks that can be started now (all deps satisfied).
+        Arg accepts the project name or id."""
+        pid = await _resolve_project_id(project_id)
+        return await client.get(f"/api/v1/projects/{pid}/tasks/startable")
 
     async def get_next_wave_tasks(project_id: str) -> Any:
-        """The next set of tasks that become startable after the current set finishes."""
-        return await client.get(f"/api/v1/projects/{project_id}/tasks/next-wave")
+        """The next set of tasks that become startable after the current set finishes.
+        Arg accepts the project name or id."""
+        pid = await _resolve_project_id(project_id)
+        return await client.get(f"/api/v1/projects/{pid}/tasks/next-wave")
 
     return {
         "monitor_backend_health": monitor_backend_health,

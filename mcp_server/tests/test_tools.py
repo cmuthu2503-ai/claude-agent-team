@@ -198,11 +198,20 @@ async def test_monitor_get_proposal_builds_path():
 
 # ── HAI-61/65 — natural-named gated action tools (→ POST /proposals) ─────────
 
-def _capture_body():
-    """A MockTransport handler that records the POSTed JSON body into ``seen``."""
+def _capture_body(projects: list | None = None):
+    """A MockTransport handler that records the POSTed JSON body into ``seen``.
+
+    GET /api/v1/projects (the name->id resolution lookup) returns ``projects``
+    (default empty → names pass through unchanged); the POST /proposals is what's
+    captured.
+    """
     seen: dict = {}
 
     def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(
+                200, json={"data": projects or [], "meta": None, "error": None}
+            )
         seen["method"] = req.method
         seen["url"] = str(req.url)
         seen["body"] = json.loads(req.content)
@@ -241,6 +250,33 @@ async def test_set_project_brief():
     assert seen["body"]["action_type"] == "project.brief.set"
     assert seen["body"]["target_ref"] == "proj-1"
     assert seen["body"]["payload"] == {"content": "A todo app."}
+
+
+async def test_action_tool_resolves_project_name_to_id():
+    # User/model passes the project NAME; the tool resolves it to the id via
+    # GET /projects before proposing (so "set the brief of testProject" works).
+    seen, handler = _capture_body(projects=[
+        {"project_id": "proj-abc123", "name": "testProject"},
+        {"project_id": "proj-def456", "name": "Other"},
+    ])
+    impls = build_tool_impls(_client(handler))
+    await impls["set_project_brief"](project_id="testProject", content="hello")
+    assert seen["body"]["target_ref"] == "proj-abc123"        # name resolved to id
+    assert seen["body"]["action_type"] == "project.brief.set"
+
+
+async def test_action_tool_passes_through_real_id_and_unknown_name():
+    # An existing id is used as-is; an unknown name passes through (backend reports).
+    projects = [{"project_id": "proj-abc123", "name": "testProject"}]
+    seen, handler = _capture_body(projects=projects)
+    impls = build_tool_impls(_client(handler))
+    await impls["generate_prd"]("proj-abc123")               # already an id
+    assert seen["body"]["target_ref"] == "proj-abc123"
+
+    seen2, handler2 = _capture_body(projects=projects)
+    impls2 = build_tool_impls(_client(handler2))
+    await impls2["generate_prd"]("NoSuchProject")            # unknown → pass through
+    assert seen2["body"]["target_ref"] == "NoSuchProject"
 
 
 async def test_update_project_description_is_alias_of_set_brief():
