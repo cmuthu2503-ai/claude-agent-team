@@ -168,3 +168,28 @@ reconciles on its next pull — so you never silently lose state, only latency.
 
 So even an `admin`-scoped service token cannot deploy, cancel, or change a model
 directly — it can only *ask*, and a human approves.
+
+### 8.1 Gated action tools (HAI-60/61 — developer tier)
+
+To let Hermes *initiate* work from chat (not just observe), the manifest exposes
+**propose tools**. They require a **`developer`** service token (re-mint per §3
+with `{"role":"developer"}`) — a `viewer` token never sees them.
+
+| Tool | min_role | Effect |
+|---|---|---|
+| `propose_create_project` | developer | Creates a **pending** `project.create` proposal |
+| `propose_submit_request` | developer | Creates a **pending** `request.submit` proposal |
+| `monitor_list_proposals` | viewer | List proposals + their status |
+| `monitor_get_proposal` | viewer | One proposal's detail/status |
+
+The propose tools do **not** create anything directly — each one only files a
+PENDING proposal. A human then approves it in the dashboard at **`/approvals`**
+(`POST /proposals/{id}/confirm`), and only *then* does the backend execute. The
+write-block still blocks every other mutating endpoint, so a developer/admin
+token cannot bypass the human gate. The one-time approval token goes to the
+human via push/dashboard — never to Hermes — so Hermes can propose but can never
+self-approve.
+
+**Telegram flow:** *"create a project named test project"* → Hermes calls
+`propose_create_project` → replies with the proposal id + "pending approval" →
+you confirm at `/approvals` → the project is created and the pipeline runs.

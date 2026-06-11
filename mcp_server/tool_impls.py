@@ -93,6 +93,90 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
         """The project's generated task list (the unit auto-dispatch acts on)."""
         return await client.get(f"/api/v1/projects/{project_id}/tasks")
 
+    # ── HAI-60 — proposal queue read companions (viewer-tier) ──────────────────
+
+    async def monitor_list_proposals(
+        status: str | None = None,
+        action_type: str | None = None,
+        proposed_by: str | None = None,
+        limit: int = 100,
+    ) -> Any:
+        """List governed proposals, newest first.
+
+        Filters (all optional):
+          status:      pending | confirmed | rejected | expired
+          action_type: e.g. 'project.create', 'request.submit'
+          proposed_by: actor string, e.g. 'service:hermes'
+          limit:       max rows (default 100)
+        """
+        params: dict[str, Any] = {"limit": limit}
+        if status:
+            params["status"] = status
+        if action_type:
+            params["action_type"] = action_type
+        if proposed_by:
+            params["proposed_by"] = proposed_by
+        return await client.get("/api/v1/proposals", params=params)
+
+    async def monitor_get_proposal(proposal_id: str) -> Any:
+        """Full detail + current status of one proposal."""
+        return await client.get(f"/api/v1/proposals/{proposal_id}")
+
+    # ── HAI-61 — gated ACTION tools (developer-tier) ───────────────────────────
+    # Each creates a PENDING proposal; a human confirms it in /approvals before
+    # the backend executes. Hermes never mutates directly.
+
+    async def propose_create_project(name: str, description: str | None = None) -> Any:
+        """Propose creating a new project. Requires human approval before creation.
+
+        Args:
+          name:        project name (required; no spaces/filesystem-unsafe chars)
+          description: optional one-line description
+
+        Returns the pending proposal (incl. proposal_id + status) — tell the user
+        to approve it in the dashboard.
+        """
+        payload: dict[str, Any] = {"name": name}
+        if description:
+            payload["description"] = description
+        return await client.post(
+            "/api/v1/proposals",
+            json={"action_type": "project.create", "payload": payload},
+        )
+
+    async def propose_submit_request(
+        description: str,
+        task_type: str = "feature_request",
+        priority: str = "medium",
+        project_id: str | None = None,
+    ) -> Any:
+        """Propose submitting a work request to the agent team. Requires human
+        approval before it runs.
+
+        Args:
+          description: what to build/fix (required)
+          task_type:  feature_request (default), bug_fix, research, etc.
+          priority:   low | medium (default) | high
+          project_id: optional; omitted → the request lands under Unassigned
+
+        Returns the pending proposal (incl. proposal_id + status).
+        """
+        payload: dict[str, Any] = {
+            "description": description,
+            "task_type": task_type,
+            "priority": priority,
+        }
+        if project_id:
+            payload["project_id"] = project_id
+        return await client.post(
+            "/api/v1/proposals",
+            json={
+                "action_type": "request.submit",
+                "target_ref": project_id,
+                "payload": payload,
+            },
+        )
+
     return {
         "monitor_backend_health": monitor_backend_health,
         "monitor_list_requests": monitor_list_requests,
@@ -107,4 +191,8 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
         "project_get_apispec": project_get_apispec,
         "project_get_buildplan": project_get_buildplan,
         "project_get_tasks": project_get_tasks,
+        "monitor_list_proposals": monitor_list_proposals,
+        "monitor_get_proposal": monitor_get_proposal,
+        "propose_create_project": propose_create_project,
+        "propose_submit_request": propose_submit_request,
     }
