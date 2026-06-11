@@ -36,6 +36,12 @@ _PROJECT_TARGET_ACTIONS: frozenset[str] = frozenset(
         "features.generate",
         "tasks.generate",
         "buildplan.generate",
+        # HAI-66 — finalize actions (target_ref is the project id)
+        "prd.finalize",
+        "apispec.finalize",
+        "tasks.finalize",
+        "epics.finalize",
+        "features.finalize",
     }
 )
 

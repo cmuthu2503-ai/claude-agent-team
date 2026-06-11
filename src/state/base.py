@@ -643,6 +643,15 @@ class StateStore(ABC):
         ...
 
     @abstractmethod
+    async def get_next_wave_tasks(
+        self, project_id: str
+    ) -> list["ProjectTask"]:
+        """Return the tasks that become startable AFTER the current
+        dispatchable wave finishes — one dependency layer ahead (HAI-66).
+        Same dep semantics as get_dispatchable_tasks."""
+        ...
+
+    @abstractmethod
     async def has_task_cycle(
         self, project_id: str, list_version: int
     ) -> tuple[bool, list[str]]:

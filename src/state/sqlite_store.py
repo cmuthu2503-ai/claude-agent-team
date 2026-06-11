@@ -3623,6 +3623,39 @@ class SQLiteStateStore(StateStore):
                 out.append(t)
         return out
 
+    async def get_next_wave_tasks(self, project_id: str) -> list[ProjectTask]:
+        """The tasks that become startable AFTER the current dispatchable wave
+        finishes — i.e. one dependency layer ahead (HAI-66). A task qualifies when
+        it is backlog + finalized, NOT currently dispatchable, and every blocker is
+        either already DEPLOYED or in the current dispatchable set (so once that set
+        deploys, this task's blockers are all satisfied). Same dep semantics as
+        ``get_dispatchable_tasks``."""
+        all_tasks = await self.list_tasks_for_project(project_id)
+        status_by_id = {t.task_id: t.task_status for t in all_tasks}
+        current = await self.get_dispatchable_tasks(project_id)
+        current_ids = {t.task_id for t in current}
+        out: list[ProjectTask] = []
+        for t in all_tasks:
+            if t.task_status != TaskStatus.BACKLOG:
+                continue
+            if t.list_status != ArtifactStatus.FINALIZED:
+                continue
+            if t.task_id in current_ids:
+                continue  # already startable now — that's the "first" wave
+            if not t.depends_on:
+                continue  # no deps → would already be dispatchable; defensive
+            satisfied_next = True
+            for blocker_id in t.depends_on:
+                if status_by_id.get(blocker_id) == TaskStatus.DEPLOYED:
+                    continue
+                if blocker_id in current_ids:
+                    continue  # will be satisfied once the current wave deploys
+                satisfied_next = False
+                break
+            if satisfied_next:
+                out.append(t)
+        return out
+
     async def has_task_cycle(
         self, project_id: str, list_version: int
     ) -> tuple[bool, list[str]]:

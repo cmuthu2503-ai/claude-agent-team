@@ -3125,6 +3125,42 @@ async def finalize_tasks(
     }
 
 
+@router.get("/{project_id}/tasks/startable")
+async def get_startable_tasks(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(get_principal),  # HAI-12/66 — JWT or service token (Hermes reads)
+):
+    """HAI-66 — the FIRST set of tasks that can be started now: backlog + finalized
+    tasks whose every dependency is already deployed. Read-only."""
+    state = request.app.state.state_store
+    await _require_project(state, project_id)
+    tasks = await state.get_dispatchable_tasks(project_id)
+    return {
+        "data": [_task_to_dict(t) for t in tasks],
+        "meta": {"count": len(tasks)},
+        "error": None,
+    }
+
+
+@router.get("/{project_id}/tasks/next-wave")
+async def get_next_wave_tasks_route(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(get_principal),  # HAI-12/66 — JWT or service token (Hermes reads)
+):
+    """HAI-66 — the NEXT set of tasks that become startable after the current
+    dispatchable wave deploys (one dependency layer ahead). Read-only."""
+    state = request.app.state.state_store
+    await _require_project(state, project_id)
+    tasks = await state.get_next_wave_tasks(project_id)
+    return {
+        "data": [_task_to_dict(t) for t in tasks],
+        "meta": {"count": len(tasks)},
+        "error": None,
+    }
+
+
 @router.post("/{project_id}/tasks/archive")
 async def archive_tasks(
     project_id: str,

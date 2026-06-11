@@ -318,3 +318,52 @@ def test_registry_has_action_and_proposal_read_tools():
         "dispatch_tasks", "submit_request",
     ):
         assert name in impls
+
+
+# ── HAI-66 — finalize actions + startable-task reads ─────────────────────────
+
+async def test_finalize_tools_post_proposal_with_target_ref():
+    cases = [
+        ("finalize_prd", "prd.finalize"),
+        ("finalize_api_spec", "apispec.finalize"),
+        ("finalize_tasks", "tasks.finalize"),
+        ("finalize_epics", "epics.finalize"),
+        ("finalize_features", "features.finalize"),
+    ]
+    for tool, action_type in cases:
+        seen, handler = _capture_body()
+        impls = build_tool_impls(_client(handler))
+        await impls[tool]("proj-9")
+        assert seen["method"] == "POST", tool
+        assert seen["url"].endswith("/api/v1/proposals"), tool
+        assert seen["body"]["action_type"] == action_type, tool
+        assert seen["body"]["target_ref"] == "proj-9", tool
+        assert "payload" not in seen["body"], tool
+
+
+async def test_startable_and_next_wave_read_tools():
+    seen: dict[str, str] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["url"] = str(req.url)
+        return httpx.Response(
+            200, json={"data": [{"task_id": "t1"}], "meta": {"count": 1}, "error": None}
+        )
+
+    impls = build_tool_impls(_client(handler))
+
+    data = await impls["get_startable_tasks"]("proj-2")
+    assert data == [{"task_id": "t1"}]
+    assert seen["url"].endswith("/api/v1/projects/proj-2/tasks/startable")
+
+    await impls["get_next_wave_tasks"]("proj-2")
+    assert seen["url"].endswith("/api/v1/projects/proj-2/tasks/next-wave")
+
+
+def test_registry_has_finalize_and_wave_tools():
+    impls = build_tool_impls(_client(lambda req: httpx.Response(200, json={})))
+    for name in (
+        "finalize_prd", "finalize_api_spec", "finalize_tasks", "finalize_epics",
+        "finalize_features", "get_startable_tasks", "get_next_wave_tasks",
+    ):
+        assert name in impls

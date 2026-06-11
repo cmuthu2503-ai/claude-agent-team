@@ -266,6 +266,73 @@ async def request_submit(proposal: Any, ctx: Any) -> dict[str, Any]:
     return {"result_ref": req.request_id}
 
 
+# ── HAI-66 — finalize actions (save artifacts to disk + GitHub) ──────────────
+# Each wraps the SAME finalize path the dashboard uses. target_ref is the project
+# id. prd/apispec/tasks have a single project-level finalize; epics/features are
+# per-row in the route layer, so these handlers finalize ALL of them for the
+# project (each cascades to its sub-rows via finalize_*_subtree).
+
+async def prd_finalize(proposal: Any, ctx: Any) -> dict[str, Any]:
+    body = _projects.PRDPatchBody(status="finalized")
+    await _invoke(
+        _projects.patch_prd(
+            project_id=proposal.target_ref, body=body, request=ctx, user=_system_principal()
+        )
+    )
+    return {"result_ref": proposal.target_ref}
+
+
+async def apispec_finalize(proposal: Any, ctx: Any) -> dict[str, Any]:
+    body = _projects.APISpecPatchBody(status="finalized")
+    await _invoke(
+        _projects.patch_api_spec(
+            project_id=proposal.target_ref, body=body, request=ctx, user=_system_principal()
+        )
+    )
+    return {"result_ref": proposal.target_ref}
+
+
+async def tasks_finalize(proposal: Any, ctx: Any) -> dict[str, Any]:
+    await _invoke(
+        _projects.finalize_tasks(
+            project_id=proposal.target_ref, request=ctx, user=_system_principal()
+        )
+    )
+    return {"result_ref": proposal.target_ref}
+
+
+async def epics_finalize(proposal: Any, ctx: Any) -> dict[str, Any]:
+    """Finalize every (non-archived) epic for the project; each cascades to its
+    features + tasks via finalize_epic_subtree."""
+    state = ctx.app.state.state_store
+    epics = await state.list_epics_for_project(proposal.target_ref)  # excludes archived
+    n = 0
+    for e in epics:
+        await state.finalize_epic_subtree(e.epic_id)
+        n += 1
+    if n == 0:
+        raise RuntimeError("epics.finalize: no epics to finalize for this project")
+    return {"result_ref": f"{proposal.target_ref}: {n} epic(s) finalized"}
+
+
+async def features_finalize(proposal: Any, ctx: Any) -> dict[str, Any]:
+    """Finalize every (non-archived) feature for the project; each cascades to its
+    tasks via finalize_feature_subtree."""
+    from src.models.base import ArtifactStatus
+
+    state = ctx.app.state.state_store
+    features = await state.list_features_for_project(proposal.target_ref)
+    n = 0
+    for f in features:
+        if f.list_status == ArtifactStatus.ARCHIVED:
+            continue
+        await state.finalize_feature_subtree(f.feature_id)
+        n += 1
+    if n == 0:
+        raise RuntimeError("features.finalize: no features to finalize for this project")
+    return {"result_ref": f"{proposal.target_ref}: {n} feature(s) finalized"}
+
+
 # ── registration ─────────────────────────────────────────────────────────────
 
 # action_type -> handler. Only the P3 actions with a real handler today; the rest
@@ -283,6 +350,12 @@ _HANDLERS = {
     "deploy": ops_deploy,
     "rollback": ops_rollback,
     "request.submit": request_submit,
+    # HAI-66 — finalize actions
+    "prd.finalize": prd_finalize,
+    "apispec.finalize": apispec_finalize,
+    "tasks.finalize": tasks_finalize,
+    "epics.finalize": epics_finalize,
+    "features.finalize": features_finalize,
 }
 
 

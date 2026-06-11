@@ -175,3 +175,47 @@ tools:
     min_role: developer
     method: POST
     path: /api/v1/proposals
+
+  # ── HAI-66 — finalize actions (save the artifact to disk + GitHub) ───────────
+  - name: finalize_prd
+    description: "Finalize the project's PRD and save it to the local machine (+ GitHub). Arg: project_id (required)."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  - name: finalize_api_spec
+    description: "Finalize the project's API spec and save it to the local machine (+ GitHub). Arg: project_id (required)."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  - name: finalize_tasks
+    description: "Finalize the project's task list and save it to the local machine (+ GitHub). Arg: project_id (required)."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  - name: finalize_epics
+    description: "Finalize all of the project's epics (cascades to their features + tasks). Arg: project_id (required)."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  - name: finalize_features
+    description: "Finalize all of the project's features (cascades to their tasks). Arg: project_id (required)."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  # ── HAI-66 — startable-task reads (viewer-tier) ──────────────────────────────
+  - name: get_startable_tasks
+    description: "The first set of tasks that can be started now for a project (all dependencies satisfied). Arg: project_id (required)."
+    min_role: viewer
+    method: GET
+    path: /api/v1/projects/{project_id}/tasks/startable
+
+  - name: get_next_wave_tasks
+    description: "The next set of tasks that become startable after the current set finishes (one dependency layer ahead). Arg: project_id (required)."
+    min_role: viewer
+    method: GET
+    path: /api/v1/projects/{project_id}/tasks/next-wave
