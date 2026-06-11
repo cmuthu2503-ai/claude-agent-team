@@ -1,5 +1,7 @@
 """HAI-10+ — monitor tool implementations (httpx.MockTransport, no live backend)."""
 
+import json
+
 import httpx
 
 from backend_client import BackendClient
@@ -159,3 +161,110 @@ def test_companions_are_registered_viewer_tier():
     # test_manifest's role-filter coverage).
     impls = build_tool_impls(_client(lambda r: httpx.Response(200, json={"data": None})))
     assert {"project_get_prd", "project_get_apispec", "project_get_buildplan", "project_get_tasks"} <= set(impls)
+
+
+# ── HAI-60 — proposal queue read companions ──────────────────────────────────
+
+async def test_monitor_list_proposals_filters():
+    seen: dict[str, str] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["url"] = str(req.url)
+        return httpx.Response(
+            200, json={"data": [{"proposal_id": "stok-1", "status": "pending"}], "meta": {"count": 1}, "error": None}
+        )
+
+    impls = build_tool_impls(_client(handler))
+    data = await impls["monitor_list_proposals"](status="pending", action_type="project.create")
+    assert data[0]["proposal_id"] == "stok-1"
+    assert "/api/v1/proposals" in seen["url"]
+    assert "status=pending" in seen["url"]
+    assert "action_type=project.create" in seen["url"]
+    assert "limit=100" in seen["url"]
+
+
+async def test_monitor_get_proposal_builds_path():
+    seen: dict[str, str] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["url"] = str(req.url)
+        return httpx.Response(200, json={"data": {"proposal_id": "stok-9", "status": "confirmed"}, "meta": None, "error": None})
+
+    impls = build_tool_impls(_client(handler))
+    data = await impls["monitor_get_proposal"]("stok-9")
+    assert data["status"] == "confirmed"
+    assert seen["url"].endswith("/api/v1/proposals/stok-9")
+
+
+# ── HAI-61 — gated action tools (propose → human-approved) ───────────────────
+
+async def test_propose_create_project_posts_proposal():
+    seen: dict = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["method"] = req.method
+        seen["url"] = str(req.url)
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(
+            201, json={"data": {"proposal_id": "stok-new", "status": "pending", "action_type": "project.create"}, "meta": None, "error": None}
+        )
+
+    impls = build_tool_impls(_client(handler))
+    out = await impls["propose_create_project"](name="test project", description="a demo")
+
+    assert seen["method"] == "POST"
+    assert seen["url"].endswith("/api/v1/proposals")
+    assert seen["body"]["action_type"] == "project.create"
+    assert seen["body"]["payload"] == {"name": "test project", "description": "a demo"}
+    assert out["proposal_id"] == "stok-new"
+    assert out["status"] == "pending"
+
+
+async def test_propose_create_project_omits_blank_description():
+    seen: dict = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(201, json={"data": {"proposal_id": "stok-x", "status": "pending"}, "meta": None, "error": None})
+
+    impls = build_tool_impls(_client(handler))
+    await impls["propose_create_project"](name="solo")
+    assert seen["body"]["payload"] == {"name": "solo"}        # no description key when not given
+
+
+async def test_propose_submit_request_defaults_and_target_ref():
+    seen: dict = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(201, json={"data": {"proposal_id": "stok-r", "status": "pending"}, "meta": None, "error": None})
+
+    impls = build_tool_impls(_client(handler))
+    # project_id present → rides in target_ref AND payload
+    await impls["propose_submit_request"](description="add a dark mode toggle", project_id="proj-3")
+    b = seen["body"]
+    assert b["action_type"] == "request.submit"
+    assert b["target_ref"] == "proj-3"
+    assert b["payload"] == {
+        "description": "add a dark mode toggle",
+        "task_type": "feature_request",     # default
+        "priority": "medium",               # default
+        "project_id": "proj-3",
+    }
+
+    # project_id omitted → target_ref is None, no project_id key in payload
+    await impls["propose_submit_request"](description="fix login bug", task_type="bug_fix", priority="high")
+    b2 = seen["body"]
+    assert b2["target_ref"] is None
+    assert "project_id" not in b2["payload"]
+    assert b2["payload"]["task_type"] == "bug_fix"
+    assert b2["payload"]["priority"] == "high"
+
+
+def test_registry_has_propose_and_proposal_read_tools():
+    impls = build_tool_impls(_client(lambda req: httpx.Response(200, json={})))
+    for name in (
+        "monitor_list_proposals", "monitor_get_proposal",
+        "propose_create_project", "propose_submit_request",
+    ):
+        assert name in impls

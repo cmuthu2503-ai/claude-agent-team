@@ -93,3 +93,37 @@ def test_per_tier_identities_see_lifecycle_companions():
     developer_names = {s.name for s in tools_for_role(specs, "developer")}
     assert companions <= viewer_names        # hermes-monitor (viewer) sees them
     assert companions <= developer_names     # hermes-operator (developer) too
+
+
+def test_propose_tools_are_developer_gated():
+    """HAI-61 — the gated ACTION tools require a developer token. A viewer
+    (hermes-monitor) must NOT see them; a developer (hermes-operator) must.
+    Loaded from the real shipped manifest, not a fixture."""
+    from pathlib import Path
+
+    manifest_path = Path(__file__).resolve().parents[1] / "tools_manifest.yaml"
+    specs = load_manifest(manifest_path)
+    propose = {"propose_create_project", "propose_submit_request"}
+
+    for spec in specs:
+        if spec.name in propose:
+            assert spec.min_role == "developer", f"{spec.name} should be developer-tier"
+
+    viewer_names = {s.name for s in tools_for_role(specs, "viewer")}
+    developer_names = {s.name for s in tools_for_role(specs, "developer")}
+    assert propose & viewer_names == set()    # viewer is blocked from proposing
+    assert propose <= developer_names         # developer can propose
+
+
+def test_proposal_read_companions_are_viewer_tier():
+    """HAI-60 — the proposal-queue read tools are viewer-tier, so even a
+    read-only hermes-monitor can report on proposal status."""
+    from pathlib import Path
+
+    manifest_path = Path(__file__).resolve().parents[1] / "tools_manifest.yaml"
+    specs = load_manifest(manifest_path)
+    reads = {"monitor_list_proposals", "monitor_get_proposal"}
+    for spec in specs:
+        if spec.name in reads:
+            assert spec.min_role == "viewer", f"{spec.name} should be viewer-tier"
+    assert reads <= {s.name for s in tools_for_role(specs, "viewer")}

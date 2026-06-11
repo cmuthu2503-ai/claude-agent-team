@@ -91,3 +91,36 @@ tools:
     min_role: viewer
     method: GET
     path: /api/v1/projects/{project_id}/tasks
+
+  # ── HAI-60 — proposal queue read companions (viewer-tier) ────────────────────
+  # Let Hermes report on proposals it (or anyone) created — so after a propose_*
+  # call it can answer "is my project request approved yet?". Reads only.
+  - name: monitor_list_proposals
+    description: "List governed proposals (newest first). Optional filters: status (pending/confirmed/rejected/expired), action_type, proposed_by."
+    min_role: viewer
+    method: GET
+    path: /api/v1/proposals
+
+  - name: monitor_get_proposal
+    description: "Full detail + current status of one proposal. Arg: proposal_id."
+    min_role: viewer
+    method: GET
+    path: /api/v1/proposals/{proposal_id}
+
+  # ── HAI-61 — gated ACTION tools (developer-tier) ─────────────────────────────
+  # These are the ONLY way Hermes can change platform state, and they don't change
+  # it directly: each creates a PENDING proposal via POST /api/v1/proposals that a
+  # HUMAN must confirm in the dashboard (/approvals) before anything executes. The
+  # service-token write-block (FR-015a) guarantees a token can reach no other
+  # mutating endpoint, so even a developer/admin token cannot bypass the human gate.
+  - name: propose_create_project
+    description: "Propose creating a new project (requires human approval before it is created). Args: name (required), description (optional). Returns the pending proposal id."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  - name: propose_submit_request
+    description: "Propose submitting a work request to the agent team (requires human approval before it runs). Args: description (required), task_type (default feature_request), priority (default medium), project_id (optional). Returns the pending proposal id."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
