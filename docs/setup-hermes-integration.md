@@ -179,7 +179,8 @@ per §3 with `{"role":"developer"}`) — a `viewer` token never sees them.
 | Tool | min_role | Action |
 |---|---|---|
 | `create_project` | developer | `project.create` |
-| `set_project_brief` | developer | `project.brief.set` |
+| `set_project_brief` | developer | `project.brief.set` (set it the first time) |
+| `update_project_description` | developer | `project.brief.set` (revise it; alias) |
 | `generate_prd` | developer | `prd.generate` |
 | `generate_api_spec` | developer | `apispec.generate` |
 | `generate_epics` | developer | `epics.generate` |

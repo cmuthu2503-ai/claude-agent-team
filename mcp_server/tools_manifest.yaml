@@ -123,7 +123,15 @@ tools:
     path: /api/v1/proposals
 
   - name: set_project_brief
-    description: "Set or update a project's brief (its description/summary). Args: project_id (required), content (required)."
+    description: "Set a project's brief/description for the first time. Args: project_id (required), content (required)."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  # Alias of set_project_brief for natural 'update/revise the description' phrasing
+  # — same governed action (project.brief.set just overwrites the content).
+  - name: update_project_description
+    description: "Update or revise a project's description (overwrites the existing one). Args: project_id (required), content (required)."
     min_role: developer
     method: POST
     path: /api/v1/proposals

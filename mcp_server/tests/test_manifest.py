@@ -104,7 +104,8 @@ def test_propose_tools_are_developer_gated():
     manifest_path = Path(__file__).resolve().parents[1] / "tools_manifest.yaml"
     specs = load_manifest(manifest_path)
     action_tools = {
-        "create_project", "set_project_brief", "generate_prd", "generate_api_spec",
+        "create_project", "set_project_brief", "update_project_description",
+        "generate_prd", "generate_api_spec",
         "generate_epics", "generate_features", "generate_tasks", "generate_build_plan",
         "dispatch_tasks", "submit_request",
         # HAI-66 finalize actions

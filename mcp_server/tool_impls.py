@@ -253,6 +253,8 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
         # HAI-65 — natural-named gated action tools
         "create_project": create_project,
         "set_project_brief": set_project_brief,
+        # alias for natural 'update/revise the description' phrasing → same action
+        "update_project_description": set_project_brief,
         "generate_prd": generate_prd,
         "generate_api_spec": generate_api_spec,
         "generate_epics": generate_epics,
