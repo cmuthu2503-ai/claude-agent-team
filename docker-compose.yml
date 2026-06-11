@@ -38,15 +38,22 @@ services:
       # only land in the backend container's in-image FS and never become
       # visible to the frontend container or to Vite HMR.
       - ./frontend:/app/frontend
-      # docs/ is mounted from the MAIN repo (not the worktree) so research
-      # artifacts land at C:\ai-projects\claude-agent-team\docs\research\... —
-      # the natural project root, instead of being buried in .claude\worktrees.
-      # Any worktree-local doc edits won't be visible to the running container;
-      # commit them to a branch first to make them accessible.
-      - C:/ai-projects/claude-agent-team/docs:/app/docs
+      # docs/ + CLAUDE.md + the host projects root are mounted via env vars that
+      # DEFAULT to portable relative paths, so a normal clone (macOS/Linux) works
+      # with NO config:
+      #   HOST_REPO_ROOT     → the repo root      (default ".")
+      #   HOST_PROJECTS_ROOT → the repo's parent  (default "..", where sibling
+      #                        Projects live; finalize/seed read & write here)
+      # The Windows *worktree* dev flow runs from .claude/worktrees/<name>, so it
+      # overrides these in its (gitignored) .env to point at the MAIN repo:
+      #   HOST_REPO_ROOT=C:/ai-projects/claude-agent-team
+      #   HOST_PROJECTS_ROOT=C:/ai-projects
+      # That keeps research artifacts landing in the main repo's docs/ (not buried
+      # in the worktree). Plain clones never need to set either.
+      - ${HOST_REPO_ROOT:-.}/docs:/app/docs
       # KB-06 — CLAUDE.md (conventions) mounted read-only so the platform-corpus
       # reindex can ingest it into the "Platform" knowledge bucket.
-      - C:/ai-projects/claude-agent-team/CLAUDE.md:/app/CLAUDE.md:ro
+      - ${HOST_REPO_ROOT:-.}/CLAUDE.md:/app/CLAUDE.md:ro
       # PM-finalize feature — when a user clicks "Finalize PRD" or "Finalize
       # Tasks" we write the markdown to C:/ai-projects/<ProjectName>/docs/
       # on the host. The backend writes through this mount; inside the
@@ -54,7 +61,7 @@ services:
       # project-name validation rejects spaces and filesystem-unsafe chars
       # (see src/core/project_validation.py::validate_name) so the path is
       # safe to construct by string concat.
-      - C:/ai-projects:/host/ai-projects
+      - ${HOST_PROJECTS_ROOT:-..}:/host/ai-projects
       # `data` switched from named volume to host bind-mount so the supervisor
       # running on the HOST (not in Docker — see CLAUDE.md "Supervisor scope")
       # can read SQLite directly without needing Docker volume gymnastics.
