@@ -162,9 +162,24 @@ async def lifespan(app: FastAPI):
     # HAI-24 — the approval gate's action registry. Gated action handlers are
     # registered into this by the P3 lifecycle tasks; the confirm endpoint
     # (HAI-26) executes a confirmed proposal through it.
-    from src.core.proposal_registry import ProposalActionRegistry
+    from src.core.proposal_registry import ProposalActionRegistry, parse_require_approval
 
     app.state.proposal_registry = ProposalActionRegistry()
+
+    # HAI-64 — auto-approve policy. PROPOSAL_REQUIRE_APPROVAL lists the gated
+    # action_types that still need a human confirm; everything else auto-approves
+    # on creation. Unset → None → gate everything (backward-compatible default).
+    app.state.proposal_require_approval = parse_require_approval(
+        os.getenv("PROPOSAL_REQUIRE_APPROVAL")
+    )
+    logger.info(
+        "proposal_auto_approve_policy",
+        require_approval=(
+            sorted(app.state.proposal_require_approval)
+            if app.state.proposal_require_approval is not None
+            else "ALL (default — gate every action)"
+        ),
+    )
 
     # P3 (HAI-33..42) — register the gated-action handlers a confirmed proposal
     # executes. Actions without a handler stay gated-but-unhandled (fail cleanly).
