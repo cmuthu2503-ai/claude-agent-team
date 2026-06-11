@@ -196,9 +196,10 @@ async def test_monitor_get_proposal_builds_path():
     assert seen["url"].endswith("/api/v1/proposals/stok-9")
 
 
-# ── HAI-61 — gated action tools (propose → human-approved) ───────────────────
+# ── HAI-61/65 — natural-named gated action tools (→ POST /proposals) ─────────
 
-async def test_propose_create_project_posts_proposal():
+def _capture_body():
+    """A MockTransport handler that records the POSTed JSON body into ``seen``."""
     seen: dict = {}
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -206,42 +207,89 @@ async def test_propose_create_project_posts_proposal():
         seen["url"] = str(req.url)
         seen["body"] = json.loads(req.content)
         return httpx.Response(
-            201, json={"data": {"proposal_id": "stok-new", "status": "pending", "action_type": "project.create"}, "meta": None, "error": None}
+            201,
+            json={"data": {"proposal_id": "stok-new", "status": "pending"}, "meta": None, "error": None},
         )
 
+    return seen, handler
+
+
+async def test_create_project_posts_proposal():
+    seen, handler = _capture_body()
     impls = build_tool_impls(_client(handler))
-    out = await impls["propose_create_project"](name="test project", description="a demo")
+    out = await impls["create_project"](name="test project", description="a demo")
 
     assert seen["method"] == "POST"
     assert seen["url"].endswith("/api/v1/proposals")
     assert seen["body"]["action_type"] == "project.create"
     assert seen["body"]["payload"] == {"name": "test project", "description": "a demo"}
+    assert "target_ref" not in seen["body"]                  # create has no target
     assert out["proposal_id"] == "stok-new"
-    assert out["status"] == "pending"
 
 
-async def test_propose_create_project_omits_blank_description():
-    seen: dict = {}
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        seen["body"] = json.loads(req.content)
-        return httpx.Response(201, json={"data": {"proposal_id": "stok-x", "status": "pending"}, "meta": None, "error": None})
-
+async def test_create_project_omits_blank_description():
+    seen, handler = _capture_body()
     impls = build_tool_impls(_client(handler))
-    await impls["propose_create_project"](name="solo")
+    await impls["create_project"](name="solo")
     assert seen["body"]["payload"] == {"name": "solo"}        # no description key when not given
 
 
-async def test_propose_submit_request_defaults_and_target_ref():
-    seen: dict = {}
+async def test_set_project_brief():
+    seen, handler = _capture_body()
+    impls = build_tool_impls(_client(handler))
+    await impls["set_project_brief"](project_id="proj-1", content="A todo app.")
+    assert seen["body"]["action_type"] == "project.brief.set"
+    assert seen["body"]["target_ref"] == "proj-1"
+    assert seen["body"]["payload"] == {"content": "A todo app."}
 
-    def handler(req: httpx.Request) -> httpx.Response:
-        seen["body"] = json.loads(req.content)
-        return httpx.Response(201, json={"data": {"proposal_id": "stok-r", "status": "pending"}, "meta": None, "error": None})
 
+async def test_generate_tools_target_ref_and_action_type():
+    # the five plain project-scoped generators: target_ref=project_id, no payload
+    cases = [
+        ("generate_prd", "prd.generate"),
+        ("generate_api_spec", "apispec.generate"),
+        ("generate_epics", "epics.generate"),
+        ("generate_tasks", "tasks.generate"),
+        ("generate_build_plan", "buildplan.generate"),
+    ]
+    for tool, action_type in cases:
+        seen, handler = _capture_body()
+        impls = build_tool_impls(_client(handler))
+        await impls[tool]("proj-7")
+        assert seen["body"]["action_type"] == action_type, tool
+        assert seen["body"]["target_ref"] == "proj-7", tool
+        assert "payload" not in seen["body"], tool          # these carry no payload
+
+
+async def test_generate_features_optional_epic():
+    seen, handler = _capture_body()
+    impls = build_tool_impls(_client(handler))
+    await impls["generate_features"]("proj-1")
+    assert seen["body"]["action_type"] == "features.generate"
+    assert seen["body"]["target_ref"] == "proj-1"
+    assert "payload" not in seen["body"]                     # no epic → no payload
+
+    await impls["generate_features"]("proj-1", epic_id="epic-9")
+    assert seen["body"]["payload"] == {"epic_id": "epic-9"}
+
+
+async def test_dispatch_tasks_optional_task_ids():
+    seen, handler = _capture_body()
+    impls = build_tool_impls(_client(handler))
+    await impls["dispatch_tasks"]("proj-2")
+    assert seen["body"]["action_type"] == "task.dispatch"
+    assert seen["body"]["target_ref"] == "proj-2"
+    assert "payload" not in seen["body"]                     # omit → dispatch all dispatchable
+
+    await impls["dispatch_tasks"]("proj-2", task_ids=["t1", "t2"])
+    assert seen["body"]["payload"] == {"task_ids": ["t1", "t2"]}
+
+
+async def test_submit_request_defaults_and_target_ref():
+    seen, handler = _capture_body()
     impls = build_tool_impls(_client(handler))
     # project_id present → rides in target_ref AND payload
-    await impls["propose_submit_request"](description="add a dark mode toggle", project_id="proj-3")
+    await impls["submit_request"](description="add a dark mode toggle", project_id="proj-3")
     b = seen["body"]
     assert b["action_type"] == "request.submit"
     assert b["target_ref"] == "proj-3"
@@ -252,19 +300,21 @@ async def test_propose_submit_request_defaults_and_target_ref():
         "project_id": "proj-3",
     }
 
-    # project_id omitted → target_ref is None, no project_id key in payload
-    await impls["propose_submit_request"](description="fix login bug", task_type="bug_fix", priority="high")
+    # project_id omitted → no target_ref key, no project_id key in payload
+    await impls["submit_request"](description="fix login bug", task_type="bug_fix", priority="high")
     b2 = seen["body"]
-    assert b2["target_ref"] is None
+    assert "target_ref" not in b2
     assert "project_id" not in b2["payload"]
     assert b2["payload"]["task_type"] == "bug_fix"
     assert b2["payload"]["priority"] == "high"
 
 
-def test_registry_has_propose_and_proposal_read_tools():
+def test_registry_has_action_and_proposal_read_tools():
     impls = build_tool_impls(_client(lambda req: httpx.Response(200, json={})))
     for name in (
         "monitor_list_proposals", "monitor_get_proposal",
-        "propose_create_project", "propose_submit_request",
+        "create_project", "set_project_brief", "generate_prd", "generate_api_spec",
+        "generate_epics", "generate_features", "generate_tasks", "generate_build_plan",
+        "dispatch_tasks", "submit_request",
     ):
         assert name in impls

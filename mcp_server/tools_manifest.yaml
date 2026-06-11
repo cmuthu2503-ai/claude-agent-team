@@ -107,20 +107,71 @@ tools:
     method: GET
     path: /api/v1/proposals/{proposal_id}
 
-  # ── HAI-61 — gated ACTION tools (developer-tier) ─────────────────────────────
-  # These are the ONLY way Hermes can change platform state, and they don't change
-  # it directly: each creates a PENDING proposal via POST /api/v1/proposals that a
-  # HUMAN must confirm in the dashboard (/approvals) before anything executes. The
+  # ── HAI-61/65 — gated ACTION tools (developer-tier) ──────────────────────────
+  # Named for natural language so a local model routes "create a project" →
+  # create_project. These are the ONLY way Hermes can change platform state, and
+  # they don't change it directly: each files a governed proposal via
+  # POST /api/v1/proposals. Whether it runs immediately or waits for a human in
+  # /approvals is the backend auto-approve policy (PROPOSAL_REQUIRE_APPROVAL). The
   # service-token write-block (FR-015a) guarantees a token can reach no other
-  # mutating endpoint, so even a developer/admin token cannot bypass the human gate.
-  - name: propose_create_project
-    description: "Propose creating a new project (requires human approval before it is created). Args: name (required), description (optional). Returns the pending proposal id."
+  # mutating endpoint, so a token can never bypass the gate; and `deploy` (or
+  # anything else listed in the policy) always needs a human.
+  - name: create_project
+    description: "Create a new project. Args: name (required), description (optional). Files a governed proposal; runs immediately or awaits approval per policy."
     min_role: developer
     method: POST
     path: /api/v1/proposals
 
-  - name: propose_submit_request
-    description: "Propose submitting a work request to the agent team (requires human approval before it runs). Args: description (required), task_type (default feature_request), priority (default medium), project_id (optional). Returns the pending proposal id."
+  - name: set_project_brief
+    description: "Set or update a project's brief (its description/summary). Args: project_id (required), content (required)."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  - name: generate_prd
+    description: "Generate (create) the project's PRD. Arg: project_id (required)."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  - name: generate_api_spec
+    description: "Generate (create) the project's API specification. Arg: project_id (required)."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  - name: generate_epics
+    description: "Generate the project's epics. Arg: project_id (required)."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  - name: generate_features
+    description: "Generate features for the project, optionally scoped to one epic. Args: project_id (required), epic_id (optional)."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  - name: generate_tasks
+    description: "Generate the project's task list. Arg: project_id (required)."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  - name: generate_build_plan
+    description: "Generate the project's build plan (epics -> features -> tasks rollup). Arg: project_id (required)."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  - name: dispatch_tasks
+    description: "Dispatch the project's tasks to the agents to start building. Args: project_id (required), task_ids (optional list; omit to dispatch all dispatchable tasks)."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  - name: submit_request
+    description: "Submit a work request to the agent team. Args: description (required), task_type (default feature_request), priority (default medium), project_id (optional)."
     min_role: developer
     method: POST
     path: /api/v1/proposals

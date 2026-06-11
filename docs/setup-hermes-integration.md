@@ -169,27 +169,50 @@ reconciles on its next pull — so you never silently lose state, only latency.
 So even an `admin`-scoped service token cannot deploy, cancel, or change a model
 directly — it can only *ask*, and a human approves.
 
-### 8.1 Gated action tools (HAI-60/61 — developer tier)
+### 8.1 Gated action tools (HAI-60/61/65 — developer tier)
 
 To let Hermes *initiate* work from chat (not just observe), the manifest exposes
-**propose tools**. They require a **`developer`** service token (re-mint per §3
-with `{"role":"developer"}`) — a `viewer` token never sees them.
+action tools, **named for natural language** so a local model routes "create a
+project" → `create_project`. They require a **`developer`** service token (re-mint
+per §3 with `{"role":"developer"}`) — a `viewer` token never sees them.
 
-| Tool | min_role | Effect |
+| Tool | min_role | Action |
 |---|---|---|
-| `propose_create_project` | developer | Creates a **pending** `project.create` proposal |
-| `propose_submit_request` | developer | Creates a **pending** `request.submit` proposal |
-| `monitor_list_proposals` | viewer | List proposals + their status |
-| `monitor_get_proposal` | viewer | One proposal's detail/status |
+| `create_project` | developer | `project.create` |
+| `set_project_brief` | developer | `project.brief.set` |
+| `generate_prd` | developer | `prd.generate` |
+| `generate_api_spec` | developer | `apispec.generate` |
+| `generate_epics` | developer | `epics.generate` |
+| `generate_features` | developer | `features.generate` |
+| `generate_tasks` | developer | `tasks.generate` |
+| `generate_build_plan` | developer | `buildplan.generate` |
+| `dispatch_tasks` | developer | `task.dispatch` |
+| `submit_request` | developer | `request.submit` |
+| `monitor_list_proposals` | viewer | list proposals + status |
+| `monitor_get_proposal` | viewer | one proposal's detail/status |
 
-The propose tools do **not** create anything directly — each one only files a
-PENDING proposal. A human then approves it in the dashboard at **`/approvals`**
-(`POST /proposals/{id}/confirm`), and only *then* does the backend execute. The
-write-block still blocks every other mutating endpoint, so a developer/admin
-token cannot bypass the human gate. The one-time approval token goes to the
-human via push/dashboard — never to Hermes — so Hermes can propose but can never
-self-approve.
+Each action tool files a **governed proposal** (`POST /api/v1/proposals`) — it
+never mutates state directly. Whether the proposal then runs immediately or waits
+for a human in **`/approvals`** is the backend auto-approve policy
+(`PROPOSAL_REQUIRE_APPROVAL`, §8.2). The write-block still blocks every other
+mutating endpoint, and the one-time approval token goes to the human — never to
+Hermes — so Hermes can propose but can never self-approve.
 
-**Telegram flow:** *"create a project named test project"* → Hermes calls
-`propose_create_project` → replies with the proposal id + "pending approval" →
-you confirm at `/approvals` → the project is created and the pipeline runs.
+**Telegram flow** (with `PROPOSAL_REQUIRE_APPROVAL=deploy`): *"create a project
+named test project"* → Hermes calls `create_project` → the project is created and
+the pipeline runs, no click. Only `deploy` (or anything else you list) pauses for
+your approval at `/approvals`.
+
+### 8.2 Auto-approve policy (HAI-64)
+
+`PROPOSAL_REQUIRE_APPROVAL` (a backend `.env` var, comma-separated `action_type`s)
+sets which gated actions still need a human:
+
+- **unset** → every action needs a human confirm (safest default)
+- `PROPOSAL_REQUIRE_APPROVAL=deploy` → only deployments need a human; everything
+  else auto-approves and runs immediately
+- empty value → fully autonomous
+
+Auto-approved actions execute under `decided_by=policy:auto-approve` (a standing
+operator authorization, **not** a service self-approval), so the HAI-50 audit
+(`GET /proposals/audit`) stays `clean` and reports an `auto_approved` count.

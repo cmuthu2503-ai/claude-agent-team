@@ -96,23 +96,29 @@ def test_per_tier_identities_see_lifecycle_companions():
 
 
 def test_propose_tools_are_developer_gated():
-    """HAI-61 — the gated ACTION tools require a developer token. A viewer
+    """HAI-61/65 — the gated ACTION tools require a developer token. A viewer
     (hermes-monitor) must NOT see them; a developer (hermes-operator) must.
     Loaded from the real shipped manifest, not a fixture."""
     from pathlib import Path
 
     manifest_path = Path(__file__).resolve().parents[1] / "tools_manifest.yaml"
     specs = load_manifest(manifest_path)
-    propose = {"propose_create_project", "propose_submit_request"}
+    action_tools = {
+        "create_project", "set_project_brief", "generate_prd", "generate_api_spec",
+        "generate_epics", "generate_features", "generate_tasks", "generate_build_plan",
+        "dispatch_tasks", "submit_request",
+    }
 
     for spec in specs:
-        if spec.name in propose:
+        if spec.name in action_tools:
             assert spec.min_role == "developer", f"{spec.name} should be developer-tier"
 
     viewer_names = {s.name for s in tools_for_role(specs, "viewer")}
     developer_names = {s.name for s in tools_for_role(specs, "developer")}
-    assert propose & viewer_names == set()    # viewer is blocked from proposing
-    assert propose <= developer_names         # developer can propose
+    assert action_tools & viewer_names == set()    # viewer is blocked from acting
+    assert action_tools <= developer_names         # developer can act
+    # all ten must actually be present in the shipped manifest
+    assert action_tools <= {s.name for s in specs}
 
 
 def test_proposal_read_companions_are_viewer_tier():
