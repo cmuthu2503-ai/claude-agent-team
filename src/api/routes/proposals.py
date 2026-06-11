@@ -19,6 +19,7 @@ from src.core.gate_audit import audit_service_principal_gating
 from src.core.gate_metrics import build_gate_metrics
 from src.core.proposal_dispatcher import run_confirmed_proposal
 from src.core.proposal_factory import new_proposal
+from src.core.proposal_registry import AUTO_APPROVE_ACTOR, requires_human_approval
 from src.core.proposal_target import validate_proposal_target
 from src.models.base import Proposal, ProposalStatus
 
@@ -236,6 +237,20 @@ async def create_proposal(
                 "approval_token": raw_approval_token,
             },
         )
+
+    # HAI-64 — auto-approve policy. If this action_type isn't on the operator's
+    # human-required list (PROPOSAL_REQUIRE_APPROVAL, resolved at startup), confirm
+    # + execute it now under a standing operator authorization instead of waiting
+    # for a click. The decider is AUTO_APPROVE_ACTOR (NOT a service identity), so
+    # the HAI-50 self-approval audit invariant still holds. Default policy (env
+    # unset) → None → every action needs a human, exactly as before.
+    require_approval = getattr(request.app.state, "proposal_require_approval", None)
+    if not requires_human_approval(proposal.action_type, require_approval):
+        executed = await _do_confirm(
+            request, proposal.proposal_id, decided_by=AUTO_APPROVE_ACTOR
+        )
+        return {"data": _public(executed), "meta": {"auto_approved": True}, "error": None}
+
     return {"data": _public(proposal), "meta": None, "error": None}
 
 

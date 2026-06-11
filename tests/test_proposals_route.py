@@ -499,3 +499,77 @@ async def test_audit_path_not_captured_as_proposal_id(store):
     r = client.get("/api/v1/proposals/audit")
     assert r.status_code == 200
     assert "ungated_executions" in r.json()["data"]
+
+
+# ── HAI-64 — auto-approve policy ─────────────────────────────────────────────
+
+def _registry_multi():
+    reg = ProposalActionRegistry()
+
+    async def ok(proposal, ctx):
+        return {"result_ref": f"{proposal.action_type}-OK"}
+
+    for a in ("project.create", "task.dispatch", "deploy"):
+        reg.register(a, ok)
+    return reg
+
+
+async def test_auto_approve_executes_non_gated_action(store):
+    # Policy: gate only `deploy`; everything else auto-approves on creation.
+    app = _make_app(store, registry=_registry_multi())
+    app.state.proposal_require_approval = frozenset({"deploy"})
+    client = TestClient(app)
+
+    r = client.post(
+        "/api/v1/proposals",
+        json={"action_type": "project.create", "payload": {"name": "Atlas"}},
+    )
+    assert r.status_code == 201
+    body = r.json()
+    data = body["data"]
+    # executed immediately — no human click
+    assert data["status"] == "executed"
+    assert data["result_ref"] == "project.create-OK"
+    assert data["decided_by"] == "policy:auto-approve"
+    assert data["executed_at"] is not None
+    assert body["meta"]["auto_approved"] is True
+    types = [et for et, _ in app.state.captured]
+    assert "proposal.created" in types
+    assert "proposal.confirmed" in types
+    assert "proposal.executed" in types
+
+
+async def test_auto_approve_still_gates_listed_action(store):
+    app = _make_app(store, registry=_registry_multi())
+    app.state.proposal_require_approval = frozenset({"deploy"})
+    client = TestClient(app)
+
+    data = client.post("/api/v1/proposals", json={"action_type": "deploy"}).json()["data"]
+    assert data["status"] == "pending"          # deploy still needs a human
+    assert data["decided_by"] is None
+
+
+async def test_default_policy_gates_everything(store):
+    # app.state has no proposal_require_approval → None → gate all (back-compat)
+    app = _make_app(store, registry=_registry_multi())
+    client = TestClient(app)
+    data = client.post(
+        "/api/v1/proposals", json={"action_type": "project.create", "payload": {"name": "A"}}
+    ).json()["data"]
+    assert data["status"] == "pending"
+
+
+async def test_audit_counts_auto_approved_and_stays_clean(store):
+    app = _make_app(store, registry=_registry_multi())
+    app.state.proposal_require_approval = frozenset({"deploy"})
+    client = TestClient(app)
+    # service principal (default _make_app override) proposes a non-gated action;
+    # it auto-approves + executes.
+    client.post("/api/v1/proposals", json={"action_type": "task.dispatch"})
+
+    audit = client.get("/api/v1/proposals/audit").json()["data"]
+    # auto-approve is NOT a self-approval breach — the decider isn't a service id.
+    assert audit["clean"] is True
+    assert audit["ungated_executions"] == 0
+    assert audit["auto_approved"] == 1
+    assert "policy:auto-approve" in audit["executed_decided_by"]

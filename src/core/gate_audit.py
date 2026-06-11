@@ -18,6 +18,7 @@ from typing import Any
 
 _RUN_STATES = ("executed", "confirmed", "failed")
 _SERVICE_PREFIX = "service:"
+_AUTO_APPROVE_ACTOR = "policy:auto-approve"
 _SCAN_LIMIT = 100_000
 
 
@@ -42,15 +43,28 @@ async def audit_service_principal_gating(state: Any) -> dict[str, Any]:
         if str(p.status) in _RUN_STATES and _is_service(p.decided_by)
     ]
 
+    # HAI-64 — transparency: actions executed under the operator's standing
+    # auto-approve policy (decided_by=policy:auto-approve). These are NOT breaches
+    # (the decider isn't a service identity — it's a human/operator authorization
+    # expressed as config), but an auditor should see how many ran without a
+    # per-action human click.
+    auto_approved = [
+        p.proposal_id for p in proposals
+        if str(p.status) in _RUN_STATES and p.decided_by == _AUTO_APPROVE_ACTOR
+    ]
+
     return {
         "service_proposed_total": len(service_proposed),
         "service_proposed_executed": len(service_executed),
         # positive evidence: every executed service proposal was decided by a
-        # NON-service identity (a human or the one-time channel token).
+        # NON-service identity (a human, the one-time channel token, or the
+        # operator's auto-approve policy).
         "executed_decided_by": sorted(
             {p.decided_by for p in service_executed if p.decided_by}
         ),
         "ungated_executions": len(self_approved),
         "ungated_execution_proposal_ids": self_approved,
+        "auto_approved": len(auto_approved),
+        "auto_approved_proposal_ids": auto_approved,
         "clean": len(self_approved) == 0,
     }
