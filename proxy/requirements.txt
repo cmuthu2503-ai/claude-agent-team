@@ -1,0 +1,3 @@
+anthropic[aws]>=0.52.0
+fastapi>=0.110
+uvicorn[standard]>=0.29
