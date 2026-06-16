@@ -19,6 +19,7 @@ The translation functions (``to_anthropic_request`` / ``to_openai_response`` /
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import uuid
@@ -26,6 +27,9 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("hermes-llm-proxy")
 
 # ── Config (env) ─────────────────────────────────────────────────────────────
 # claude-opus-4-8 is what the agent team runs on and is confirmed provisioned on
@@ -301,15 +305,26 @@ async def chat_completions(request: Request):
 
     kwargs = to_anthropic_request(body)
     # inference_geo is a PER-CALL param (rejected on models < 4.6; our router model
-    # is Sonnet 4.7, so it's safe). Matches src/agents/base.py.
+    # is 4.6+, so it's safe). Matches src/agents/base.py.
     if INFERENCE_GEO:
         kwargs["inference_geo"] = INFERENCE_GEO
+    log.info(
+        "chat.completions model=%s messages=%d tools=%d stream=%s",
+        kwargs.get("model"),
+        len(kwargs.get("messages") or []),
+        len(kwargs.get("tools") or []),
+        bool(body.get("stream")),
+    )
     try:
         client = _get_client()
         resp = await client.messages.create(**kwargs)
     except RuntimeError as e:  # missing creds
+        log.error("missing creds: %s", e)
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:  # noqa: BLE001 — surface upstream errors as 502
+        # Log the FULL error (the Anthropic message names the offending field,
+        # e.g. tools.N.input_schema) — the HTTP body alone is invisible to Hermes.
+        log.exception("upstream error (model=%s, tools=%d)", kwargs.get("model"), len(kwargs.get("tools") or []))
         raise HTTPException(status_code=502, detail=f"upstream error: {e}")
 
     data = resp.model_dump() if hasattr(resp, "model_dump") else dict(resp)
