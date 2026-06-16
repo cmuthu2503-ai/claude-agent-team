@@ -361,7 +361,13 @@ async def chat_completions(request: Request):
     )
     try:
         client = _get_client()
-        resp = await client.messages.create(**kwargs)
+        # Consume via the streaming API and accumulate the final message. The
+        # non-streaming messages.create() raises when the SDK estimates the call
+        # could exceed 10 min (i.e. large max_tokens, which Hermes sends) — using
+        # the streaming API avoids that guard, and works for both stream and
+        # non-stream client requests.
+        async with client.messages.stream(**kwargs) as stream:
+            final = await stream.get_final_message()
     except RuntimeError as e:  # missing creds
         log.error("missing creds: %s", e)
         raise HTTPException(status_code=503, detail=str(e))
@@ -371,7 +377,7 @@ async def chat_completions(request: Request):
         log.exception("upstream error (model=%s, tools=%d)", kwargs.get("model"), len(kwargs.get("tools") or []))
         raise HTTPException(status_code=502, detail=f"upstream error: {e}")
 
-    data = resp.model_dump() if hasattr(resp, "model_dump") else dict(resp)
+    data = final.model_dump() if hasattr(final, "model_dump") else dict(final)
     oai = to_openai_response(data, body.get("model") or DEFAULT_MODEL, name_map)
 
     if body.get("stream"):
