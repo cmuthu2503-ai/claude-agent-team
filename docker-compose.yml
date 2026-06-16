@@ -208,6 +208,39 @@ services:
       start_period: 10s
       retries: 3
 
+  # ── HLP — hermes-llm-proxy: OpenAI-compatible shim over Claude Platform on AWS
+  # Lets Hermes run on cloud Claude (reliable tool-calling) with NO local model,
+  # reusing the same AWS creds as the agent team. Hermes points its `custom`
+  # provider at http://localhost:8088/v1. See docs/setup-hermes-llm-proxy.md.
+  hermes-llm-proxy:
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
+    container_name: hermes-llm-proxy
+    ports:
+      - "8088:8088"
+    volumes:
+      # Bind-mount source for dev (deps stay in the image) — edit + restart, no rebuild.
+      - ./proxy:/app
+    env_file:
+      - .env                       # supplies ANTHROPIC_AWS_API_KEY / _WORKSPACE_ID
+    environment:
+      # Router model — claude-opus-4-8 (confirmed provisioned on the AWS workspace;
+      # same model the agent team uses). Override if a cheaper model is available.
+      - PROXY_DEFAULT_MODEL=${PROXY_DEFAULT_MODEL:-claude-opus-4-8}
+      - ANTHROPIC_AWS_INFERENCE_GEO=${ANTHROPIC_AWS_INFERENCE_GEO:-us}
+      - PROXY_DEFAULT_MAX_TOKENS=${PROXY_DEFAULT_MAX_TOKENS:-4096}
+      # Optional bearer to guard the proxy; empty = no auth (localhost only).
+      - PROXY_API_KEY=${PROXY_API_KEY:-}
+    networks:
+      - dev-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8088/healthz')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
 volumes:
   # agent-team-data is now bind-mounted to ./data (see backend.volumes above)
   agent-team-reports:
