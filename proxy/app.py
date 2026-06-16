@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from typing import Any
@@ -39,6 +40,15 @@ DEFAULT_MODEL = os.getenv("PROXY_DEFAULT_MODEL", "claude-opus-4-8")
 INFERENCE_GEO = (os.getenv("ANTHROPIC_AWS_INFERENCE_GEO", "us") or "us").strip().lower()
 DEFAULT_MAX_TOKENS = int(os.getenv("PROXY_DEFAULT_MAX_TOKENS", "4096"))
 PROXY_API_KEY = os.getenv("PROXY_API_KEY", "").strip()  # optional bearer to guard the proxy
+# `temperature` is DEPRECATED on newer models (e.g. claude-opus-4-8 → 400). Clients
+# like Hermes send it by default, so drop it unless explicitly re-enabled.
+FORWARD_TEMPERATURE = os.getenv("PROXY_FORWARD_TEMPERATURE", "").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+
+# Anthropic tool names must match this; OpenAI/Hermes are more lenient (dots,
+# colons, …). We sanitize on the way in and restore the original on the way out.
+_TOOL_NAME_RE = re.compile(r"[^a-zA-Z0-9_-]")
 
 app = FastAPI(title="hermes-llm-proxy")
 
@@ -96,23 +106,48 @@ def _map_model(name: str | None) -> str:
     return DEFAULT_MODEL
 
 
-def _map_tools(tools: list[dict] | None) -> list[dict] | None:
+def _sanitize_tool_name(name: str) -> str:
+    """Coerce a tool name to Anthropic's allowed pattern (a-zA-Z0-9_-, ≤128)."""
+    safe = _TOOL_NAME_RE.sub("_", name or "")[:128]
+    return safe or "tool"
+
+
+def _coerce_input_schema(params: Any) -> dict:
+    """Anthropic requires input_schema to be an OBJECT JSON Schema (top-level
+    ``type: object`` + ``properties``). Coerce so a tool with empty/odd
+    parameters doesn't 400 the whole request."""
+    schema = dict(params) if isinstance(params, dict) else {}
+    if schema.get("type") != "object":
+        schema["type"] = "object"
+    schema.setdefault("properties", {})
+    return schema
+
+
+def _map_tools(tools: list[dict] | None) -> tuple[list[dict] | None, dict[str, str]]:
+    """Return ``(anthropic_tools, name_map)``. ``name_map`` maps a SANITIZED tool
+    name back to its original (only when it changed) so the response translator
+    restores the name the client expects."""
     if not tools:
-        return None
-    out = []
+        return None, {}
+    out: list[dict] = []
+    name_map: dict[str, str] = {}
     for t in tools:
         if t.get("type") != "function":
             continue
         fn = t.get("function", {})
+        original = fn.get("name") or "tool"
+        safe = _sanitize_tool_name(original)
+        if safe != original:
+            name_map[safe] = original
         out.append(
             {
-                "name": fn.get("name"),
+                "name": safe,
                 "description": fn.get("description", "") or "",
                 # OpenAI 'parameters' (JSON Schema) == Anthropic 'input_schema'
-                "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
+                "input_schema": _coerce_input_schema(fn.get("parameters")),
             }
         )
-    return out or None
+    return (out or None), name_map
 
 
 def _map_tool_choice(tc: Any) -> dict | None:
@@ -131,8 +166,10 @@ def _map_tool_choice(tc: Any) -> dict | None:
     return {"type": "auto"}
 
 
-def to_anthropic_request(body: dict) -> dict:
-    """OpenAI chat-completions body → kwargs for ``messages.create`` (no client)."""
+def to_anthropic_request(body: dict, name_map_out: dict | None = None) -> dict:
+    """OpenAI chat-completions body → kwargs for ``messages.create`` (no client).
+    If ``name_map_out`` is given, it's populated with sanitized→original tool
+    names so the caller can restore them in the response."""
     system_parts: list[str] = []
     a_messages: list[dict] = []
 
@@ -187,19 +224,24 @@ def to_anthropic_request(body: dict) -> dict:
     system = "\n\n".join(system_parts)
     if system:
         kwargs["system"] = system
-    if body.get("temperature") is not None:
+    # temperature is deprecated on newer models (opus-4-8 → 400); drop unless enabled.
+    if FORWARD_TEMPERATURE and body.get("temperature") is not None:
         kwargs["temperature"] = body["temperature"]
-    tools = _map_tools(body.get("tools"))
+    tools, name_map = _map_tools(body.get("tools"))
     if tools:
         kwargs["tools"] = tools
+    if name_map_out is not None:
+        name_map_out.update(name_map)
     choice = _map_tool_choice(body.get("tool_choice"))
     if choice is not None:
         kwargs["tool_choice"] = choice
     return kwargs
 
 
-def to_openai_response(resp: dict, model: str) -> dict:
-    """Anthropic Messages response (as dict) → OpenAI chat.completion."""
+def to_openai_response(resp: dict, model: str, name_map: dict | None = None) -> dict:
+    """Anthropic Messages response (as dict) → OpenAI chat.completion. ``name_map``
+    restores original tool names that were sanitized for Anthropic."""
+    nmap = name_map or {}
     text_parts: list[str] = []
     tool_calls: list[dict] = []
     for b in resp.get("content") or []:
@@ -207,12 +249,13 @@ def to_openai_response(resp: dict, model: str) -> dict:
         if btype == "text":
             text_parts.append(b.get("text", ""))
         elif btype == "tool_use":
+            raw_name = b.get("name")
             tool_calls.append(
                 {
                     "id": b.get("id") or f"call_{uuid.uuid4().hex[:24]}",
                     "type": "function",
                     "function": {
-                        "name": b.get("name"),
+                        "name": nmap.get(raw_name, raw_name),  # restore original
                         "arguments": json.dumps(b.get("input") or {}),
                     },
                 }
@@ -303,7 +346,8 @@ async def chat_completions(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="invalid JSON body")
 
-    kwargs = to_anthropic_request(body)
+    name_map: dict[str, str] = {}
+    kwargs = to_anthropic_request(body, name_map)
     # inference_geo is a PER-CALL param (rejected on models < 4.6; our router model
     # is 4.6+, so it's safe). Matches src/agents/base.py.
     if INFERENCE_GEO:
@@ -328,7 +372,7 @@ async def chat_completions(request: Request):
         raise HTTPException(status_code=502, detail=f"upstream error: {e}")
 
     data = resp.model_dump() if hasattr(resp, "model_dump") else dict(resp)
-    oai = to_openai_response(data, body.get("model") or DEFAULT_MODEL)
+    oai = to_openai_response(data, body.get("model") or DEFAULT_MODEL, name_map)
 
     if body.get("stream"):
         return StreamingResponse(sse_chunks(oai), media_type="text/event-stream")

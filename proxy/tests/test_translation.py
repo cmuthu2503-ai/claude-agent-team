@@ -99,6 +99,44 @@ def test_unknown_model_falls_back_to_default():
     assert to_anthropic_request({"messages": [], "model": "claude-sonnet-4-7"})["model"] == "claude-sonnet-4-7"
 
 
+# ── Anthropic-strict fixes (found via live testing) ──────────────────────────
+
+def test_temperature_is_dropped_by_default():
+    # claude-opus-4-8 rejects `temperature` (deprecated). Don't forward it.
+    out = to_anthropic_request({"messages": [{"role": "user", "content": "hi"}], "temperature": 0.7})
+    assert "temperature" not in out
+
+
+def test_tool_name_sanitized_and_round_tripped():
+    name_map: dict = {}
+    out = to_anthropic_request(
+        {"messages": [], "tools": [{"type": "function", "function": {
+            "name": "fs.read", "description": "d", "parameters": {"type": "object", "properties": {}}}}]},
+        name_map,
+    )
+    assert out["tools"][0]["name"] == "fs_read"          # '.' → '_'
+    assert name_map == {"fs_read": "fs.read"}            # sanitized → original recorded
+    # response restores the original name the client expects
+    resp = {"content": [{"type": "tool_use", "id": "t1", "name": "fs_read", "input": {}}],
+            "stop_reason": "tool_use", "usage": {}}
+    oai = to_openai_response(resp, "m", name_map)
+    assert oai["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "fs.read"
+
+
+def test_input_schema_gets_object_type_when_missing():
+    # parameters present but without top-level "type" → coerced to object
+    tool_no_type = {"type": "function", "function": {
+        "name": "f", "parameters": {"properties": {"x": {"type": "string"}}}}}
+    out = to_anthropic_request({"messages": [], "tools": [tool_no_type]})
+    assert out["tools"][0]["input_schema"]["type"] == "object"
+    assert out["tools"][0]["input_schema"]["properties"] == {"x": {"type": "string"}}
+
+    # no parameters at all → minimal valid object schema
+    tool_no_params = {"type": "function", "function": {"name": "g"}}
+    out2 = to_anthropic_request({"messages": [], "tools": [tool_no_params]})
+    assert out2["tools"][0]["input_schema"] == {"type": "object", "properties": {}}
+
+
 # ── Anthropic → OpenAI (response) ────────────────────────────────────────────
 
 def test_text_response_maps_to_content():
