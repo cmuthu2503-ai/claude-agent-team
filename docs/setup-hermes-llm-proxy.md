@@ -78,8 +78,9 @@ hermes gateway restart
 ```
 
 > Keep the operator persona in `agent.personalities.helpful` (see
-> [setup-hermes-integration.md](setup-hermes-integration.md) §8) — that's what makes
-> the model actually call tools. The proxy only changes *which* model runs.
+> [setup-hermes-integration.md](setup-hermes-integration.md) §9 — full persona text +
+> session hygiene) — that's what makes the model actually call tools and act on the
+> latest instruction. The proxy only changes *which* model runs.
 
 ## 4. Verify end-to-end
 

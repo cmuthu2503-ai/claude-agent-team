@@ -224,3 +224,68 @@ sets which gated actions still need a human:
 Auto-approved actions execute under `decided_by=policy:auto-approve` (a standing
 operator authorization, **not** a service self-approval), so the HAI-50 audit
 (`GET /proposals/audit`) stays `clean` and reports an `auto_approved` count.
+
+## 9. Operating Hermes reliably — session hygiene + operator persona
+
+Hermes runs its brain on a model (local, or cloud via the proxy in
+[setup-hermes-llm-proxy.md](setup-hermes-llm-proxy.md)) and **persists/resumes the
+Telegram conversation**. Two classes of misbehavior come from *how Hermes packs
+its session history into each model call* — not from the platform backend:
+
+- **Stale context bleed** — a fresh request leads with leftovers from an earlier
+  exchange (old project names, "delete X yourself", etc.). *(BUG-1/2)*
+- **Re-running completed steps** — e.g. "finalize the API spec" makes Hermes
+  re-finalize the PRD and regenerate the spec instead of just finalizing it.
+  *(BUG-6)*
+
+These are **Hermes-side**; the platform now also defends against the *effects*
+(an idempotency key dedups duplicate proposals within a 5-min window), but the
+real fixes are session hygiene + a sharper persona.
+
+### 9.1 Session hygiene (highest impact)
+
+- **One Telegram thread = one task.** Start a **fresh session** before an
+  unrelated task — use Hermes's reset command (`/new`, `/reset`, or `/clear`;
+  confirm via the bot's `/commands` menu). This is the single most effective fix
+  for stale-context bleed.
+- **Bound the history** Hermes replays, in `~/.hermes/config.yaml` (keys vary by
+  version — look under `agent:`/`session:` for `max_turns` / `history_limit` /
+  `session.persist` / `ttl`; inspect with `hermes config --help`).
+
+### 9.2 Operator persona (set `agent.personalities.helpful` in `~/.hermes/config.yaml`)
+
+Hermes's system prompt comes from the **active personality** (default `helpful`),
+**not** a top-level `system_prompt:` key (that key is ignored). Replace the default
+`helpful` text with an operator persona that (a) acts only on the latest message,
+(b) checks state before re-running steps, and (c) always calls the matching tool:
+
+```yaml
+  personalities:
+    helpful: |
+      You are Hermes, the operator interface to the Agent Team platform via the
+      "agent-team" MCP tools. You can CHANGE platform state through a governed
+      approval flow — you are NOT a read-only monitor.
+
+      Act ONLY on the user's most recent message. Do not resume, restate, or
+      re-run earlier requests unless the latest message explicitly asks for it.
+      If earlier turns mention different project names, the latest message's name
+      is authoritative.
+
+      Before acting, check current state with the read tools (monitor_list_projects,
+      project_get_prd/apispec/buildplan/tasks, monitor_get_proposal). Never re-run a
+      step that is already done — e.g. if asked to "finalize the API spec", call
+      finalize_api_spec only; do NOT re-finalize the PRD or regenerate the spec.
+
+      When asked to create a project, set/update a description, generate or finalize
+      an artifact, dispatch tasks, or submit a request, you MUST call the matching
+      tool. Never reply that you can only monitor or retrieve, and never offer to
+      draft a document yourself instead of calling the tool. The action tools accept
+      a project NAME (not just an id), so pass the name the user gave.
+```
+
+Then restart and start a fresh session: `hermes gateway restart` → `/new`.
+
+> Persona + session hygiene reduce BUG-1/2/6 substantially but are *mitigations*
+> of an external system, not a hard guarantee. If misbehavior persists with a
+> bounded history and a fresh session, the durable fix is a stronger
+> tool-calling model for Hermes's brain.
