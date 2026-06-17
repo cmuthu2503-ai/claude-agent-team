@@ -1544,7 +1544,7 @@ async def _require_project(state, project_id: str) -> Project:
 async def get_brief(
     project_id: str,
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_principal),  # BUG-5 — JWT or service token (Hermes reads)
 ):
     """Return the latest brief for this project, or 404 if none."""
     state = request.app.state.state_store
@@ -1607,7 +1607,7 @@ async def put_brief(
 async def get_prd(
     project_id: str,
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_principal),  # BUG-5 — JWT or service token (Hermes reads)
 ):
     """Return the latest PRD artifact (any status). 404 if none yet."""
     state = request.app.state.state_store
@@ -1616,6 +1616,28 @@ async def get_prd(
     if art is None:
         raise HTTPException(status_code=404, detail="No PRD yet.")
     return {"data": _artifact_to_dict(art), "meta": None, "error": None}
+
+
+async def _seed_brief_from_description(state, project, created_by):
+    """BUG-3 — a project created with a `description` (but no explicit brief)
+    should still be able to generate a PRD. If there's no usable brief and the
+    project description is ≥ _BRIEF_MIN chars, seed a BRIEF artifact from the
+    description (truncated to _BRIEF_MAX) so it becomes the durable PRD input.
+    Returns the brief artifact, or None when there's no usable description."""
+    desc = (getattr(project, "description", None) or "").strip()
+    if len(desc) < _BRIEF_MIN:
+        return None
+    art = ProjectArtifact(
+        artifact_id=f"art-{uuid.uuid4().hex[:12]}",
+        project_id=project.project_id,
+        kind=ArtifactKind.BRIEF,
+        version=1,
+        status=ArtifactStatus.DRAFT,
+        content=desc[:_BRIEF_MAX],
+        created_by=created_by,
+    )
+    await state.create_artifact(art)
+    return art
 
 
 @router.post("/{project_id}/prd/generate", status_code=201)
@@ -1643,9 +1665,13 @@ async def generate_prd(
 
     brief = await state.get_artifact(project_id, ArtifactKind.BRIEF)
     if brief is None or len(brief.content.strip()) < _BRIEF_MIN:
+        # BUG-3 — fall back to the project's description: a project created with a
+        # description should be able to generate a PRD without a separate brief step.
+        brief = await _seed_brief_from_description(state, project, user.get("user_id"))
+    if brief is None or len(brief.content.strip()) < _BRIEF_MIN:
         raise HTTPException(
             status_code=400,
-            detail="Save a project brief (≥50 chars) before generating a PRD.",
+            detail="Set a project brief or description (≥50 chars) before generating a PRD.",
         )
 
     review_comments = ((body.review_comments if body else None) or "").strip()
@@ -2058,7 +2084,7 @@ class APISpecPatchBody(BaseModel):
 async def get_api_spec(
     project_id: str,
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_principal),  # BUG-5 — JWT or service token (Hermes reads)
 ):
     """Return the latest API spec artifact (any status). 404 if none yet."""
     state = request.app.state.state_store
@@ -2542,7 +2568,7 @@ async def get_tasks(
     project_id: str,
     request: Request,
     version: int | None = None,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_principal),  # BUG-5 — JWT or service token (Hermes reads)
 ):
     """List tasks for this project. Default returns the latest non-archived
     version; pass ?version= for a specific generation."""
@@ -4240,7 +4266,7 @@ async def decompose_legacy_tasks(
 async def get_build_plan_rollup(
     project_id: str,
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_principal),  # BUG-5 — JWT or service token (Hermes reads)
 ):
     """One-shot fetch for the project header stat chip:
        {epics_done, epics_total, tasks_done, tasks_total, tasks_blocked}.
