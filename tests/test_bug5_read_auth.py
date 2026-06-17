@@ -61,6 +61,8 @@ async def client_and_pid():
         "/api/v1/projects/proj-1/tasks",
         "/api/v1/projects/proj-1/build-plan/rollup",
         "/api/v1/projects/proj-1/brief",
+        "/api/v1/projects/proj-1/epics",      # BUG-7
+        "/api/v1/projects/proj-1/features",   # BUG-7
     ],
 )
 async def test_lifecycle_reads_accept_service_token(client_and_pid, path):

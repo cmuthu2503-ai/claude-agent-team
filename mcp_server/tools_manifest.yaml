@@ -227,3 +227,16 @@ tools:
     min_role: viewer
     method: GET
     path: /api/v1/projects/{project_id}/tasks/next-wave
+
+  # ── BUG-7 — epic/feature enumeration (so generate_features can target an epic)
+  - name: get_epics
+    description: "List the project's epics (id, title, ordinal) — use this to find an epic_id to target with generate_features. Arg: project_id (name or id)."
+    min_role: viewer
+    method: GET
+    path: /api/v1/projects/{project_id}/epics
+
+  - name: get_features
+    description: "List the project's features (flat; each has its epic_id). Arg: project_id (name or id)."
+    min_role: viewer
+    method: GET
+    path: /api/v1/projects/{project_id}/features
