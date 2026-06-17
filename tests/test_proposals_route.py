@@ -514,8 +514,10 @@ def _registry_multi():
     return reg
 
 
-async def test_auto_approve_executes_non_gated_action(store):
+async def test_auto_approve_confirms_then_executes_in_background(store):
     # Policy: gate only `deploy`; everything else auto-approves on creation.
+    # BUG-4 — the POST returns CONFIRMED immediately (async); the handler runs in a
+    # detached task, so the response never blocks on a ~2min generation.
     app = _make_app(store, registry=_registry_multi())
     app.state.proposal_require_approval = frozenset({"deploy"})
     client = TestClient(app)
@@ -527,16 +529,20 @@ async def test_auto_approve_executes_non_gated_action(store):
     assert r.status_code == 201
     body = r.json()
     data = body["data"]
-    # executed immediately — no human click
-    assert data["status"] == "executed"
-    assert data["result_ref"] == "project.create-OK"
+    assert data["status"] == "confirmed"                 # returns immediately, not executed
     assert data["decided_by"] == "policy:auto-approve"
-    assert data["executed_at"] is not None
     assert body["meta"]["auto_approved"] is True
+    assert body["meta"]["async"] is True
     types = [et for et, _ in app.state.captured]
-    assert "proposal.created" in types
-    assert "proposal.confirmed" in types
-    assert "proposal.executed" in types
+    assert "proposal.created" in types and "proposal.confirmed" in types
+
+    # The real detached task runs on TestClient's internal loop; execute the same
+    # helper here deterministically (idempotent — it no-ops if the task already ran).
+    final = await proposals_route._execute_confirmed(app, data["proposal_id"])
+    assert final is not None and str(final.status) == "executed"
+    assert final.result_ref == "project.create-OK"
+    assert final.executed_at is not None
+    assert "proposal.executed" in [et for et, _ in app.state.captured]
 
 
 async def test_auto_approve_still_gates_listed_action(store):
@@ -564,8 +570,11 @@ async def test_audit_counts_auto_approved_and_stays_clean(store):
     app.state.proposal_require_approval = frozenset({"deploy"})
     client = TestClient(app)
     # service principal (default _make_app override) proposes a non-gated action;
-    # it auto-approves + executes.
-    client.post("/api/v1/proposals", json={"action_type": "task.dispatch"})
+    # it auto-approves (confirmed) then executes in the background.
+    pid = client.post(
+        "/api/v1/proposals", json={"action_type": "task.dispatch"}
+    ).json()["data"]["proposal_id"]
+    await proposals_route._execute_confirmed(app, pid)
 
     audit = client.get("/api/v1/proposals/audit").json()["data"]
     # auto-approve is NOT a self-approval breach — the decider isn't a service id.
