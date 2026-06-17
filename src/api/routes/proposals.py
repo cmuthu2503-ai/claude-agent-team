@@ -8,7 +8,9 @@ change), then a HUMAN confirms or rejects it. Two human paths:
 Reads (list/get) are open to JWT or service token so Hermes can poll the queue.
 """
 
+import asyncio
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -90,9 +92,58 @@ async def _load_pending_or_409(state, proposal_id: str) -> Proposal:
     )
 
 
-async def _do_confirm(request: Request, proposal_id: str, decided_by: str) -> Proposal:
+# BUG-4 — detached background executions; keep refs so tasks aren't GC'd mid-run.
+_BG_TASKS: set[asyncio.Task] = set()
+
+
+async def _execute_confirmed(app: Any, proposal_id: str) -> Proposal | None:
+    """Run a CONFIRMED proposal's handler and record the outcome. Safe to run in a
+    detached background task (BUG-4): the heavy LLM work no longer blocks the HTTP
+    response, and a crash is caught + recorded as `failed` so a proposal never
+    hangs in `confirmed`. The confirm transition (incl. decided_by) already
+    happened, so the HAI-50 self-approval audit is unaffected."""
+    state = app.state.state_store
+    registry = app.state.proposal_registry
+    events = getattr(app.state, "events", None)
+
+    confirmed = await state.get_proposal(proposal_id)
+    if confirmed is None or confirmed.status != ProposalStatus.CONFIRMED:
+        return confirmed  # already executed/failed/gone — nothing to do
+
+    ctx = SimpleNamespace(app=app)  # handlers read ctx.app.state.*
+    try:
+        outcome = await run_confirmed_proposal(confirmed, registry, ctx)
+    except Exception as e:  # noqa: BLE001 — never leave a proposal stuck in 'confirmed'
+        outcome = {"status": "failed", "result_ref": None, "error": f"{type(e).__name__}: {e}"}
+
+    await state.update_proposal(
+        proposal_id,
+        {
+            "status": outcome["status"],
+            "result_ref": outcome["result_ref"],
+            "error": outcome["error"],
+            "executed_at": datetime.utcnow().isoformat(),
+        },
+    )
+    if events is not None:
+        ev = "proposal.executed" if outcome["status"] == "executed" else "proposal.failed"
+        await events.emit(
+            ev,
+            {"proposal_id": proposal_id, "result_ref": outcome["result_ref"], "error": outcome["error"]},
+        )
+    return await state.get_proposal(proposal_id)
+
+
+def _spawn_execute(app: Any, proposal_id: str) -> None:
+    task = asyncio.create_task(_execute_confirmed(app, proposal_id))
+    _BG_TASKS.add(task)
+    task.add_done_callback(_BG_TASKS.discard)
+
+
+async def _do_confirm(
+    request: Request, proposal_id: str, decided_by: str, *, background: bool = False
+) -> Proposal:
     state = request.app.state.state_store
-    registry = request.app.state.proposal_registry
     events = getattr(request.app.state, "events", None)
 
     proposal = await _load_pending_or_409(state, proposal_id)
@@ -137,28 +188,16 @@ async def _do_confirm(request: Request, proposal_id: str, decided_by: str) -> Pr
             "proposal.confirmed", {"proposal_id": proposal_id, "decided_by": decided_by}
         )
 
-    confirmed = await state.get_proposal(proposal_id)
-    outcome = await run_confirmed_proposal(confirmed, registry, request)
-    await state.update_proposal(
-        proposal_id,
-        {
-            "status": outcome["status"],
-            "result_ref": outcome["result_ref"],
-            "error": outcome["error"],
-            "executed_at": datetime.utcnow().isoformat(),
-        },
-    )
-    if events is not None:
-        ev = "proposal.executed" if outcome["status"] == "executed" else "proposal.failed"
-        await events.emit(
-            ev,
-            {
-                "proposal_id": proposal_id,
-                "result_ref": outcome["result_ref"],
-                "error": outcome["error"],
-            },
-        )
-    return await state.get_proposal(proposal_id)
+    if background:
+        # BUG-4 — don't block the HTTP response on the (~2min) handler; execute
+        # detached and return the CONFIRMED proposal immediately. The caller
+        # (Hermes) polls monitor_get_proposal for the terminal state. This removes
+        # the client read-timeout + the timed-out-but-still-running duplicate race.
+        _spawn_execute(request.app, proposal_id)
+        return await state.get_proposal(proposal_id)
+
+    # Inline path (human confirm/approve): execute now, return the terminal proposal.
+    return await _execute_confirmed(request.app, proposal_id)
 
 
 async def _do_reject(
@@ -246,10 +285,17 @@ async def create_proposal(
     # unset) → None → every action needs a human, exactly as before.
     require_approval = getattr(request.app.state, "proposal_require_approval", None)
     if not requires_human_approval(proposal.action_type, require_approval):
-        executed = await _do_confirm(
-            request, proposal.proposal_id, decided_by=AUTO_APPROVE_ACTOR
+        # BUG-4 — confirm synchronously (sets decided_by; preserves HAI-50 audit),
+        # but run the handler in the background so the POST returns immediately.
+        # The caller polls monitor_get_proposal for the terminal state.
+        confirmed = await _do_confirm(
+            request, proposal.proposal_id, decided_by=AUTO_APPROVE_ACTOR, background=True
         )
-        return {"data": _public(executed), "meta": {"auto_approved": True}, "error": None}
+        return {
+            "data": _public(confirmed),
+            "meta": {"auto_approved": True, "async": True},
+            "error": None,
+        }
 
     return {"data": _public(proposal), "meta": None, "error": None}
 
