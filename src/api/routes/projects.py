@@ -3714,7 +3714,7 @@ def _count_by_status(tasks: list[ProjectTask]) -> dict[str, int]:
 async def list_epics(
     project_id: str,
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_principal),  # BUG-7 — JWT or service token (Hermes reads)
 ):
     """Return all epics for a project (latest non-archived version).
     Used by the Task List page's epic-level rendering and by the
@@ -4144,7 +4144,7 @@ async def unfinalize_feature_endpoint(
 async def list_features(
     project_id: str,
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_principal),  # BUG-7 — JWT or service token (Hermes reads)
 ):
     """Return all features for a project, scoped to the latest
     non-archived list_version. Returned flat (epic_id on each row);

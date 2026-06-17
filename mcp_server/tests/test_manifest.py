@@ -136,6 +136,8 @@ def test_proposal_read_companions_are_viewer_tier():
         "monitor_list_proposals", "monitor_get_proposal",
         # HAI-66 startable-task reads
         "get_startable_tasks", "get_next_wave_tasks",
+        # BUG-7 epic/feature reads
+        "get_epics", "get_features",
     }
     for spec in specs:
         if spec.name in reads:

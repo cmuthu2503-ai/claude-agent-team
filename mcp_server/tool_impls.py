@@ -9,30 +9,12 @@ exposed and their min_role; the implementations live here. Monitor tools
 
 from __future__ import annotations
 
-import hashlib
-import json
-import time
 from typing import Any, Callable
 
 try:  # package vs flat (container) layout
     from mcp_server.backend_client import BackendClient
 except ModuleNotFoundError:  # pragma: no cover - container runs flat
     from backend_client import BackendClient  # type: ignore[no-redef]
-
-
-def _idempotency_key(action_type: str, target_ref: str | None, payload: dict | None) -> str:
-    """A 5-minute-bucketed key so an IDENTICAL action retried or over-planned in a
-    short window dedups to one proposal (BUG-4 retry storms, BUG-6 re-running a
-    completed step), while an intentional re-run later (different bucket) still
-    creates a fresh proposal. The backend honors idempotency_key (replay returns
-    the same proposal, no duplicate row)."""
-    bucket = int(time.time() // 300)
-    raw = json.dumps(
-        {"a": action_type, "t": target_ref, "p": payload or {}, "w": bucket},
-        sort_keys=True,
-        default=str,
-    )
-    return "mcp-" + hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
 def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
@@ -180,10 +162,6 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
             if payload.get("project_id"):
                 payload = {**payload, "project_id": await _resolve_project_id(payload["project_id"])}
             body["payload"] = payload
-        # BUG-4/BUG-6 — dedup identical actions in a short window (retry/over-plan).
-        body["idempotency_key"] = _idempotency_key(
-            action_type, body.get("target_ref"), body.get("payload")
-        )
         return await client.post("/api/v1/proposals", json=body)
 
     async def create_project(name: str, description: str | None = None) -> Any:
@@ -287,6 +265,18 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
         pid = await _resolve_project_id(project_id)
         return await client.get(f"/api/v1/projects/{pid}/tasks/next-wave")
 
+    async def get_epics(project_id: str) -> Any:
+        """List the project's epics (id, title, ordinal) — find an epic_id to pass to
+        generate_features. Arg accepts the project name or id."""
+        pid = await _resolve_project_id(project_id)
+        return await client.get(f"/api/v1/projects/{pid}/epics")
+
+    async def get_features(project_id: str) -> Any:
+        """List the project's features (flat; each carries its epic_id). Arg accepts
+        the project name or id."""
+        pid = await _resolve_project_id(project_id)
+        return await client.get(f"/api/v1/projects/{pid}/features")
+
     return {
         "monitor_backend_health": monitor_backend_health,
         "monitor_list_requests": monitor_list_requests,
@@ -324,4 +314,7 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
         "finalize_features": finalize_features,
         "get_startable_tasks": get_startable_tasks,
         "get_next_wave_tasks": get_next_wave_tasks,
+        # BUG-7 — epic/feature enumeration
+        "get_epics": get_epics,
+        "get_features": get_features,
     }
