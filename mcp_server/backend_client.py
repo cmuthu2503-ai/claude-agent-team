@@ -9,6 +9,7 @@ actionable to Hermes instead of an opaque stack trace (FR-007).
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import httpx
@@ -76,9 +77,17 @@ class BackendClient:
         base_url: str | None = None,
         service_token: str | None = None,
         *,
-        timeout: float = 30.0,
+        # BUG-4 — long actions (PRD/spec/tasks/build-plan generation) run
+        # synchronously and take ~90s–2min; the old 30s default fired a client
+        # read-timeout ("deadline exceeded") even though the work completed. The
+        # backend executes inline and Hermes itself tolerates long calls
+        # (agent.gateway_timeout=1800), so the MCP client was the bottleneck.
+        # Configurable via MCP_BACKEND_TIMEOUT (seconds).
+        timeout: float | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
+        if timeout is None:
+            timeout = float(os.getenv("MCP_BACKEND_TIMEOUT", "300"))
         self._base = (base_url or settings.BACKEND_URL).rstrip("/")
         token = service_token if service_token is not None else settings.SERVICE_TOKEN
         self._headers = {"Authorization": f"Bearer {token}"} if token else {}

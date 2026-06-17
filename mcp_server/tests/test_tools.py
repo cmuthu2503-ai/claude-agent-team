@@ -5,7 +5,7 @@ import json
 import httpx
 
 from backend_client import BackendClient
-from tool_impls import build_tool_impls
+from tool_impls import _idempotency_key, build_tool_impls
 
 
 def _client(handler) -> BackendClient:
@@ -406,6 +406,24 @@ async def test_startable_and_next_wave_read_tools():
 
     await impls["get_next_wave_tasks"]("proj-2")
     assert seen["url"].endswith("/api/v1/projects/proj-2/tasks/next-wave")
+
+
+def test_idempotency_key_stable_for_identical_differs_for_distinct():
+    k1 = _idempotency_key("project.create", None, {"name": "X"})
+    k2 = _idempotency_key("project.create", None, {"name": "X"})
+    k3 = _idempotency_key("project.create", None, {"name": "Y"})
+    k4 = _idempotency_key("request.submit", None, {"name": "X"})
+    assert k1 == k2                 # identical action+payload (same 5-min bucket) → dedup
+    assert k1 != k3                 # different payload → distinct
+    assert k1 != k4                 # different action → distinct
+    assert k1.startswith("mcp-")
+
+
+async def test_propose_includes_idempotency_key():
+    seen, handler = _capture_body()
+    impls = build_tool_impls(_client(handler))
+    await impls["create_project"](name="Z")
+    assert seen["body"]["idempotency_key"].startswith("mcp-")
 
 
 def test_registry_has_finalize_and_wave_tools():

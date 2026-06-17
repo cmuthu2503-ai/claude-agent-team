@@ -15,6 +15,20 @@ def _client(handler, token: str = "svc-tok") -> BackendClient:
     return BackendClient("http://backend:8000", token, transport=httpx.MockTransport(handler))
 
 
+# ── BUG-4 — timeout must cover long synchronous actions (~2min generations) ───
+
+def test_default_timeout_is_generous_for_long_actions(monkeypatch):
+    monkeypatch.delenv("MCP_BACKEND_TIMEOUT", raising=False)
+    c = BackendClient("http://backend:8000", "t")
+    assert c._timeout >= 180, "default timeout must cover ~2min generations (BUG-4)"
+
+
+def test_timeout_env_override(monkeypatch):
+    monkeypatch.setenv("MCP_BACKEND_TIMEOUT", "123")
+    c = BackendClient("http://backend:8000", "t")
+    assert c._timeout == 123.0
+
+
 async def test_get_unwraps_envelope_and_sends_auth():
     seen: dict[str, str] = {}
 
