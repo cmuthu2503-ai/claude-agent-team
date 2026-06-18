@@ -161,7 +161,19 @@ tools:
     path: /api/v1/proposals
 
   - name: generate_tasks
-    description: "Generate the project's task list. Arg: project_id (required)."
+    description: "Generate the project's task list. Arg: project_id (required). When the project has an epic->feature tree, produces feature-bound atomic tasks across all features; otherwise a flat list from the PRD."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  - name: generate_tasks_for_epic
+    description: "Generate atomic tasks for every feature under ONE epic (build the plan one epic at a time). Args: project_id (required), epic_id (required)."
+    min_role: developer
+    method: POST
+    path: /api/v1/proposals
+
+  - name: generate_tasks_for_feature
+    description: "Generate atomic tasks for a SINGLE feature (most granular, fastest). Args: project_id (required), feature_id (required)."
     min_role: developer
     method: POST
     path: /api/v1/proposals

@@ -149,14 +149,63 @@ async def features_generate(proposal: Any, ctx: Any) -> dict[str, Any]:
 
 
 async def tasks_generate(proposal: Any, ctx: Any) -> dict[str, Any]:
-    payload = _payload_for(_projects.TasksGenerateBody, proposal.payload)
-    body = _projects.TasksGenerateBody(**payload) if payload else None
+    """BPD-aware task generation. Routes to the RIGHT generator based on the
+    payload scope and the project's shape, so a project that has an epic→feature
+    tree gets feature-bound atomic tasks (primary_file / acceptance_test /
+    cross-feature depends_on) instead of a flat single-shot list that ignores
+    the tree.
+
+    Routing (target_ref is always the project id; sub-ids ride in the payload):
+      - payload.feature_id → BPD Pass-3 for that ONE feature
+      - payload.epic_id    → BPD Pass-3 for every feature under that epic
+      - project has features → BPD Pass-3 across ALL features (feature-aware)
+      - otherwise (no tree) → legacy flat single-shot generator
+    """
+    pid = proposal.target_ref
+    payload = dict(proposal.payload or {})
+    feature_id = payload.pop("feature_id", None)
+    epic_id = payload.pop("epic_id", None)
+
+    # Scoped: one feature.
+    if feature_id:
+        resp = await _invoke(
+            _projects.generate_tasks_for_feature(
+                project_id=pid, feature_id=feature_id, request=ctx,
+                body=(payload or None), user=_system_principal(),
+            )
+        )
+        return {"result_ref": _id_from(resp, "feature_id", "id") or feature_id}
+
+    # Scoped: one epic (all its features).
+    if epic_id:
+        await _invoke(
+            _projects.generate_tasks_for_epic(
+                project_id=pid, epic_id=epic_id, request=ctx, user=_system_principal(),
+            )
+        )
+        return {"result_ref": epic_id}
+
+    # Unscoped: pick the generator by project shape. A finalized epic→feature
+    # tree means the user wants feature-bound atomic tasks across the whole tree.
+    state = ctx.app.state.state_store
+    features = await state.list_features_for_project(pid)
+    if features:
+        await _invoke(
+            _projects.generate_tasks_for_all_features(
+                project_id=pid, feature_id="", request=ctx, user=_system_principal(),
+            )
+        )
+        return {"result_ref": pid}
+
+    # No epic→feature tree — fall back to the legacy flat single-shot list.
+    flat_payload = _payload_for(_projects.TasksGenerateBody, payload)
+    body = _projects.TasksGenerateBody(**flat_payload) if flat_payload else None
     resp = await _invoke(
         _projects.generate_tasks(
-            project_id=proposal.target_ref, request=ctx, body=body, user=_system_principal()
+            project_id=pid, request=ctx, body=body, user=_system_principal()
         )
     )
-    return {"result_ref": _id_from(resp, "artifact_id", "id", "version") or proposal.target_ref}
+    return {"result_ref": _id_from(resp, "artifact_id", "id", "version") or pid}
 
 
 async def buildplan_generate(proposal: Any, ctx: Any) -> dict[str, Any]:

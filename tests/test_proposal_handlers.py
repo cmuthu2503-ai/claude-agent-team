@@ -149,6 +149,85 @@ async def test_features_generate_threads_epic_id_from_payload(monkeypatch):
     assert seen["project_id"] == "proj-1" and seen["epic_id"] == "epic-7"
 
 
+class _FakeFeatureStore:
+    """Minimal store exposing only what tasks_generate's unscoped branch reads."""
+
+    def __init__(self, features):
+        self._features = features
+
+    async def list_features_for_project(self, project_id):
+        return list(self._features)
+
+
+async def test_tasks_generate_feature_scoped_routes_to_pass3(monkeypatch):
+    seen = {}
+
+    async def fake_for_feature(*, project_id, feature_id, request, body, user):
+        seen.update(project_id=project_id, feature_id=feature_id, body=body)
+        return {"data": {"feature_id": feature_id, "count": 7}}
+
+    monkeypatch.setattr(projects_mod, "generate_tasks_for_feature", fake_for_feature)
+    proposal = _confirmed("tasks.generate", target_ref="proj-1", payload={"feature_id": "feat-5"})
+    out = await ph.tasks_generate(proposal, ctx=None)
+    assert out["result_ref"] == "feat-5"
+    assert seen["project_id"] == "proj-1" and seen["feature_id"] == "feat-5"
+    assert seen["body"] is None                                # only feature_id rode the payload
+
+
+async def test_tasks_generate_epic_scoped_routes_to_epic_batch(monkeypatch):
+    seen = {}
+
+    async def fake_for_epic(*, project_id, epic_id, request, user):
+        seen.update(project_id=project_id, epic_id=epic_id)
+        return {"data": {}}
+
+    monkeypatch.setattr(projects_mod, "generate_tasks_for_epic", fake_for_epic)
+    proposal = _confirmed("tasks.generate", target_ref="proj-1", payload={"epic_id": "epic-3"})
+    out = await ph.tasks_generate(proposal, ctx=None)
+    assert out["result_ref"] == "epic-3"
+    assert seen["project_id"] == "proj-1" and seen["epic_id"] == "epic-3"
+
+
+async def test_tasks_generate_unscoped_with_features_uses_feature_aware(monkeypatch):
+    called = {}
+
+    async def fake_all(*, project_id, feature_id, request, user):
+        called["all"] = project_id
+        return {"data": {}}
+
+    async def fake_flat(*, project_id, request, body, user):
+        called["flat"] = project_id
+        return {"data": {}}
+
+    monkeypatch.setattr(projects_mod, "generate_tasks_for_all_features", fake_all)
+    monkeypatch.setattr(projects_mod, "generate_tasks", fake_flat)
+    ctx = _Ctx(_FakeFeatureStore([object()]))                  # project HAS a feature tree
+    proposal = _confirmed("tasks.generate", target_ref="proj-1", payload={})
+    out = await ph.tasks_generate(proposal, ctx=ctx)
+    assert out["result_ref"] == "proj-1"
+    assert called.get("all") == "proj-1" and "flat" not in called  # NOT the flat generator
+
+
+async def test_tasks_generate_unscoped_no_features_falls_back_to_flat(monkeypatch):
+    called = {}
+
+    async def fake_all(*, project_id, feature_id, request, user):
+        called["all"] = project_id
+        return {"data": {}}
+
+    async def fake_flat(*, project_id, request, body, user):
+        called["flat"] = project_id
+        return {"data": {"version": 2}}
+
+    monkeypatch.setattr(projects_mod, "generate_tasks_for_all_features", fake_all)
+    monkeypatch.setattr(projects_mod, "generate_tasks", fake_flat)
+    ctx = _Ctx(_FakeFeatureStore([]))                          # no epic→feature tree
+    proposal = _confirmed("tasks.generate", target_ref="proj-1", payload={})
+    out = await ph.tasks_generate(proposal, ctx=ctx)
+    assert called.get("flat") == "proj-1" and "all" not in called
+    assert out["result_ref"] == "2"
+
+
 async def test_epics_and_buildplan_target_the_project(monkeypatch):
     async def fake_epics(*, project_id, request, body, user):
         return {"data": {"artifact_id": "epics-1"}}

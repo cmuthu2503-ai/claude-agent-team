@@ -106,7 +106,8 @@ def test_propose_tools_are_developer_gated():
     action_tools = {
         "create_project", "set_project_brief", "update_project_description",
         "generate_prd", "generate_api_spec",
-        "generate_epics", "generate_features", "generate_tasks", "generate_build_plan",
+        "generate_epics", "generate_features", "generate_tasks",
+        "generate_tasks_for_epic", "generate_tasks_for_feature", "generate_build_plan",
         "dispatch_tasks", "submit_request",
         # HAI-66 finalize actions
         "finalize_prd", "finalize_api_spec", "finalize_tasks", "finalize_epics",
