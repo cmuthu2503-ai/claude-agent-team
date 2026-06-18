@@ -98,6 +98,30 @@ export interface GroundingReport {
   decisions: GroundingDecision[]
 }
 
+// KB-PL — one de-duplicated search hit (best chunk per document) from
+// POST /knowledge/search. `uri` is the original source link the UI renders.
+export interface KbSearchResult {
+  doc_id: string
+  title: string
+  snippet: string
+  score: number
+  uri: string | null
+  namespace: string
+  metadata: Record<string, unknown>
+  more_matches?: number
+}
+
+// KB-PL — result envelope from an ingest-url / ingest-text call.
+export interface KbIngestResult {
+  doc_id: string
+  status: string // approved | pending
+  skipped: boolean
+  chunks: number
+  title: string
+  uri: string | null
+  bucket_ids: string[]
+}
+
 interface KnowledgeState {
   status: KbStatus | null
   buckets: KbBucket[]
@@ -120,6 +144,16 @@ interface KnowledgeState {
   setDocumentBuckets: (docId: string, bucketIds: string[]) => Promise<void>
   reindexPlatform: () => Promise<Record<string, unknown> | null>
   fetchGrounding: (requestId: string) => Promise<GroundingReport | null>
+  // KB-PL — personal knowledge library: ingest by URL / paste, and search.
+  ingestUrl: (
+    url: string, bucketIds: string[], title?: string,
+  ) => Promise<KbIngestResult | null>
+  ingestText: (
+    text: string, title: string, bucketIds: string[], sourceUrl?: string,
+  ) => Promise<KbIngestResult | null>
+  searchLibrary: (
+    query: string, bucketIds?: string[], topK?: number,
+  ) => Promise<KbSearchResult[]>
   clearError: () => void
 }
 
@@ -322,6 +356,59 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     } catch (e) {
       set({ error: errMessage(e, "Failed to load grounding report") })
       return null
+    }
+  },
+
+  // ── KB-PL — personal knowledge library ────────────────────────────────────
+
+  ingestUrl: async (url, bucketIds, title) => {
+    set({ error: null })
+    try {
+      const res = await api.post<{ data: KbIngestResult }>("/knowledge/ingest-url", {
+        url,
+        bucket_ids: bucketIds,
+        ...(title ? { title } : {}),
+      })
+      // Refresh the personal library view + bucket counts after ingest.
+      await get().fetchDocuments()
+      await get().fetchBuckets()
+      return res.data
+    } catch (e) {
+      set({ error: errMessage(e, "Failed to ingest URL") })
+      return null
+    }
+  },
+
+  ingestText: async (text, title, bucketIds, sourceUrl) => {
+    set({ error: null })
+    try {
+      const res = await api.post<{ data: KbIngestResult }>("/knowledge/ingest-text", {
+        text,
+        title,
+        bucket_ids: bucketIds,
+        ...(sourceUrl ? { source_url: sourceUrl } : {}),
+      })
+      await get().fetchDocuments()
+      await get().fetchBuckets()
+      return res.data
+    } catch (e) {
+      set({ error: errMessage(e, "Failed to ingest text") })
+      return null
+    }
+  },
+
+  searchLibrary: async (query, bucketIds, topK = 10) => {
+    set({ error: null })
+    try {
+      const res = await api.post<{ data: KbSearchResult[] }>("/knowledge/search", {
+        query,
+        bucket_ids: bucketIds ?? [],
+        top_k: topK,
+      })
+      return res.data ?? []
+    } catch (e) {
+      set({ error: errMessage(e, "Search failed") })
+      return []
     }
   },
 

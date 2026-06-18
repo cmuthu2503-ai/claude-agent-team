@@ -1,0 +1,337 @@
+<!doctype html>
+<!--
+  ╔══════════════════════════════════════════════════════════════════╗
+  ║  PHASE 2 MOCK — Personal Knowledge Library (KB-PL)                ║
+  ║  Add-by-URL · Paste-text · Search-with-links                     ║
+  ║                                                                  ║
+  ║  Design EXPLORATION (not frozen). Matches the frozen KB theme    ║
+  ║  (docs/mockups/kb-buckets-mockup.html v1.0) so it reads as a     ║
+  ║  natural extension of the existing screens. Presents OPTIONS to  ║
+  ║  choose from for how the 3 new capabilities slot into the UI.    ║
+  ╚══════════════════════════════════════════════════════════════════╝
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Phase 2 Mock — Personal Knowledge Library (options)</title>
+<style>
+  /* Theme tokens copied from the frozen KB mockup so this matches 1:1 */
+  :root{
+    --bg:#05060d; --bg2:#0a0c1a; --panel:rgba(18,22,42,0.55);
+    --line:rgba(120,160,255,0.18); --line2:rgba(120,160,255,0.35);
+    --txt:#e7ecff; --muted:#8a93c4; --dim:#5a628f;
+    --cyan:#34e7ff; --mag:#ff45d0; --violet:#9b7bff; --lime:#7dffb0; --amber:#ffc24b;
+    --glow-cyan:0 0 18px rgba(52,231,255,.55); --glow-mag:0 0 18px rgba(255,69,208,.5);
+    --r:16px; --r2:11px; --font:'Segoe UI',system-ui,-apple-system,sans-serif;
+    --mono:'JetBrains Mono','Consolas',monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{font-family:var(--font);color:var(--txt);background:var(--bg);overflow-x:hidden;min-height:100vh}
+  .bg{position:fixed;inset:0;z-index:0;overflow:hidden;background:
+      radial-gradient(1200px 700px at 80% -10%, rgba(155,123,255,.16), transparent 60%),
+      radial-gradient(900px 600px at 0% 110%, rgba(52,231,255,.14), transparent 60%),var(--bg);}
+  .bg .grid{position:absolute;inset:-2px;background-image:
+      linear-gradient(var(--line) 1px,transparent 1px),
+      linear-gradient(90deg,var(--line) 1px,transparent 1px);
+      background-size:46px 46px;mask-image:radial-gradient(circle at 50% 40%,#000 30%,transparent 85%);
+      animation:drift 22s linear infinite;opacity:.5;}
+  @keyframes drift{to{background-position:460px 460px}}
+  .wrap{position:relative;z-index:1;max-width:1120px;margin:0 auto;padding:28px 22px 80px}
+  header.hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+  .brand{display:flex;align-items:center;gap:12px}
+  .logo{width:40px;height:40px;border-radius:11px;background:
+      conic-gradient(from 0deg,var(--cyan),var(--violet),var(--mag),var(--cyan));
+      filter:drop-shadow(0 0 12px rgba(155,123,255,.6));animation:spin 6s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .brand h1{font-size:17px;margin:0;letter-spacing:.5px}
+  .brand p{margin:2px 0 0;font-size:11px;color:var(--muted);font-family:var(--mono)}
+  .kbpill{font-family:var(--mono);font-size:11px;color:var(--amber);
+      border:1px solid rgba(255,194,75,.35);padding:5px 10px;border-radius:999px;
+      box-shadow:0 0 14px rgba(255,194,75,.18)}
+  .note{font-size:12px;color:var(--muted);font-family:var(--mono);margin:0 0 18px;
+      border-left:2px solid var(--violet);padding:6px 0 6px 12px}
+
+  /* option navigator */
+  .tabs{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}
+  .tab{font-size:12.5px;color:var(--muted);background:rgba(255,255,255,.02);
+      border:1px solid var(--line);padding:9px 15px;border-radius:11px;cursor:pointer;
+      display:flex;gap:8px;align-items:center;transition:.25s;font-family:var(--mono)}
+  .tab .n{color:var(--dim)}
+  .tab:hover{color:var(--txt);border-color:var(--line2)}
+  .tab.on{color:#06121a;background:linear-gradient(120deg,var(--cyan),var(--violet));
+      border-color:transparent;box-shadow:0 0 22px rgba(52,231,255,.4);font-weight:600}
+  .tab.on .n{color:rgba(6,18,26,.7)}
+
+  .screen{display:none;animation:rise .5s cubic-bezier(.2,.8,.2,1)}
+  .screen.on{display:block}
+  @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+
+  .panel{position:relative;background:var(--panel);backdrop-filter:blur(14px);
+      border:1px solid var(--line);border-radius:var(--r);padding:22px;overflow:hidden;margin-bottom:18px}
+  .scrTitle{display:flex;align-items:center;gap:10px;margin:2px 0 6px}
+  .scrTitle h2{font-size:15px;margin:0;letter-spacing:.4px}
+  .scrTitle .dot{width:8px;height:8px;border-radius:50%;background:var(--cyan);box-shadow:var(--glow-cyan)}
+  .sub{color:var(--muted);font-size:12px;margin:0 0 18px}
+  .optlabel{display:inline-block;font-family:var(--mono);font-size:10.5px;color:var(--lime);
+      border:1px solid rgba(125,255,176,.35);padding:3px 8px;border-radius:6px;margin-bottom:14px}
+
+  /* generic UI bits matching the theme */
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .grow{flex:1}
+  .inp{width:100%;background:rgba(8,10,22,.7);border:1px solid var(--line);border-radius:10px;
+      color:var(--txt);padding:12px 14px;font-size:13px;font-family:var(--font);outline:none;transition:.2s}
+  .inp:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(52,231,255,.12)}
+  textarea.inp{min-height:120px;resize:vertical;font-family:var(--mono);font-size:12.5px;line-height:1.5}
+  .btn{font-family:var(--mono);font-size:12.5px;border-radius:10px;padding:11px 18px;cursor:pointer;
+      border:1px solid transparent;background:linear-gradient(120deg,var(--cyan),var(--violet));
+      color:#06121a;font-weight:600;box-shadow:0 0 18px rgba(52,231,255,.3);white-space:nowrap}
+  .btn.ghost{background:rgba(255,255,255,.02);border-color:var(--line2);color:var(--txt);box-shadow:none}
+  .btn.mag{background:linear-gradient(120deg,var(--mag),var(--violet));box-shadow:0 0 18px rgba(255,69,208,.3)}
+  .seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;font-family:var(--mono);font-size:12px}
+  .seg button{background:transparent;border:none;color:var(--muted);padding:9px 16px;cursor:pointer;transition:.2s;display:flex;gap:7px;align-items:center}
+  .seg button.on{background:linear-gradient(120deg,rgba(52,231,255,.2),rgba(155,123,255,.2));color:var(--txt)}
+  .chip{font-family:var(--mono);font-size:11px;padding:5px 11px;border-radius:999px;border:1px solid var(--line2);
+      color:var(--muted);cursor:pointer;transition:.2s;background:rgba(255,255,255,.02)}
+  .chip.on{color:#06121a;background:linear-gradient(120deg,var(--cyan),var(--lime));border-color:transparent;font-weight:600}
+  .pill{font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:6px;border:1px solid var(--line);color:var(--muted)}
+  .pill.web{color:var(--cyan);border-color:rgba(52,231,255,.4)}
+  .pill.paste{color:var(--mag);border-color:rgba(255,69,208,.4)}
+  .pill.ok{color:var(--lime);border-color:rgba(125,255,176,.4)}
+  .label{font-size:11px;color:var(--dim);font-family:var(--mono);margin:0 0 6px;text-transform:uppercase;letter-spacing:.5px}
+
+  /* search result card */
+  .res{border:1px solid var(--line);border-radius:12px;padding:15px 16px;margin-bottom:11px;
+      background:rgba(8,10,22,.45);transition:.2s}
+  .res:hover{border-color:var(--line2);transform:translateX(2px)}
+  .res h4{margin:0 0 5px;font-size:14px;display:flex;align-items:center;gap:8px}
+  .res .snip{color:var(--muted);font-size:12.5px;line-height:1.5;margin:0 0 9px}
+  .res .meta{display:flex;gap:14px;align-items:center;font-family:var(--mono);font-size:11px;color:var(--dim);flex-wrap:wrap}
+  .res .meta a{color:var(--cyan);text-decoration:none}
+  .res .meta a:hover{text-decoration:underline}
+  .score{font-family:var(--mono);font-size:11px;color:var(--lime)}
+  .barwrap{flex:1;height:5px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden;min-width:60px;max-width:120px}
+  .bar{height:100%;background:linear-gradient(90deg,var(--cyan),var(--lime))}
+
+  .mini{font-size:11px;color:var(--dim);font-family:var(--mono);margin-top:8px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .callout{border:1px dashed var(--line2);border-radius:10px;padding:12px 14px;font-size:12px;color:var(--muted);
+      background:radial-gradient(300px 80px at 0 0,rgba(155,123,255,.08),transparent)}
+  .stagechip{font-family:var(--mono);font-size:10.5px;padding:4px 9px;border-radius:6px;border:1px solid var(--line);color:var(--muted)}
+  .stagechip.done{color:var(--lime);border-color:rgba(125,255,176,.4)}
+  .stagechip.active{color:var(--cyan);border-color:rgba(52,231,255,.5);box-shadow:0 0 12px rgba(52,231,255,.2)}
+  .flow{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .arrow{color:var(--dim)}
+  .tabbarSim{display:flex;gap:6px;border-bottom:1px solid var(--line);padding-bottom:0;margin-bottom:16px;flex-wrap:wrap}
+  .tabbarSim .t{font-family:var(--mono);font-size:12px;color:var(--muted);padding:9px 13px;border-bottom:2px solid transparent;cursor:pointer}
+  .tabbarSim .t.on{color:var(--cyan);border-bottom-color:var(--cyan)}
+  .tabbarSim .t.new{color:var(--amber)}
+  .legend{font-size:11px;color:var(--amber);font-family:var(--mono);margin-left:6px}
+</style>
+</head>
+<body>
+<div class="bg"><div class="grid"></div></div>
+<div class="wrap">
+  <header class="hd">
+    <div class="brand">
+      <div class="logo"></div>
+      <div><h1>Knowledge Base · Phase 2 Mock</h1><p>Personal Library — add-by-URL · paste · search</p></div>
+    </div>
+    <div class="kbpill">DESIGN OPTIONS — NOT FROZEN</div>
+  </header>
+  <p class="note">These mocks reuse the existing frozen KB theme. The <span style="color:var(--amber)">amber</span> markers show what's NEW in Phase 2.
+  Pick one option per area (A1/A2/A3 for ingestion, B1/B2 for search) — or mix &amp; match. Nothing here is built yet.</p>
+
+  <div class="tabs">
+    <div class="tab on" data-s="a1"><span class="n">A1</span> Ingest · New tab</div>
+    <div class="tab" data-s="a2"><span class="n">A2</span> Ingest · Unified box</div>
+    <div class="tab" data-s="a3"><span class="n">A3</span> Ingest · Quick-add bar</div>
+    <div class="tab" data-s="b1"><span class="n">B1</span> Search · Dedicated screen</div>
+    <div class="tab" data-s="b2"><span class="n">B2</span> Search · Command palette</div>
+  </div>
+
+  <!-- ═══════════════ A1: NEW TAB ON EXISTING KB SCREEN ═══════════════ -->
+  <section class="screen on" id="a1">
+    <div class="panel">
+      <div class="scrTitle"><span class="dot"></span><h2>Existing Knowledge screen — with a new "Add Article" tab</h2></div>
+      <p class="sub">Smallest change: the current KB page already has tabs (Upload · Tag · Buckets · Ground). We add ONE tab.</p>
+      <div class="tabbarSim">
+        <div class="t">Upload</div>
+        <div class="t">Tag &amp; Bucket</div>
+        <div class="t">Buckets</div>
+        <div class="t">Ground a Task</div>
+        <div class="t on new">＋ Add Article <span class="legend">NEW</span></div>
+      </div>
+      <span class="optlabel">OPTION A1</span>
+      <div class="seg" style="margin-bottom:16px">
+        <button class="on">🔗 From URL</button>
+        <button>📋 Paste text</button>
+      </div>
+      <p class="label">Article URL</p>
+      <div class="row" style="margin-bottom:14px">
+        <input class="inp grow" placeholder="https://example.com/article-on-agentic-ai" />
+        <button class="btn">Fetch &amp; Save</button>
+      </div>
+      <p class="label">Add to topic buckets</p>
+      <div class="row" style="margin-bottom:16px">
+        <span class="chip on">Agentic AI</span><span class="chip">Banking</span>
+        <span class="chip">Architecture</span><span class="chip">＋ New bucket</span>
+      </div>
+      <div class="callout flow">
+        <span class="stagechip done">fetched ✓</span><span class="arrow">→</span>
+        <span class="stagechip done">cleaned ✓</span><span class="arrow">→</span>
+        <span class="stagechip active">chunking · 174</span><span class="arrow">→</span>
+        <span class="stagechip">embedding</span><span class="arrow">→</span>
+        <span class="stagechip">saved &amp; searchable</span>
+      </div>
+      <p class="mini">✓ Auto-approve ON — articles are searchable immediately (no curator step for solo use).</p>
+    </div>
+    <div class="panel">
+      <div class="scrTitle"><h2 style="font-size:13px;color:var(--muted)">Why A1</h2></div>
+      <p class="sub" style="margin:0">Lowest effort, most consistent — reuses the frozen tabbed layout exactly. New users discover it where they already manage docs. Trade-off: ingestion + search stay on separate screens.</p>
+    </div>
+  </section>
+
+  <!-- ═══════════════ A2: UNIFIED SMART INGEST BOX ═══════════════ -->
+  <section class="screen" id="a2">
+    <div class="panel">
+      <div class="scrTitle"><span class="dot"></span><h2>Unified "Add Knowledge" box — auto-detects URL vs text</h2></div>
+      <p class="sub">One smart input. Paste a URL → it fetches. Paste text → it asks for a title. No mode toggle to think about.</p>
+      <span class="optlabel">OPTION A2</span>
+      <textarea class="inp" placeholder="Paste an article URL, or paste the full text of a post (e.g. a LinkedIn update)…">https://example.com/multi-agent-orchestration-banking</textarea>
+      <div class="row" style="margin:12px 0">
+        <span class="pill web">URL detected → will fetch via Firecrawl</span>
+        <span class="grow"></span>
+        <button class="btn">Add to Library</button>
+      </div>
+      <div class="grid2" style="margin-top:6px">
+        <div>
+          <p class="label">Title (auto-filled after fetch)</p>
+          <input class="inp" placeholder="Multi-Agent Orchestration for Loan Underwriting" />
+        </div>
+        <div>
+          <p class="label">Topic buckets</p>
+          <div class="row"><span class="chip on">Agentic AI</span><span class="chip on">Banking</span><span class="chip">＋</span></div>
+        </div>
+      </div>
+      <p class="mini">When you paste raw text instead, the URL pill flips to <span class="pill paste">text detected → title required</span> — the ToS-safe LinkedIn path.</p>
+    </div>
+    <div class="panel">
+      <div class="scrTitle"><h2 style="font-size:13px;color:var(--muted)">Why A2</h2></div>
+      <p class="sub" style="margin:0">Fastest capture, fewest clicks — one box for both paths. Feels modern (like Notion's "paste anything"). Trade-off: a bit more frontend logic (detect URL vs text) and slightly less explicit than A1.</p>
+    </div>
+  </section>
+
+  <!-- ═══════════════ A3: GLOBAL QUICK-ADD BAR ═══════════════ -->
+  <section class="screen" id="a3">
+    <div class="panel">
+      <div class="scrTitle"><span class="dot"></span><h2>Global "quick-add" bar — capture from anywhere</h2></div>
+      <p class="sub">A persistent slim bar pinned to the top of every page (or behind a ＋ button), so you can save an article without navigating to the KB screen first.</p>
+      <span class="optlabel">OPTION A3</span>
+      <div style="border:1px solid var(--line2);border-radius:12px;padding:10px 12px;background:rgba(8,10,22,.7);box-shadow:0 0 24px rgba(52,231,255,.12)">
+        <div class="row">
+          <span class="pill" style="color:var(--amber);border-color:rgba(255,194,75,.4)">＋ QUICK ADD</span>
+          <input class="inp grow" style="border:none;background:transparent;box-shadow:none" placeholder="Paste URL or text, then hit Enter to drop it into your library…" />
+          <span class="chip on">Agentic AI ▾</span>
+          <button class="btn">Save</button>
+        </div>
+      </div>
+      <p class="mini" style="margin-top:14px">Appears as a thin bar under the top nav on all screens. Collapses to a floating ＋ on small screens.</p>
+      <div class="callout" style="margin-top:14px">Recently added <span class="pill ok">3 today</span><br>
+        <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
+          <span style="font-size:12.5px">• Multi-Agent Orchestration for Loan Underwriting <span class="pill paste">paste</span></span>
+          <span style="font-size:12.5px">• Large Language Model — Wikipedia <span class="pill web">url</span></span>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="scrTitle"><h2 style="font-size:13px;color:var(--muted)">Why A3</h2></div>
+      <p class="sub" style="margin:0">Best for high-volume capture — save without context-switching. Trade-off: adds chrome to every page; touches the global layout (bigger change than A1/A2). Could combine with A1 or A2 as the "full" screen.</p>
+    </div>
+  </section>
+
+  <!-- ═══════════════ B1: DEDICATED SEARCH SCREEN ═══════════════ -->
+  <section class="screen" id="b1">
+    <div class="panel">
+      <div class="scrTitle"><span class="dot"></span><h2>Dedicated "Search Library" screen</h2></div>
+      <p class="sub">A full screen (new tab or sidebar item) built for browsing your knowledge — query box, bucket filters, ranked results with source links.</p>
+      <span class="optlabel">OPTION B1</span>
+      <div class="row" style="margin-bottom:14px">
+        <input class="inp grow" value="Agentic AI Architecture in Banking Industry" />
+        <button class="btn">Search</button>
+      </div>
+      <div class="row" style="margin-bottom:18px">
+        <span class="label" style="margin:0 4px 0 0">Filter:</span>
+        <span class="chip on">All</span><span class="chip">Agentic AI</span><span class="chip">Banking</span><span class="chip">Architecture</span>
+      </div>
+
+      <div class="res">
+        <h4>Multi-Agent Orchestration for Loan Underwriting <span class="pill paste">paste</span></h4>
+        <p class="snip">…decomposing credit decisions across specialist agents — a document-intake agent, a risk-scoring agent, and a compliance agent enforcing Basel III — banks achieve faster, auditable lending decisions…</p>
+        <div class="meta">
+          <span class="score">0.91</span><span class="barwrap"><span class="bar" style="width:91%"></span></span>
+          <a href="#">🔗 linkedin.com/posts/example</a>
+          <span>+2 more matches in this doc</span>
+        </div>
+      </div>
+      <div class="res">
+        <h4>Large Language Model — Wikipedia <span class="pill web">url</span></h4>
+        <p class="snip">…a mixture-of-experts architecture routes tokens to specialized sub-networks, enabling larger parameter counts without proportional compute…</p>
+        <div class="meta">
+          <span class="score">0.74</span><span class="barwrap"><span class="bar" style="width:74%"></span></span>
+          <a href="#">🔗 en.wikipedia.org/wiki/Large_language_model</a>
+        </div>
+      </div>
+      <p class="mini">Each result = one article (best-matching chunk shown), with its original source link — the "give me links &amp; references" requirement.</p>
+    </div>
+    <div class="panel">
+      <div class="scrTitle"><h2 style="font-size:13px;color:var(--muted)">Why B1</h2></div>
+      <p class="sub" style="margin:0">The natural home for a research library — room for filters, sorting, pagination, "open source" actions. Trade-off: another full screen to build. Pairs best with A1.</p>
+    </div>
+  </section>
+
+  <!-- ═══════════════ B2: COMMAND-PALETTE SEARCH ═══════════════ -->
+  <section class="screen" id="b2">
+    <div class="panel">
+      <div class="scrTitle"><span class="dot"></span><h2>Command-palette search — ⌘K from anywhere</h2></div>
+      <p class="sub">A keyboard-driven overlay (press ⌘K / Ctrl-K) that searches your library instantly from any screen. Results drop in live as you type.</p>
+      <span class="optlabel">OPTION B2</span>
+      <div style="max-width:640px;margin:0 auto;border:1px solid var(--line2);border-radius:14px;overflow:hidden;box-shadow:0 0 40px rgba(52,231,255,.18);background:rgba(8,10,22,.92)">
+        <div class="row" style="padding:14px 16px;border-bottom:1px solid var(--line)">
+          <span style="color:var(--cyan);font-family:var(--mono)">⌘K</span>
+          <input class="inp grow" style="border:none;background:transparent;box-shadow:none;font-size:14px" value="agentic ai banking" />
+          <span class="pill">↵ to open</span>
+        </div>
+        <div style="padding:8px">
+          <div class="res" style="margin:6px;border-color:var(--line2)">
+            <h4 style="font-size:13px">Multi-Agent Orchestration for Loan Underwriting <span class="pill paste">paste</span></h4>
+            <div class="meta"><span class="score">0.91</span><a href="#">🔗 linkedin.com/posts/example</a></div>
+          </div>
+          <div class="res" style="margin:6px;border-color:var(--line)">
+            <h4 style="font-size:13px">Large Language Model — Wikipedia <span class="pill web">url</span></h4>
+            <div class="meta"><span class="score">0.74</span><a href="#">🔗 en.wikipedia.org/...</a></div>
+          </div>
+        </div>
+      </div>
+      <p class="mini" style="text-align:center;margin-top:14px">Fast, always-available, feels native. Could coexist with B1 (palette for quick lookups, full screen for browsing).</p>
+    </div>
+    <div class="panel">
+      <div class="scrTitle"><h2 style="font-size:13px;color:var(--muted)">Why B2</h2></div>
+      <p class="sub" style="margin:0">Power-user speed — recall without leaving your current task. Trade-off: less room for filters/provenance; discoverability depends on knowing the shortcut. Strong as a complement to B1, weaker as the only search surface.</p>
+    </div>
+  </section>
+
+</div>
+<script>
+  const tabs=document.querySelectorAll('.tab');
+  tabs.forEach(t=>t.addEventListener('click',()=>{
+    tabs.forEach(x=>x.classList.remove('on'));t.classList.add('on');
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('on'));
+    document.getElementById(t.dataset.s).classList.add('on');
+    window.scrollTo({top:0,behavior:'smooth'});
+  }));
+</script>
+</body>
+</html>

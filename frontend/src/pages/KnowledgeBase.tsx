@@ -31,6 +31,10 @@ import {
   RefreshCw,
   Plus,
   X,
+  Link2,
+  ClipboardPaste,
+  Search,
+  ExternalLink,
 } from "lucide-react"
 import { api } from "../lib/api"
 import { useAuthStore } from "../stores/auth"
@@ -38,15 +42,19 @@ import {
   useKnowledgeStore,
   type KbBucket,
   type KbDocument,
+  type KbSearchResult,
+  type KbIngestResult,
 } from "../stores/knowledge"
 
-type TabKey = "up" | "tag" | "buk" | "grd"
+type TabKey = "up" | "tag" | "buk" | "grd" | "add" | "search"
 
 const TABS: { key: TabKey; n: string; label: string; icon: any }[] = [
   { key: "up", n: "01", label: "Upload", icon: UploadCloud },
   { key: "tag", n: "02", label: "Tag & Bucket", icon: Tags },
   { key: "buk", n: "03", label: "Buckets", icon: Boxes },
   { key: "grd", n: "04", label: "Ground a Task", icon: Zap },
+  { key: "add", n: "05", label: "Add Article", icon: Link2 },
+  { key: "search", n: "06", label: "Search Library", icon: Search },
 ]
 
 // Bucket accent colors — cycle by index; system bucket is always the lime.
@@ -121,6 +129,9 @@ export function KnowledgeBasePage() {
     purgeDocument,
     setDocumentBuckets,
     reindexPlatform,
+    ingestUrl,
+    ingestText,
+    searchLibrary,
     clearError,
   } = useKnowledgeStore()
 
@@ -332,6 +343,26 @@ export function KnowledgeBasePage() {
           colorFor={colorFor}
           nameFor={nameFor}
           navigate={navigate}
+        />
+      )}
+      {tab === "add" && (
+        <AddArticleScreen
+          buckets={buckets}
+          documents={documents}
+          available={available}
+          canWrite={canWrite}
+          colorFor={colorFor}
+          onIngestUrl={ingestUrl}
+          onIngestText={ingestText}
+        />
+      )}
+      {tab === "search" && (
+        <SearchLibraryScreen
+          buckets={buckets}
+          available={available}
+          colorFor={colorFor}
+          nameFor={nameFor}
+          onSearch={searchLibrary}
         />
       )}
     </div>
@@ -1333,4 +1364,583 @@ const selectStyle: React.CSSProperties = {
   fontSize: 13,
   fontFamily: "var(--font)",
   cursor: "pointer",
+}
+
+// ── Screen 05: Add Article (KB-PL · A1) ───────────────────────────────────
+// Ingest an external article by URL (via Firecrawl) or by pasting text (the
+// ToS-safe LinkedIn path), tagged into topic buckets. Lands in the personal
+// library; auto-approved so it's searchable immediately.
+
+function AddArticleScreen({
+  buckets,
+  documents,
+  available,
+  canWrite,
+  colorFor,
+  onIngestUrl,
+  onIngestText,
+}: {
+  buckets: KbBucket[]
+  documents: KbDocument[]
+  available: boolean
+  canWrite: boolean
+  colorFor: (id: string) => string
+  onIngestUrl: (url: string, bucketIds: string[], title?: string) => Promise<KbIngestResult | null>
+  onIngestText: (
+    text: string, title: string, bucketIds: string[], sourceUrl?: string,
+  ) => Promise<KbIngestResult | null>
+}) {
+  const [mode, setMode] = useState<"url" | "paste">("url")
+  const [url, setUrl] = useState("")
+  const [text, setText] = useState("")
+  const [title, setTitle] = useState("")
+  const [sourceUrl, setSourceUrl] = useState("")
+  const [selected, setSelected] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<KbIngestResult | null>(null)
+  const disabled = !available || !canWrite || busy
+
+  const toggle = (id: string) =>
+    setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
+
+  const submit = async () => {
+    setBusy(true)
+    setResult(null)
+    let r: KbIngestResult | null = null
+    if (mode === "url") {
+      if (!url.trim()) {
+        setBusy(false)
+        return
+      }
+      r = await onIngestUrl(url.trim(), selected, title.trim() || undefined)
+      if (r) {
+        setUrl("")
+        setTitle("")
+      }
+    } else {
+      if (!text.trim() || !title.trim()) {
+        setBusy(false)
+        return
+      }
+      r = await onIngestText(text.trim(), title.trim(), selected, sourceUrl.trim() || undefined)
+      if (r) {
+        setText("")
+        setTitle("")
+        setSourceUrl("")
+      }
+    }
+    setResult(r)
+    setBusy(false)
+  }
+
+  const recent = documents
+    .filter((d) => d.source_type === "web" || d.source_type === "paste")
+    .slice(0, 8)
+
+  return (
+    <div style={panelStyle}>
+      <h2 style={{ margin: "0 0 4px", fontSize: 16 }}>Add an article to your library</h2>
+      <p style={{ margin: "0 0 16px", color: "var(--text-secondary)", fontSize: 12.5 }}>
+        Fetch a web page by URL, or paste text (e.g. a LinkedIn post). It is cleaned, chunked,
+        embedded, and — being your own library — made searchable immediately.
+      </p>
+
+      {/* Mode toggle */}
+      <div
+        style={{
+          display: "inline-flex",
+          border: "1px solid var(--border)",
+          borderRadius: 10,
+          overflow: "hidden",
+          marginBottom: 18,
+        }}
+      >
+        {([["url", "From URL", Link2], ["paste", "Paste text", ClipboardPaste]] as const).map(
+          ([m, label, Icon]) => {
+            const on = mode === m
+            return (
+              <button
+                key={m}
+                onClick={() => {
+                  setMode(m)
+                  setResult(null)
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 7,
+                  fontSize: 12.5,
+                  padding: "9px 16px",
+                  cursor: "pointer",
+                  fontFamily: "var(--font)",
+                  border: "none",
+                  color: on ? "var(--accent)" : "var(--text-secondary)",
+                  background: on ? "var(--accent-subtle)" : "transparent",
+                  fontWeight: on ? 700 : 500,
+                }}
+              >
+                <Icon size={15} /> {label}
+              </button>
+            )
+          },
+        )}
+      </div>
+
+      {mode === "url" ? (
+        <>
+          <label style={fieldLabel}>Article URL</label>
+          <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+            <input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://example.com/article-on-agentic-ai"
+              disabled={disabled}
+              style={{ ...inputStyle, flex: 1, minWidth: 240, padding: "12px 14px" }}
+            />
+            <button
+              onClick={submit}
+              disabled={disabled || !url.trim()}
+              style={kbplBtn(disabled || !url.trim())}
+            >
+              {busy ? "Fetching…" : "Fetch & Save"}
+            </button>
+          </div>
+          <label style={fieldLabel}>Title (optional — auto-detected from the page)</label>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Leave blank to use the page title"
+            disabled={disabled}
+            style={{ ...inputStyle, width: "100%", padding: "12px 14px", marginBottom: 16 }}
+          />
+        </>
+      ) : (
+        <>
+          <label style={fieldLabel}>Title</label>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="e.g. Multi-Agent Orchestration for Loan Underwriting"
+            disabled={disabled}
+            style={{ ...inputStyle, width: "100%", padding: "12px 14px", marginBottom: 12 }}
+          />
+          <label style={fieldLabel}>Article text</label>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Paste the full text of the article or post here…"
+            disabled={disabled}
+            style={{
+              ...inputStyle,
+              width: "100%",
+              minHeight: 140,
+              padding: "12px 14px",
+              resize: "vertical",
+              fontFamily: "monospace",
+              fontSize: 12.5,
+              lineHeight: 1.5,
+              marginBottom: 12,
+            }}
+          />
+          <label style={fieldLabel}>Source link (optional)</label>
+          <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+            <input
+              value={sourceUrl}
+              onChange={(e) => setSourceUrl(e.target.value)}
+              placeholder="https://linkedin.com/posts/…"
+              disabled={disabled}
+              style={{ ...inputStyle, flex: 1, minWidth: 240, padding: "12px 14px" }}
+            />
+            <button
+              onClick={submit}
+              disabled={disabled || !text.trim() || !title.trim()}
+              style={kbplBtn(disabled || !text.trim() || !title.trim())}
+            >
+              {busy ? "Saving…" : "Save to Library"}
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Bucket assignment */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          margin: "4px 0 6px",
+          flexWrap: "wrap",
+        }}
+      >
+        <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>Add to topic bucket(s):</span>
+        {buckets.length === 0 && (
+          <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+            No buckets yet — create one in the Buckets tab.
+          </span>
+        )}
+        {buckets.map((b) => {
+          const on = selected.includes(b.bucket_id)
+          const c = colorFor(b.bucket_id)
+          return (
+            <button
+              key={b.bucket_id}
+              onClick={() => toggle(b.bucket_id)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 7,
+                fontSize: 11.5,
+                padding: "6px 11px",
+                borderRadius: 999,
+                cursor: "pointer",
+                fontFamily: "monospace",
+                color: "var(--text-primary)",
+                border: `1px solid ${on ? c : "var(--border)"}`,
+                background: on ? `${c}22` : "transparent",
+              }}
+            >
+              <BucketDot color={c} /> {b.name}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Result banner */}
+      {result && (
+        <div
+          style={{
+            marginTop: 16,
+            padding: "12px 14px",
+            borderRadius: 10,
+            fontSize: 12.5,
+            border: `1px solid ${result.skipped ? "var(--border)" : "#7dffb0"}`,
+            background: result.skipped ? "var(--bg-card)" : "rgba(125,255,176,.08)",
+            color: "var(--text-primary)",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+          }}
+        >
+          <CheckCircle2
+            size={16}
+            style={{ color: result.skipped ? "var(--text-secondary)" : "#7dffb0" }}
+          />
+          {result.skipped ? (
+            <span>
+              Already in your library — <strong>{result.title}</strong> (no duplicate created).
+            </span>
+          ) : (
+            <span>
+              Saved <strong>{result.title}</strong> — {result.chunks} chunk
+              {result.chunks === 1 ? "" : "s"} embedded · <StatusPill status={result.status} /> · now
+              searchable.
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Recently added from web/paste */}
+      {recent.length > 0 && (
+        <div style={{ marginTop: 22 }}>
+          <h3 style={{ fontSize: 13, margin: "0 0 10px", color: "var(--text-secondary)" }}>
+            Recently added to your library
+          </h3>
+          {recent.map((d) => (
+            <div
+              key={d.doc_id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "9px 12px",
+                border: "1px solid var(--border)",
+                borderRadius: 10,
+                marginBottom: 8,
+                background: "var(--bg-card)",
+                fontSize: 12.5,
+              }}
+            >
+              <span style={{ ...sourcePill(d.source_type) }}>{d.source_type}</span>
+              <span style={{ flex: 1, color: "var(--text-primary)" }}>{d.title}</span>
+              {d.uri && (
+                <a
+                  href={d.uri}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    color: "var(--accent)",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    fontSize: 11.5,
+                  }}
+                >
+                  <ExternalLink size={12} /> source
+                </a>
+              )}
+              <StatusPill status={d.status} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Screen 06: Search Library (KB-PL · B1) ─────────────────────────────────
+// Human search over the personal library: query box + bucket filters, ranked
+// result cards each carrying the original source link (give-me-references).
+
+function SearchLibraryScreen({
+  buckets,
+  available,
+  colorFor,
+  nameFor,
+  onSearch,
+}: {
+  buckets: KbBucket[]
+  available: boolean
+  colorFor: (id: string) => string
+  nameFor: (id: string) => string
+  onSearch: (query: string, bucketIds?: string[], topK?: number) => Promise<KbSearchResult[]>
+}) {
+  void nameFor
+  const [query, setQuery] = useState("")
+  const [filter, setFilter] = useState<string[]>([])
+  const [results, setResults] = useState<KbSearchResult[]>([])
+  const [busy, setBusy] = useState(false)
+  const [searched, setSearched] = useState(false)
+
+  const toggleFilter = (id: string) =>
+    setFilter((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
+
+  const run = async () => {
+    if (!query.trim()) return
+    setBusy(true)
+    const r = await onSearch(query.trim(), filter.length ? filter : undefined, 10)
+    setResults(r)
+    setSearched(true)
+    setBusy(false)
+  }
+
+  const maxScore = results.length ? Math.max(...results.map((r) => r.score)) || 1 : 1
+
+  return (
+    <div style={panelStyle}>
+      <h2 style={{ margin: "0 0 4px", fontSize: 16 }}>Search your knowledge library</h2>
+      <p style={{ margin: "0 0 16px", color: "var(--text-secondary)", fontSize: 12.5 }}>
+        Semantic + keyword search across everything you have saved. Results link back to the
+        original source.
+      </p>
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") run()
+          }}
+          placeholder="e.g. Agentic AI Architecture in Banking Industry"
+          disabled={!available}
+          style={{ ...inputStyle, flex: 1, minWidth: 260, padding: "12px 14px" }}
+        />
+        <button
+          onClick={run}
+          disabled={!available || busy || !query.trim()}
+          style={kbplBtn(!available || busy || !query.trim())}
+        >
+          {busy ? "Searching…" : "Search"}
+        </button>
+      </div>
+
+      {/* Bucket filters */}
+      {buckets.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 20,
+            flexWrap: "wrap",
+          }}
+        >
+          <span style={{ fontSize: 12, color: "var(--text-secondary)", marginRight: 2 }}>
+            Filter:
+          </span>
+          {buckets.map((b) => {
+            const on = filter.includes(b.bucket_id)
+            const c = colorFor(b.bucket_id)
+            return (
+              <button
+                key={b.bucket_id}
+                onClick={() => toggleFilter(b.bucket_id)}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 11.5,
+                  padding: "5px 10px",
+                  borderRadius: 999,
+                  cursor: "pointer",
+                  fontFamily: "monospace",
+                  color: "var(--text-primary)",
+                  border: `1px solid ${on ? c : "var(--border)"}`,
+                  background: on ? `${c}22` : "transparent",
+                }}
+              >
+                <BucketDot color={c} /> {b.name}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Results */}
+      {searched && results.length === 0 && (
+        <div
+          style={{
+            padding: "24px",
+            textAlign: "center",
+            color: "var(--text-secondary)",
+            fontSize: 13,
+          }}
+        >
+          No results. Try a different query{filter.length ? " or clear the bucket filter" : ""}.
+        </div>
+      )}
+      {results.map((r) => (
+        <div
+          key={r.doc_id}
+          style={{
+            border: "1px solid var(--border)",
+            borderRadius: 12,
+            padding: "15px 16px",
+            marginBottom: 11,
+            background: "var(--bg-card)",
+          }}
+        >
+          <h4 style={{ margin: "0 0 5px", fontSize: 14, color: "var(--text-primary)" }}>
+            {r.title}
+          </h4>
+          <p
+            style={{
+              margin: "0 0 10px",
+              color: "var(--text-secondary)",
+              fontSize: 12.5,
+              lineHeight: 1.5,
+            }}
+          >
+            {r.snippet}
+          </p>
+          <div
+            style={{
+              display: "flex",
+              gap: 14,
+              alignItems: "center",
+              flexWrap: "wrap",
+              fontFamily: "monospace",
+              fontSize: 11,
+            }}
+          >
+            <span style={{ color: "#7dffb0" }}>{r.score.toFixed(3)}</span>
+            <span
+              style={{
+                flex: "0 1 120px",
+                height: 5,
+                background: "rgba(255,255,255,.08)",
+                borderRadius: 3,
+                overflow: "hidden",
+              }}
+            >
+              <span
+                style={{
+                  display: "block",
+                  height: "100%",
+                  width: `${Math.round((r.score / maxScore) * 100)}%`,
+                  background: "linear-gradient(90deg,var(--accent),#7dffb0)",
+                }}
+              />
+            </span>
+            {r.uri && (
+              <a
+                href={r.uri}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  color: "var(--accent)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  textDecoration: "none",
+                }}
+              >
+                <ExternalLink size={12} /> {linkLabel(r.uri)}
+              </a>
+            )}
+            {!!r.more_matches && r.more_matches > 0 && (
+              <span style={{ color: "var(--text-secondary)" }}>
+                +{r.more_matches} more match{r.more_matches === 1 ? "" : "es"} in this doc
+              </span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── Shared helpers for the KB-PL screens ───────────────────────────────────
+
+const fieldLabel: React.CSSProperties = {
+  display: "block",
+  fontSize: 11,
+  color: "var(--text-secondary)",
+  fontFamily: "monospace",
+  margin: "0 0 6px",
+  textTransform: "uppercase",
+  letterSpacing: 0.5,
+}
+
+function kbplBtn(disabled: boolean): React.CSSProperties {
+  return {
+    fontFamily: "var(--font)",
+    fontSize: 12.5,
+    fontWeight: 700,
+    borderRadius: 10,
+    padding: "12px 18px",
+    cursor: disabled ? "not-allowed" : "pointer",
+    border: "1px solid var(--accent)",
+    color: "var(--accent)",
+    background: "var(--accent-subtle)",
+    opacity: disabled ? 0.5 : 1,
+    whiteSpace: "nowrap",
+  }
+}
+
+function sourcePill(sourceType: string): React.CSSProperties {
+  const c =
+    sourceType === "web"
+      ? "#34e7ff"
+      : sourceType === "paste"
+        ? "#ff45d0"
+        : "var(--text-secondary)"
+  return {
+    fontFamily: "monospace",
+    fontSize: 10,
+    padding: "3px 8px",
+    borderRadius: 6,
+    color: c,
+    border: `1px solid ${c}`,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  }
+}
+
+function linkLabel(uri: string): string {
+  try {
+    const u = new URL(uri)
+    return u.hostname.replace(/^www\./, "")
+  } catch {
+    return "source"
+  }
 }

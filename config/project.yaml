@@ -129,6 +129,11 @@ knowledge_base:
     rerank: false                      # Phase 1: RRF fusion only (no cross-encoder rerank)
   namespaces:
     platform: "kb_platform"            # Phase 1 scope — the platform's own knowledge
+    personal: "kb_personal"            # KB-PL — the user's personal research library (URL/paste ingest)
     project_prefix: "kb_project_"      # Phase 2 (KB-13) — per-app isolation: kb_project_<id>
     memory_prefix: "mem_project_"      # Phase 4 (KB-24) — per-app episodic memory: mem_project_<id>
     agent_memory_prefix: "mem_agent_"  # Phase 4 (KB-24) — cross-project per-agent memory: mem_agent_<id>
+  # KB-PL — personal knowledge library: auto-approve ingested articles so a solo
+  # user (their own curator) skips the pending → approve gate. Default true here
+  # for the single-user deploy; set false to restore the team curation gate.
+  personal_auto_approve: true
