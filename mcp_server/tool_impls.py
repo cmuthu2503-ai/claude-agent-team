@@ -197,8 +197,24 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
         return await _propose("features.generate", target_ref=project_id, payload=payload)
 
     async def generate_tasks(project_id: str) -> Any:
-        """Generate the project's task list. Arg: project_id."""
+        """Generate the project's task list. Arg: project_id. When the project has
+        an epic→feature tree, this produces feature-bound atomic tasks across all
+        features; otherwise it produces a flat list from the PRD."""
         return await _propose("tasks.generate", target_ref=project_id)
+
+    async def generate_tasks_for_epic(project_id: str, epic_id: str) -> Any:
+        """Generate atomic tasks for every feature under ONE epic (BPD Pass 3).
+        Use this to build the plan one epic at a time. Args: project_id, epic_id."""
+        return await _propose(
+            "tasks.generate", target_ref=project_id, payload={"epic_id": epic_id}
+        )
+
+    async def generate_tasks_for_feature(project_id: str, feature_id: str) -> Any:
+        """Generate atomic tasks for a SINGLE feature (BPD Pass 3) — the most
+        granular, fastest scope. Args: project_id, feature_id."""
+        return await _propose(
+            "tasks.generate", target_ref=project_id, payload={"feature_id": feature_id}
+        )
 
     async def generate_build_plan(project_id: str) -> Any:
         """Generate the project's build plan (epics → features → tasks rollup).
@@ -303,6 +319,8 @@ def build_tool_impls(client: BackendClient) -> dict[str, Callable]:
         "generate_epics": generate_epics,
         "generate_features": generate_features,
         "generate_tasks": generate_tasks,
+        "generate_tasks_for_epic": generate_tasks_for_epic,
+        "generate_tasks_for_feature": generate_tasks_for_feature,
         "generate_build_plan": generate_build_plan,
         "dispatch_tasks": dispatch_tasks,
         "submit_request": submit_request,

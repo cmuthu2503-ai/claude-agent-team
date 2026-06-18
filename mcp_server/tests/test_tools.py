@@ -320,6 +320,23 @@ async def test_generate_features_optional_epic():
     assert seen["body"]["payload"] == {"epic_id": "epic-9"}
 
 
+async def test_generate_tasks_scoped_tools_ride_payload():
+    # scoped task generators reuse the tasks.generate action, carrying the
+    # epic_id / feature_id in the payload (target_ref stays the project id).
+    seen, handler = _capture_body()
+    impls = build_tool_impls(_client(handler))
+
+    await impls["generate_tasks_for_epic"]("proj-7", epic_id="epic-3")
+    assert seen["body"]["action_type"] == "tasks.generate"
+    assert seen["body"]["target_ref"] == "proj-7"
+    assert seen["body"]["payload"] == {"epic_id": "epic-3"}
+
+    await impls["generate_tasks_for_feature"]("proj-7", feature_id="feat-5")
+    assert seen["body"]["action_type"] == "tasks.generate"
+    assert seen["body"]["target_ref"] == "proj-7"
+    assert seen["body"]["payload"] == {"feature_id": "feat-5"}
+
+
 async def test_dispatch_tasks_optional_task_ids():
     seen, handler = _capture_body()
     impls = build_tool_impls(_client(handler))
@@ -362,7 +379,8 @@ def test_registry_has_action_and_proposal_read_tools():
         "monitor_list_proposals", "monitor_get_proposal",
         "create_project", "set_project_brief", "update_project_description",
         "generate_prd", "generate_api_spec",
-        "generate_epics", "generate_features", "generate_tasks", "generate_build_plan",
+        "generate_epics", "generate_features", "generate_tasks",
+        "generate_tasks_for_epic", "generate_tasks_for_feature", "generate_build_plan",
         "dispatch_tasks", "submit_request",
     ):
         assert name in impls
