@@ -95,6 +95,7 @@ class IngestionPipeline:
         created_by: str = "system",
         sensitivity: str = "normal",
         project_id: str | None = None,
+        auto_approve: bool = False,
     ) -> IngestResult:
         bucket_ids = bucket_ids or []
         content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -121,15 +122,16 @@ class IngestionPipeline:
             text, source_type=source_type, uri=uri,
             max_tokens=self._max_tokens, overlap_tokens=self._overlap,
         )
+        status = "approved" if auto_approve else "pending"
         if not chunks:
             # Empty/whitespace doc — record it but with no chunks.
             doc_id = await self._write_document(
                 namespace, source_type, title, uri, content_hash,
-                sensitivity, created_by, project_id,
+                sensitivity, created_by, project_id, status,
             )
             if bucket_ids:
                 await self._store.set_document_buckets(doc_id, bucket_ids)
-            return IngestResult(doc_id=doc_id, status="pending", skipped=False,
+            return IngestResult(doc_id=doc_id, status=status, skipped=False,
                                 chunks=0, sensitivity=sensitivity, pii_findings=pii.findings)
 
         # 4. Embed (batch).
@@ -139,7 +141,7 @@ class IngestionPipeline:
         # 5. Write document + chunks.
         doc_id = await self._write_document(
             namespace, source_type, title, uri, content_hash,
-            sensitivity, created_by, project_id,
+            sensitivity, created_by, project_id, status,
         )
         kb_chunks = [
             KbChunk(
@@ -159,9 +161,10 @@ class IngestionPipeline:
         logger.info(
             "kb_ingest_complete", doc_id=doc_id, namespace=namespace,
             chunks=len(kb_chunks), buckets=len(bucket_ids), sensitivity=sensitivity,
+            status=status,
         )
         return IngestResult(
-            doc_id=doc_id, status="pending", skipped=False,
+            doc_id=doc_id, status=status, skipped=False,
             chunks=len(kb_chunks), sensitivity=sensitivity, pii_findings=pii.findings,
         )
 
@@ -170,12 +173,14 @@ class IngestionPipeline:
     async def _write_document(
         self, namespace: str, source_type: str, title: str, uri: str | None,
         content_hash: str, sensitivity: str, created_by: str, project_id: str | None,
+        status: str = "pending",
     ) -> str:
         doc = KbDocument(
             doc_id=f"doc-{uuid.uuid4().hex[:16]}",
             namespace=namespace, source_type=source_type, title=title, uri=uri,
-            content_hash=content_hash, sensitivity=sensitivity, status="pending",
-            curated_by=None, project_id=project_id,
+            content_hash=content_hash, sensitivity=sensitivity, status=status,
+            curated_by=created_by if status == "approved" else None,
+            project_id=project_id,
         )
         await self._store.create_document(doc)
         return doc.doc_id

@@ -46,9 +46,14 @@ class KnowledgeSettings:
     ingest_mode: str
     # Namespaces
     platform_namespace: str
+    personal_namespace: str
     project_namespace_prefix: str
     memory_namespace_prefix: str
     agent_memory_namespace_prefix: str
+    # KB-PL — personal knowledge library: auto-approve ingested articles so a
+    # solo user (their own curator) doesn't need a separate approval step. Stays
+    # False by default so the team build keeps its pending → curator gate.
+    personal_auto_approve: bool
 
     def project_namespace(self, project_id: str) -> str:
         """KB-13 — the isolated namespace for a Project's own knowledge
@@ -118,9 +123,11 @@ class KnowledgeSettings:
             rerank_enabled=bool(ret.get("rerank", False)),
             ingest_mode=str(kb.get("ingest_mode", "inline")),
             platform_namespace=str(ns.get("platform", "kb_platform")),
+            personal_namespace=str(ns.get("personal", "kb_personal")),
             project_namespace_prefix=str(ns.get("project_prefix", "kb_project_")),
             memory_namespace_prefix=str(ns.get("memory_prefix", "mem_project_")),
             agent_memory_namespace_prefix=str(
                 ns.get("agent_memory_prefix", "mem_agent_")
             ),
+            personal_auto_approve=bool(kb.get("personal_auto_approve", False)),
         )

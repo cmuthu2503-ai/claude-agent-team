@@ -217,8 +217,10 @@ def test_settings_memory_namespace_helpers():
         embed_model="m", embed_cache_dir="", dimensions=384, top_k=8,
         hybrid_candidates=40, rerank_enabled=False, ingest_mode="inline",
         platform_namespace="kb_platform",
+        personal_namespace="kb_personal",
         project_namespace_prefix="kb_project_", memory_namespace_prefix="mem_project_",
         agent_memory_namespace_prefix="mem_agent_",
+        personal_auto_approve=False,
     )
     assert s.memory_namespace("P-9") == "mem_project_P-9"
     assert s.agent_memory_namespace("research_specialist") == "mem_agent_research_specialist"

@@ -367,6 +367,194 @@ async def set_document_buckets(
     return _envelope({"doc_id": doc_id, "bucket_ids": body.bucket_ids})
 
 
+# ── Personal Knowledge Library (KB-PL): URL / paste ingest + human search ───
+#
+# The front doors that turn the agent-grounding KB into a personal research
+# library. Three endpoints: ingest-url, ingest-text, search. All ride the
+# existing pipeline + retriever unchanged; they only add the doors the agent
+# team never needed. Personal articles land in the dedicated ``kb_personal``
+# namespace (Q-NS) and may auto-approve (Q-APPROVE) so a solo curator skips the
+# pending gate.
+
+
+def _personal_ns(sub: Any) -> str:
+    return getattr(sub.settings, "personal_namespace", "kb_personal")
+
+
+def _auto_approve(sub: Any, requested: bool | None) -> bool:
+    """Resolve the effective auto-approve: an explicit request wins; otherwise
+    the deployment default (``knowledge_base.personal_auto_approve``)."""
+    if requested is not None:
+        return bool(requested)
+    return bool(getattr(sub.settings, "personal_auto_approve", False))
+
+
+class IngestUrlBody(BaseModel):
+    url: str
+    bucket_ids: list[str] = []
+    title: str | None = None
+    auto_approve: bool | None = None
+
+
+@router.post("/ingest-url")
+async def ingest_url(
+    request: Request,
+    body: IngestUrlBody,
+    user: dict = Depends(require_role("developer", "admin")),
+):
+    """PL-001 — ingest an external web article by URL. Fetches the page via the
+    existing firecrawl scraper, extracts clean markdown, then runs the standard
+    ingest pipeline (hash-dedup → chunk → PII → embed → store) into the
+    personal namespace. Re-posting the same URL is a content-hash no-op
+    (``skipped=true``)."""
+    sub = _require_kb(request)
+    from src.knowledge.web_ingest import ArticleFetchError, fetch_article
+
+    try:
+        article = await fetch_article(body.url)
+    except ArticleFetchError as e:
+        raise HTTPException(status_code=502, detail=f"Could not fetch article: {e}") from e
+
+    result = await sub.pipeline.ingest_text(
+        text=article.text,
+        title=body.title or article.title,
+        source_type="web",
+        namespace=_personal_ns(sub),
+        bucket_ids=body.bucket_ids,
+        uri=article.url,
+        created_by=user.get("username", "unknown"),
+        auto_approve=_auto_approve(sub, body.auto_approve),
+    )
+    await request.app.state.events.emit("knowledge.document.ingested", {
+        "doc_id": result.doc_id, "status": result.status, "skipped": result.skipped,
+        "chunks": result.chunks, "uri": article.url, "source": "url",
+        "by": user.get("username", "unknown"),
+    })
+    logger.info(
+        "kb_ingest_url", doc_id=result.doc_id, status=result.status,
+        skipped=result.skipped, chunks=result.chunks, uri=article.url,
+    )
+    return _envelope({
+        "doc_id": result.doc_id, "status": result.status, "skipped": result.skipped,
+        "chunks": result.chunks, "title": body.title or article.title,
+        "uri": article.url, "bucket_ids": body.bucket_ids,
+    })
+
+
+class IngestTextBody(BaseModel):
+    text: str
+    title: str
+    bucket_ids: list[str] = []
+    source_url: str | None = None
+    auto_approve: bool | None = None
+
+
+@router.post("/ingest-text")
+async def ingest_text_endpoint(
+    request: Request,
+    body: IngestTextBody,
+    user: dict = Depends(require_role("developer", "admin")),
+):
+    """PL-002 — ingest pasted text (the ToS-safe LinkedIn path). Same pipeline
+    as URL ingest; the user supplies the title and an optional source link."""
+    sub = _require_kb(request)
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required.")
+    if not body.title.strip():
+        raise HTTPException(status_code=400, detail="title is required.")
+
+    result = await sub.pipeline.ingest_text(
+        text=text,
+        title=body.title.strip(),
+        source_type="paste",
+        namespace=_personal_ns(sub),
+        bucket_ids=body.bucket_ids,
+        uri=body.source_url,
+        created_by=user.get("username", "unknown"),
+        auto_approve=_auto_approve(sub, body.auto_approve),
+    )
+    await request.app.state.events.emit("knowledge.document.ingested", {
+        "doc_id": result.doc_id, "status": result.status, "skipped": result.skipped,
+        "chunks": result.chunks, "uri": body.source_url, "source": "paste",
+        "by": user.get("username", "unknown"),
+    })
+    logger.info(
+        "kb_ingest_text", doc_id=result.doc_id, status=result.status,
+        skipped=result.skipped, chunks=result.chunks,
+    )
+    return _envelope({
+        "doc_id": result.doc_id, "status": result.status, "skipped": result.skipped,
+        "chunks": result.chunks, "title": body.title.strip(),
+        "uri": body.source_url, "bucket_ids": body.bucket_ids,
+    })
+
+
+class SearchBody(BaseModel):
+    query: str
+    bucket_ids: list[str] = []
+    top_k: int = 10
+
+
+@router.post("/search")
+async def search(
+    request: Request,
+    body: SearchBody,
+    user: dict = Depends(get_current_user),
+):
+    """PL-003 — human search over the personal library. Runs the existing
+    hybrid retriever, de-duplicates to the best chunk per document (PL-009), and
+    returns ranked results each carrying the original source link (``uri``).
+    This is the 'search a topic → get links + references' surface."""
+    sub = _subsystem(request)
+    if sub is None or not getattr(sub, "available", False):
+        return _envelope([], meta={"kb_available": False})
+
+    query = (body.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required.")
+
+    chunks = await sub.retriever.retrieve(
+        query,
+        _personal_ns(sub),
+        bucket_ids=body.bucket_ids or None,
+        agent_id=f"user:{user.get('username', 'unknown')}",
+        top_k=max(1, min(body.top_k, 50)),
+    )
+
+    # PL-009 — collapse to the best-scoring chunk per document so the user sees
+    # N distinct articles, not N chunks of the same one.
+    by_doc: dict[str, dict[str, Any]] = {}
+    for c in chunks:
+        existing = by_doc.get(c.doc_id)
+        if existing is None:
+            by_doc[c.doc_id] = {
+                "doc_id": c.doc_id,
+                "title": c.title,
+                "snippet": _snippet_text(c.text),
+                "score": round(float(c.score), 6),
+                "uri": c.uri,
+                "namespace": c.namespace,
+                "metadata": c.metadata,
+                "more_matches": 0,
+            }
+            continue
+        # Another chunk of a doc we've already seen: count it, and if it scores
+        # higher, promote its snippet/score as the document's representative.
+        existing["more_matches"] += 1
+        if c.score > existing["score"]:
+            existing["score"] = round(float(c.score), 6)
+            existing["snippet"] = _snippet_text(c.text)
+
+    results = sorted(by_doc.values(), key=lambda r: r["score"], reverse=True)
+    return _envelope(results, meta={"kb_available": True, "count": len(results)})
+
+
+def _snippet_text(text: str, n: int = 320) -> str:
+    t = (text or "").strip().replace("\r", "")
+    return t if len(t) <= n else t[:n].rsplit(" ", 1)[0] + " …"
+
+
 # ── Buckets ────────────────────────────────────────────────────────────────
 
 

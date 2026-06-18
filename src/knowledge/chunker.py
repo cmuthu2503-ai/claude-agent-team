@@ -66,7 +66,7 @@ def detect_kind(source_type: str | None, uri: str | None, text: str) -> Kind:
     st = (source_type or "").lower()
     if st in {"code", "repo_code"}:
         return "code"
-    if st in {"prd", "research_output", "lesson", "repo_doc", "build_chat"}:
+    if st in {"prd", "research_output", "lesson", "repo_doc", "build_chat", "web"}:
         return "markdown"
     if uri:
         low = uri.lower()
