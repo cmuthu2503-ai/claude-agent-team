@@ -83,19 +83,18 @@ type AeEventEntry = {
 const AE_EVENT_TTL_MS = 60_000  // events linger 60s in the feed
 const AE_EVENT_MAX = 10          // ring buffer cap
 
-// Each team carries a `weight` that drives the outer grid's
-// `grid-template-columns`. Development + Delivery have more agents
-// (4-5 each vs Planning's 3 and Research/Content's 1), so they get
-// 2× the horizontal space and lay their agent cards out in a nested
-// 2-column grid. Light teams keep a single column. Net effect: no
-// more empty vertical whitespace under Research / Content while
-// Dev/Delivery overflow vertically.
+// Every team is rendered as an equal-width kanban lane (single column
+// of agent cards). The previous asymmetric weighting + nested 2-col
+// grids for Dev/Delivery made the board wider than the viewport
+// (horizontal overflow + a clipped header button) and left cards at
+// different widths / ragged rows. Uniform lanes keep headers and cards
+// aligned and let the board wrap responsively instead of overflowing.
 const TEAMS = [
-  { id: "planning",    label: "Planning",    color: "var(--accent)",                 weight: 1, cols: 1 },
-  { id: "development", label: "Development", color: "var(--info, var(--accent))",    weight: 2, cols: 2 },
-  { id: "delivery",    label: "Delivery",    color: "var(--success)",                weight: 2, cols: 2 },
-  { id: "research",    label: "Research",    color: "var(--warning)",                weight: 1, cols: 1 },
-  { id: "content",     label: "Content",     color: "var(--info, var(--accent))",    weight: 1, cols: 1 },
+  { id: "planning",    label: "Planning",    color: "var(--accent)" },
+  { id: "development", label: "Development", color: "var(--info, var(--accent))" },
+  { id: "delivery",    label: "Delivery",    color: "var(--success)" },
+  { id: "research",    label: "Research",    color: "var(--warning)" },
+  { id: "content",     label: "Content",     color: "var(--info, var(--accent))" },
 ]
 
 // PAM-19 — `modelBadge` removed; replaced by <ModelSelector>'s
@@ -248,7 +247,10 @@ export function TeamStatusPage() {
   // subtask for it OR a single_agent_call is in flight (busy map) —
   // both surfaced as `status === "in_progress"` by /agents.
   const activeAgents = agents.filter((a) => a.status === "in_progress")
-  const gridTemplate = TEAMS.map((t) => `${t.weight}fr`).join(" ")
+  // Uniform, responsive columns — equal-width lanes that fit the
+  // viewport and wrap to a new row on narrower screens rather than
+  // overflowing horizontally.
+  const gridTemplate = "repeat(auto-fit, minmax(280px, 1fr))"
 
   return (
     // Widened from 1400 → 1800 so Dev/Delivery 2-col layouts have
@@ -385,9 +387,9 @@ export function TeamStatusPage() {
                 </div>
               </div>
 
-              {/* Agent cards — single column for light teams, 2-col
-                  grid for Development / Delivery so wider teams fill
-                  horizontally instead of overflowing vertically. */}
+              {/* Agent cards — one per row in a single column so every
+                  card is the same width and the cards line up cleanly
+                  down each lane. */}
               <div
                 style={{
                   background: "var(--bg-secondary)",
@@ -397,7 +399,7 @@ export function TeamStatusPage() {
                   padding: 8,
                   minHeight: 200,
                   display: "grid",
-                  gridTemplateColumns: team.cols === 2 ? "1fr 1fr" : "1fr",
+                  gridTemplateColumns: "1fr",
                   gap: 8,
                   alignContent: "start",
                 }}
@@ -405,7 +407,6 @@ export function TeamStatusPage() {
                 {teamAgents.length === 0 && (
                   <div style={{
                     padding: 24, textAlign: "center", color: "var(--text-muted)", fontSize: 12,
-                    gridColumn: team.cols === 2 ? "1 / -1" : undefined,
                   }}>
                     No agents
                   </div>
