@@ -138,7 +138,7 @@ models:
     tier:             workhorse
     display_name:     "Claude Sonnet 4.6"
     pricing_per_million:
-      input:   3.30        # 3.00 × 1.1 US-geo multiplier  (CONFIRM rate)
+      input:   3.30        # 3.00 × 1.1 US-geo multiplier
       output: 16.50        # 15.00 × 1.1
 
   claude-sonnet-4-7:
@@ -162,7 +162,7 @@ models:
     tier:             fast
     display_name:     "Claude Haiku 4.5"
     pricing_per_million:
-      input:  1.10         # 1.00 × 1.1 US-geo multiplier  (CONFIRM rate)
+      input:  1.10         # 1.00 × 1.1 US-geo multiplier
       output: 5.50         # 5.00 × 1.1
 
   claude-haiku-4-7:
