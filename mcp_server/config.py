@@ -20,6 +20,17 @@ class Settings:
     BACKEND_URL: str = os.getenv("AGENT_TEAM_BACKEND_URL", "http://backend:8000")
     SERVICE_TOKEN: str = os.getenv("AGENT_TEAM_SERVICE_TOKEN", "")
 
+    # Startup role-resolution retry (the cold-boot fix). The server resolves its
+    # role ONCE at boot and registers tools for it; if the backend wasn't healthy
+    # yet (e.g. `docker compose restart agent-team-mcp`, which bypasses
+    # depends_on) the role came back null and ZERO action tools registered for the
+    # whole process lifetime. We now poll the backend for up to
+    # STARTUP_PROBE_TIMEOUT seconds (every STARTUP_PROBE_INTERVAL) so a transient
+    # cold-boot delay no longer leaves the server permanently tool-less. A genuine
+    # auth failure (401/403) is NOT retried — it won't fix itself by waiting.
+    STARTUP_PROBE_TIMEOUT: float = float(os.getenv("MCP_STARTUP_PROBE_TIMEOUT", "90"))
+    STARTUP_PROBE_INTERVAL: float = float(os.getenv("MCP_STARTUP_PROBE_INTERVAL", "3"))
+
     @classmethod
     def summary(cls) -> dict[str, object]:
         """Non-secret config snapshot for the startup banner / health."""
