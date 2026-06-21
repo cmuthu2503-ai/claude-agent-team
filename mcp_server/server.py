@@ -21,11 +21,13 @@ try:  # support both ``python -m mcp_server.server`` and ``python server.py``
     from mcp_server.backend_client import BackendClient, BackendError
     from mcp_server.config import settings
     from mcp_server.manifest import load_manifest, register_tools
+    from mcp_server.role_resolver import resolve_role_with_retry
     from mcp_server.tool_impls import build_tool_impls
 except ModuleNotFoundError:  # pragma: no cover - container runs flat
     from backend_client import BackendClient, BackendError  # type: ignore[no-redef]
     from config import settings  # type: ignore[no-redef]
     from manifest import load_manifest, register_tools  # type: ignore[no-redef]
+    from role_resolver import resolve_role_with_retry  # type: ignore[no-redef]
     from tool_impls import build_tool_impls  # type: ignore[no-redef]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -66,31 +68,9 @@ async def healthz() -> dict:
     }
 
 
-async def _startup_probe(client: BackendClient) -> tuple[bool, str | None]:
-    """Resolve backend reachability (unauthenticated /health) and this server's
-    role (authenticated /service-tokens/me). Best-effort — the server still
-    starts if either fails (healthz reports the problem)."""
-    backend_ok = False
-    role: str | None = None
-    try:
-        await client.get("/api/v1/health")
-        backend_ok = True
-    except BackendError as e:
-        log.warning("backend health probe failed: %s", e)
-    if settings.SERVICE_TOKEN:
-        try:
-            me = await client.get("/api/v1/service-tokens/me")
-            role = (me or {}).get("role")
-        except BackendError as e:
-            log.warning("service-token role resolution failed: %s", e)
-    else:
-        log.warning("AGENT_TEAM_SERVICE_TOKEN not set — no role; backend tools won't register")
-    return backend_ok, role
-
-
 def main() -> None:
     client = BackendClient()
-    backend_ok, role = asyncio.run(_startup_probe(client))
+    backend_ok, role = asyncio.run(resolve_role_with_retry(client))
     _runtime["backend_ok"] = backend_ok
     _runtime["role"] = role
 
