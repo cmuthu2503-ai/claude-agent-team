@@ -7,14 +7,13 @@ import structlog
 from src.agents.base import BaseAgent
 from src.agents.implementations import (
     BackendSpecialistAgent,
+    BusinessAnalystAgent,
     CodeReviewerAgent,
     ContentCreatorAgent,
     DevOpsSpecialistAgent,
     FrontendSpecialistAgent,
-    PRDSpecialistAgent,
     ResearchSpecialistAgent,
     TesterSpecialistAgent,
-    UserStoryAuthorAgent,
 )
 from src.config.loader import ConfigLoader
 
@@ -22,8 +21,7 @@ logger = structlog.get_logger()
 
 # Map agent_id to concrete class
 AGENT_CLASS_MAP: dict[str, type[BaseAgent]] = {
-    "prd_specialist": PRDSpecialistAgent,
-    "user_story_author": UserStoryAuthorAgent,
+    "business_analyst": BusinessAnalystAgent,
     "code_reviewer": CodeReviewerAgent,
     "backend_specialist": BackendSpecialistAgent,
     "frontend_specialist": FrontendSpecialistAgent,

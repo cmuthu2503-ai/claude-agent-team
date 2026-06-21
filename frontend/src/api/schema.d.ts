@@ -1051,7 +1051,7 @@ export interface paths {
         put?: never;
         /**
          * Generate Tasks
-         * @description Run `user_story_author` (single-shot) on the finalized PRD. Replaces
+         * @description Run `business_analyst` (single-shot) on the finalized PRD. Replaces
          *     any existing draft (PRD §4.3 TSK-005). Blocked when a finalized list
          *     already exists — caller must archive that list first (TSK-006).
          *

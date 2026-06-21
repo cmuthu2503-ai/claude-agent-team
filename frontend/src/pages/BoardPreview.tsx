@@ -108,8 +108,8 @@ const FIXTURE: TaskCard[] = [
       { story_id: "US-003", title: "Wire Tailwind + base theme", status: "to_do" },
     ],
     timeline: [
-      { ts: "20:34:44", agent: "prd_specialist", event: "produced PRD" },
-      { ts: "20:36:12", agent: "user_story_author", event: "extracted 3 stories" },
+      { ts: "20:34:44", agent: "business_analyst", event: "produced PRD" },
+      { ts: "20:36:12", agent: "business_analyst", event: "extracted 3 stories" },
       { ts: "20:38:51", agent: "frontend_specialist", event: "cycle 1 — files emitted" },
       { ts: "20:40:22", agent: "code_reviewer", event: "rework requested: missing tailwind.config" },
       { ts: "20:41:55", agent: "frontend_specialist", event: "cycle 2 — files emitted" },

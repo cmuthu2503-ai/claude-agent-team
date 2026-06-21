@@ -5,8 +5,8 @@ import pytest
 from src.agents.factory import AgentFactory
 from src.agents.implementations import (
     BackendSpecialistAgent,
+    BusinessAnalystAgent,
     CodeReviewerAgent,
-    PRDSpecialistAgent,
 )
 from src.agents.registry import AgentRegistry
 from src.config.loader import ConfigLoader
@@ -28,29 +28,32 @@ def config():
 def test_factory_creates_all_agents(config):
     factory = AgentFactory(config)
     agents = factory.create_all()
-    # 15 agents after the phase-AE expansion (added architecture_reviewer,
-    # security_specialist, quality_guardian, ops_heal_agent, self_learning_agent,
-    # project_orchestrator) on top of the original 9.
-    assert len(agents) == 15
-    assert "prd_specialist" in agents
+    # 14 agents: the phase-AE roster (15) minus one after merging
+    # prd_specialist + user_story_author → business_analyst.
+    assert len(agents) == 14
+    assert "business_analyst" in agents
     assert "backend_specialist" in agents
 
 
 def test_factory_creates_correct_types(config):
     factory = AgentFactory(config)
     agents = factory.create_all()
-    assert isinstance(agents["prd_specialist"], PRDSpecialistAgent)
+    assert isinstance(agents["business_analyst"], BusinessAnalystAgent)
     assert isinstance(agents["code_reviewer"], CodeReviewerAgent)
     assert isinstance(agents["backend_specialist"], BackendSpecialistAgent)
 
 
-def test_factory_assigns_correct_models(config):
-    """All agents share the same model on Claude Platform on AWS."""
+def test_factory_assigns_valid_tiered_models(config):
+    """After agent model tiering (PR #42) agents are no longer uniform Opus —
+    each must resolve to an allowed model id (Opus 4.8 / Sonnet 4.6 / Haiku 4.5,
+    or the still-accepted 4.7 variants)."""
+    from src.config.validator import _ALLOWED_AGENT_MODELS
+
     factory = AgentFactory(config)
     agents = factory.create_all()
     for agent_id, agent in agents.items():
-        assert agent.model == "claude-opus-4-8", (
-            f"Agent {agent_id} has model {agent.model!r}; expected claude-opus-4-8"
+        assert agent.model in _ALLOWED_AGENT_MODELS, (
+            f"Agent {agent_id} has unknown model {agent.model!r}"
         )
 
 
@@ -66,7 +69,7 @@ def test_factory_assigns_delegation_targets(config):
 def test_factory_assigns_system_prompt(config):
     factory = AgentFactory(config)
     agents = factory.create_all()
-    assert "PRD" in agents["prd_specialist"].system_prompt
+    assert "PRD" in agents["business_analyst"].system_prompt
     assert "code review" in agents["code_reviewer"].system_prompt.lower()
 
 
@@ -78,8 +81,8 @@ def test_registry_register_and_get(config):
     agents = factory.create_all()
     registry = AgentRegistry()
     registry.register_all(agents)
-    assert registry.count == 15
-    assert registry.get("prd_specialist") is not None
+    assert registry.count == 14
+    assert registry.get("business_analyst") is not None
     assert registry.get("nonexistent") is None
 
 
@@ -101,7 +104,7 @@ def test_registry_agent_ids(config):
     registry = AgentRegistry()
     registry.register_all(agents)
     ids = registry.agent_ids()
-    assert len(ids) == 15
+    assert len(ids) == 14
     assert "tester_specialist" in ids
 
 
@@ -124,7 +127,7 @@ async def test_agent_delegation_check(config):
     cr = agents["code_reviewer"]
     assert cr.can_delegate_to("backend_specialist") is True
     # PRD specialist sits on a different team and isn't reachable from code_reviewer.
-    assert cr.can_delegate_to("prd_specialist") is False
+    assert cr.can_delegate_to("business_analyst") is False
 
 
 # ── Tool Registry Tests ──────────────────────────

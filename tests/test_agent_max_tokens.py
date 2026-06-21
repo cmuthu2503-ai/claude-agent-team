@@ -7,7 +7,7 @@ truncating those mid-stream. The 32K default engages the streaming
 path and gives ~3-5K LOC of headroom — enough for realistic feature
 tasks.
 
-Other agents (PRD, user_story_author, research, content) stay at the
+Other agents (PRD, business_analyst, research, content) stay at the
 8K default since their outputs are short structured documents and
 streaming is unnecessary overhead.
 """
@@ -78,14 +78,14 @@ def test_code_agent_budget_exceeds_streaming_threshold() -> None:
 # ── Non-code agents stay lean ────────────────────────────────────────────────
 
 
-def test_prd_specialist_stays_at_8k() -> None:
+def test_business_analyst_stays_at_8k() -> None:
     """PRD output is structured prose — short, no multi-file blocks.
     Keep the lower cap so non-streaming latency stays fast."""
-    assert _make_agent("prd_specialist")._default_max_tokens() == 8192
+    assert _make_agent("business_analyst")._default_max_tokens() == 8192
 
 
-def test_user_story_author_stays_at_8k() -> None:
-    assert _make_agent("user_story_author")._default_max_tokens() == 8192
+def test_business_analyst_stays_at_8k() -> None:
+    assert _make_agent("business_analyst")._default_max_tokens() == 8192
 
 
 def test_research_specialist_stays_at_8k() -> None:

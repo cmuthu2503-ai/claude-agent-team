@@ -82,8 +82,8 @@ async def seed(db_path: str = "data/agent_team.db") -> None:
     # ── Subtasks for REQ-042 (full pipeline) ───────
     subtasks_042 = [
         ("REQ-042-EL", "REQ-042", "engineering_lead", SubtaskStatus.COMPLETED, now - timedelta(minutes=11), now - timedelta(minutes=10)),
-        ("REQ-042-PRD", "REQ-042", "prd_specialist", SubtaskStatus.COMPLETED, now - timedelta(minutes=10), now - timedelta(minutes=8)),
-        ("REQ-042-US", "REQ-042", "user_story_author", SubtaskStatus.COMPLETED, now - timedelta(minutes=8), now - timedelta(minutes=6)),
+        ("REQ-042-PRD", "REQ-042", "business_analyst", SubtaskStatus.COMPLETED, now - timedelta(minutes=10), now - timedelta(minutes=8)),
+        ("REQ-042-US", "REQ-042", "business_analyst", SubtaskStatus.COMPLETED, now - timedelta(minutes=8), now - timedelta(minutes=6)),
         ("REQ-042-BE", "REQ-042", "backend_specialist", SubtaskStatus.IN_PROGRESS, now - timedelta(minutes=6), None),
         ("REQ-042-FE", "REQ-042", "frontend_specialist", SubtaskStatus.IN_PROGRESS, now - timedelta(minutes=6), None),
         ("REQ-042-CR", "REQ-042", "code_reviewer", SubtaskStatus.IN_PROGRESS, now - timedelta(minutes=3), None),
@@ -297,7 +297,7 @@ async def seed(db_path: str = "data/agent_team.db") -> None:
 
     # ── Documents for REQ-042 (agent outputs) ──────
     docs = [
-        ("doc-042-prd", "REQ-042", "prd", "PRD: Login page with JWT authentication", "prd_specialist",
+        ("doc-042-prd", "REQ-042", "prd", "PRD: Login page with JWT authentication", "business_analyst",
          "# PRD: Login page with JWT authentication\n\n"
          "## Overview\nBuild a complete authentication system with login, registration, JWT token management, and protected routes.\n\n"
          "## Requirements\n"
@@ -308,7 +308,7 @@ async def seed(db_path: str = "data/agent_team.db") -> None:
          "- REQ-005: Login and registration UI pages\n\n"
          "## Non-Functional\n- Passwords hashed with bcrypt\n- JWT expiry: 30 min access, 7 day refresh\n- Rate limiting on auth endpoints"),
 
-        ("doc-042-stories", "REQ-042", "user_stories", "User Stories: Login page with JWT authentication", "user_story_author",
+        ("doc-042-stories", "REQ-042", "user_stories", "User Stories: Login page with JWT authentication", "business_analyst",
          "## User Stories for REQ-042\n\n"
          "### US-001 JWT Authentication API Endpoints\n"
          "**As a** user, **I want** to register and login via REST API **so that** I receive a JWT token.\n"

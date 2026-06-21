@@ -54,7 +54,7 @@ async def test_submit_creates_subtasks(setup):
     subtasks = await state.get_subtasks_for_request(request.request_id)
     assert len(subtasks) > 0
     agent_ids = [s.agent_id for s in subtasks]
-    assert "prd_specialist" in agent_ids
+    assert "business_analyst" in agent_ids
 
 
 async def test_submit_completes_with_mock_executor(setup):
@@ -115,4 +115,6 @@ async def test_doc_workflow_agents_called_in_order(setup):
         for e in collected
         if e["type"] == "agent.started"
     ]
-    assert agent_starts.index("prd_specialist") < agent_starts.index("user_story_author")
+    # The documentation workflow runs the business_analyst for both planning
+    # phases (PRD then user stories), so it is invoked twice.
+    assert agent_starts.count("business_analyst") == 2

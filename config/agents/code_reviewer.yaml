@@ -2,7 +2,7 @@ agent_id: code_reviewer
 display_name: "Code Reviewer"
 role: "Code Reviewer & Development Lead"
 team: development
-reports_to: prd_specialist
+reports_to: business_analyst
 
 model: claude-opus-4-8
 

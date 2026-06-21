@@ -191,8 +191,7 @@ def _enrich_error_with_line_snippets(
 # Simulated processing time per agent (seconds) when using mock executor
 MOCK_AGENT_DELAYS: dict[str, tuple[float, float]] = {
     "engineering_lead": (1.5, 3.0),
-    "prd_specialist": (3.0, 6.0),
-    "user_story_author": (2.0, 4.0),
+    "business_analyst": (3.0, 6.0),
     "code_reviewer": (2.0, 5.0),
     "backend_specialist": (4.0, 8.0),
     "frontend_specialist": (4.0, 8.0),
@@ -685,7 +684,7 @@ class Orchestrator(AgentExecutor):
                 )
 
             # Layer 3: Parse stories and track status through pipeline
-            if agent_id == "user_story_author" and subtask.output_text:
+            if agent_id == "business_analyst" and subtask.output_text:
                 await self._parse_and_save_stories(request_id, subtask.output_text)
             elif agent_id in ("backend_specialist", "frontend_specialist"):
                 await self._update_story_statuses(request_id, agent_id, StoryStatus.IN_PROGRESS)
@@ -1111,8 +1110,7 @@ class Orchestrator(AgentExecutor):
     # ── Document Persistence ───────────────────────
 
     AGENT_DOC_TYPE_MAP = {
-        "prd_specialist": "prd",
-        "user_story_author": "user_stories",
+        "business_analyst": "requirements",
         "backend_specialist": "backend_code",
         "frontend_specialist": "frontend_code",
         "code_reviewer": "code_review",
@@ -1575,8 +1573,7 @@ def _mock_progress_message(agent_id: str, step: int, total: int) -> str:
     """Generate a realistic progress message for mock execution."""
     messages: dict[str, list[str]] = {
         "engineering_lead": ["Analyzing request...", "Decomposing into subtasks...", "Creating delegation plan..."],
-        "prd_specialist": ["Gathering requirements...", "Writing PRD sections...", "Defining acceptance criteria...", "Finalizing document..."],
-        "user_story_author": ["Creating user stories...", "Writing acceptance criteria...", "Assigning priorities..."],
+        "business_analyst": ["Gathering requirements...", "Writing PRD...", "Decomposing into user stories...", "Finalizing plan..."],
         "code_reviewer": ["Setting up feature branch...", "Reviewing code structure...", "Checking code quality...", "Posting review comments..."],
         "backend_specialist": ["Implementing API endpoints...", "Writing database models...", "Creating unit tests...", "Running test suite..."],
         "frontend_specialist": ["Building React components...", "Styling with Tailwind...", "Adding interactions...", "Writing component tests..."],
@@ -1595,13 +1592,9 @@ def _mock_agent_output(agent_id: str, request_id: str, inputs: dict[str, Any]) -
         "engineering_lead": {
             "delegation_plan": f"Delegated {request_id}: planning → development → delivery",
         },
-        "prd_specialist": {
+        "business_analyst": {
             "prd_document": f"# PRD: {desc}\n\n## Requirements\n- REQ-001: Core functionality\n- REQ-002: User interface\n- REQ-003: Testing",
             "artifacts": [f"docs/prd/{request_id}.md"],
-        },
-        "user_story_author": {
-            "user_stories": f"## Stories for {request_id}\n- US-001: Implement core feature\n- US-002: Build UI components\n- US-003: Write tests",
-            "artifacts": [f"docs/stories/{request_id}.md"],
         },
         "code_reviewer": {
             "review_report": f"Code review for {request_id}: All checks passed. Coverage: 85%",

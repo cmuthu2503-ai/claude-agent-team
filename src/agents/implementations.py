@@ -8,27 +8,19 @@ from src.agents.base import BaseAgent
 
 
 
-class PRDSpecialistAgent(BaseAgent):
-    """Creates Product Requirements Documents."""
+class BusinessAnalystAgent(BaseAgent):
+    """Business Analyst — owns the planning chain end to end: authors the PRD,
+    then decomposes the finalized PRD into the epic→feature→task plan (user
+    stories). Merges the former PRDSpecialist + UserStoryAuthor roles, which were
+    sequential, same-domain, same-tier planning work."""
 
     def _parse_output(self, text: str) -> dict[str, Any]:
-        return {"prd_document": text}
+        return {"text": text}
 
     def _extract_artifacts(self, text: str) -> list[str]:
-        # Extract any file paths mentioned
-        paths = re.findall(r'(?:docs|reports)/[\w/.-]+\.md', text)
-        return paths
-
-
-class UserStoryAuthorAgent(BaseAgent):
-    """Creates user stories with acceptance criteria."""
-
-    def _parse_output(self, text: str) -> dict[str, Any]:
-        return {"user_stories": text}
-
-    def _extract_artifacts(self, text: str) -> list[str]:
-        paths = re.findall(r'(?:docs|stories)/[\w/.-]+\.md', text)
-        return paths
+        # Union of the two former roles' artifact locations (PRD/report markdown
+        # + user-story/spec markdown).
+        return re.findall(r'(?:docs|reports|stories)/[\w/.-]+\.md', text)
 
 
 class CodeReviewerAgent(BaseAgent):
