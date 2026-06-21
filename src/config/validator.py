@@ -13,9 +13,18 @@ logger = structlog.get_logger()
 
 SCHEMA_DIR = Path(__file__).parent / "schemas"
 
-# Supported agent models on Claude Platform on AWS. 4.8 is the current default
-# (config/agents/*.yaml); 4.7 stays accepted (same price, still on the account).
-_ALLOWED_AGENT_MODELS = {"claude-opus-4-8", "claude-opus-4-7"}
+# Supported agent models on Claude Platform on AWS. Opus 4.8 for complex coding /
+# reasoning gates, Sonnet 4.6 for documentation / coordination, Haiku 4.5 for
+# deployments / mechanical structured tasks. 4.7 variants stay accepted (still on
+# the account, same price tier).
+_ALLOWED_AGENT_MODELS = {
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-sonnet-4-7",
+    "claude-haiku-4-5",
+    "claude-haiku-4-7",
+}
 
 
 class ValidationError:

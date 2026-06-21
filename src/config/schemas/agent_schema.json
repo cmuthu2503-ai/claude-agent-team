@@ -23,7 +23,14 @@
     },
     "model": {
       "type": "string",
-      "enum": ["claude-opus-4-7"]
+      "enum": [
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-7",
+        "claude-haiku-4-5",
+        "claude-haiku-4-7"
+      ]
     },
     "system_prompt": { "type": "string", "minLength": 10 },
     "responsibilities": {

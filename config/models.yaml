@@ -129,6 +129,18 @@ models:
       input:   5.50        # 5.00 × 1.1 US-geo multiplier
       output: 27.50        # 25.00 × 1.1
 
+  claude-sonnet-4-6:
+    provider_type:    anthropic_aws
+    model_id:         claude-sonnet-4-6
+    api_key_env:      ANTHROPIC_AWS_API_KEY
+    base_url:         null
+    tool_calling_mode: native
+    tier:             workhorse
+    display_name:     "Claude Sonnet 4.6"
+    pricing_per_million:
+      input:   3.30        # 3.00 × 1.1 US-geo multiplier  (CONFIRM rate)
+      output: 16.50        # 15.00 × 1.1
+
   claude-sonnet-4-7:
     provider_type:    anthropic_aws
     model_id:         claude-sonnet-4-7
@@ -140,6 +152,18 @@ models:
     pricing_per_million:
       input:   3.30        # 3.00 × 1.1
       output: 16.50        # 15.00 × 1.1
+
+  claude-haiku-4-5:
+    provider_type:    anthropic_aws
+    model_id:         claude-haiku-4-5    # dated SDK alias if required: claude-haiku-4-5-20251001
+    api_key_env:      ANTHROPIC_AWS_API_KEY
+    base_url:         null
+    tool_calling_mode: native
+    tier:             fast
+    display_name:     "Claude Haiku 4.5"
+    pricing_per_million:
+      input:  1.10         # 1.00 × 1.1 US-geo multiplier  (CONFIRM rate)
+      output: 5.50         # 5.00 × 1.1
 
   claude-haiku-4-7:
     provider_type:    anthropic_aws

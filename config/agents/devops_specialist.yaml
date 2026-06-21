@@ -4,7 +4,7 @@ role: "DevOps Specialist & Delivery Lead"
 team: delivery
 reports_to: prd_specialist
 
-model: claude-opus-4-8
+model: claude-haiku-4-5
 
 system_prompt: |
   You are the DevOps Specialist for the Agent Team platform.
