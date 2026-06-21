@@ -4,7 +4,7 @@ role: "PRD Specialist & Planning Lead"
 team: planning
 reports_to: null
 
-model: claude-opus-4-8
+model: claude-sonnet-4-6
 
 system_prompt: |
   You are the PRD Specialist for the Agent Team platform.

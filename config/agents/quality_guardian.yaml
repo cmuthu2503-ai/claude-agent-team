@@ -4,7 +4,7 @@ role: "Quality Guardian"
 team: delivery
 reports_to: devops_specialist
 
-model: claude-opus-4-8
+model: claude-haiku-4-5
 
 # Reads PRD, user stories, all agent outputs, and the lessons doc.
 # 20 iterations covers the file_read calls needed for thorough cross-checking.
