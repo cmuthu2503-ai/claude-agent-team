@@ -1810,7 +1810,7 @@ async def generate_prd(
 
     try:
         result = await executor.single_agent_call(
-            agent_id="prd_specialist",
+            agent_id="business_analyst",
             prompt=prompt,
             project_artifact_id=new_art.artifact_id,
             project_id=project_id,
@@ -2401,7 +2401,7 @@ async def delete_api_spec(
 
 # ─────────────────────── Project-driven Build: Task List ─────────────────────
 # PDB-16 / PDB-17 / PDB-18. Generates a structured task list from the finalized
-# PRD via user_story_author (single-shot, no workflow). Output is parsed into
+# PRD via business_analyst (single-shot, no workflow). Output is parsed into
 # `project_tasks` rows. The user can edit each row inline and finalize when
 # happy; the dispatcher in Phase C will read these rows to create Requests.
 
@@ -2419,7 +2419,7 @@ _VALID_PRIORITIES = {"low", "medium", "high"}
 _KNOWN_AGENTS = {
     "backend_specialist", "frontend_specialist", "tester_specialist",
     "code_reviewer", "devops_specialist", "content_creator",
-    "research_specialist", "prd_specialist", "user_story_author",
+    "research_specialist", "business_analyst",
 }
 
 
@@ -2469,7 +2469,7 @@ def _task_to_dict(t: ProjectTask) -> dict[str, Any]:
 
 
 def _parse_task_list(agent_output: str) -> tuple[list[dict[str, Any]], str]:
-    """Extract a list of task dicts from the user_story_author output.
+    """Extract a list of task dicts from the business_analyst output.
 
     Strategy (PDB-17):
       1. Prefer a fenced ```json block containing an array of objects. This
@@ -2595,7 +2595,7 @@ async def generate_tasks(
     body: TasksGenerateBody | None = None,
     user: dict = Depends(get_current_user),
 ):
-    """Run `user_story_author` (single-shot) on the finalized PRD. Replaces
+    """Run `business_analyst` (single-shot) on the finalized PRD. Replaces
     any existing draft (PRD §4.3 TSK-005). Blocked when a finalized list
     already exists — caller must archive that list first (TSK-006).
 
@@ -2829,7 +2829,7 @@ async def generate_tasks(
 
     try:
         result = await executor.single_agent_call(
-            agent_id="user_story_author",
+            agent_id="business_analyst",
             prompt=prompt,
             project_artifact_id=None,  # tasks aren't an artifact row
             project_id=project_id,     # but they ARE attributable by project
@@ -4815,7 +4815,7 @@ async def generate_epics(
     )
     try:
         result = await executor.single_agent_call(
-            agent_id="user_story_author",
+            agent_id="business_analyst",
             prompt=prompt,
             project_artifact_id=None,
             project_id=project_id,
@@ -5167,7 +5167,7 @@ async def generate_features(
     )
     try:
         result = await executor.single_agent_call(
-            agent_id="user_story_author",
+            agent_id="business_analyst",
             prompt=prompt,
             project_artifact_id=None,
             project_id=project_id,
@@ -5547,7 +5547,7 @@ async def generate_tasks_for_feature(
     )
     try:
         result = await executor.single_agent_call(
-            agent_id="user_story_author",
+            agent_id="business_analyst",
             prompt=prompt,
             project_artifact_id=None,
             project_id=project_id,

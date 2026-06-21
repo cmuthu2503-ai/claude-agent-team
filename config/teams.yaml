@@ -1,7 +1,7 @@
 teams:
   engineering:
     display_name: "Engineering"
-    lead: prd_specialist
+    lead: business_analyst
     sub_teams: [planning, development, delivery]
     # self_learning_agent is cross-cutting — not scoped to one sub-team
     members: [self_learning_agent]
@@ -9,8 +9,8 @@ teams:
 
   planning:
     display_name: "Planning Team"
-    lead: prd_specialist
-    members: [prd_specialist, user_story_author, project_orchestrator]
+    lead: business_analyst
+    members: [business_analyst, project_orchestrator]
     domain: [requirements, documentation, user-stories, acceptance-criteria]
     parent_team: engineering
 

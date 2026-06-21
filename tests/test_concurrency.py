@@ -152,17 +152,17 @@ async def test_two_concurrent_executes_dont_cross_pollinate(catalog):
     shared_calls: list[tuple[str, str]] = []
     ex, _ = _stub_executor_with_real_resolver(
         catalog,
-        {"prd_specialist": "claude-opus-4-7"},
+        {"business_analyst": "claude-opus-4-7"},
         shared_calls,
     )
 
     # Two requests for the same agent, with different per-request overrides.
     a_task = ex.execute(
-        "prd_specialist", "req-A",
+        "business_analyst", "req-A",
         {"provider": "claude-haiku-4-7", "task": "do A"},
     )
     b_task = ex.execute(
-        "prd_specialist", "req-B",
+        "business_analyst", "req-B",
         {"provider": "claude-sonnet-4-7", "task": "do B"},
     )
 
@@ -190,7 +190,7 @@ async def test_stress_10_concurrent_executes(catalog):
     shared_calls: list[tuple[str, str]] = []
     ex, _ = _stub_executor_with_real_resolver(
         catalog,
-        {"prd_specialist": "claude-opus-4-7"},
+        {"business_analyst": "claude-opus-4-7"},
         shared_calls,
     )
 
@@ -199,7 +199,7 @@ async def test_stress_10_concurrent_executes(catalog):
     async def one(i: int) -> dict[str, Any]:
         m = models[i % len(models)]
         return await ex.execute(
-            "prd_specialist", f"req-{i}",
+            "business_analyst", f"req-{i}",
             {"provider": m, "k": f"task {i}"},
         )
 
@@ -244,17 +244,17 @@ async def test_unknown_request_provider_falls_through_to_yaml(catalog):
     shared_calls: list[tuple[str, str]] = []
     ex, _ = _stub_executor_with_real_resolver(
         catalog,
-        {"prd_specialist": "claude-opus-4-7"},
+        {"business_analyst": "claude-opus-4-7"},
         shared_calls,
     )
 
     # Two concurrent calls: one with a typo, one with a valid override.
     bad = ex.execute(
-        "prd_specialist", "req-bad",
+        "business_analyst", "req-bad",
         {"provider": "claude-not-a-real-model", "task": "x"},
     )
     good = ex.execute(
-        "prd_specialist", "req-good",
+        "business_analyst", "req-good",
         {"provider": "claude-haiku-4-7", "task": "y"},
     )
     r_bad, r_good = await asyncio.gather(bad, good)

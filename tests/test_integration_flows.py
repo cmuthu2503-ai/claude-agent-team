@@ -45,9 +45,9 @@ async def test_feature_flow_creates_all_subtasks(system):
     subtasks = await state.get_subtasks_for_request(request.request_id)
     agent_ids = {s.agent_id for s in subtasks}
 
-    # Feature workflow should involve: prd, user_story_author, backend, frontend, code_reviewer, tester, devops
-    assert "prd_specialist" in agent_ids
-    assert "user_story_author" in agent_ids
+    # Feature workflow should involve: prd, business_analyst, backend, frontend, code_reviewer, tester, devops
+    assert "business_analyst" in agent_ids
+    assert "business_analyst" in agent_ids
     assert "backend_specialist" in agent_ids
     assert "frontend_specialist" in agent_ids
 
@@ -130,8 +130,8 @@ async def test_doc_flow_completes(system):
     assert fetched.status == RequestStatus.COMPLETED
     subtasks = await state.get_subtasks_for_request(request.request_id)
     agents = {s.agent_id for s in subtasks}
-    assert "prd_specialist" in agents
-    assert "user_story_author" in agents
+    assert "business_analyst" in agents
+    assert "business_analyst" in agents
 
 
 # ── Demo Flow ────────────────────────────────────

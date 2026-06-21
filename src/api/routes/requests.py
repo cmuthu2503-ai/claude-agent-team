@@ -114,9 +114,9 @@ def _serialize_workflow(wf: WorkflowDefinition | None) -> dict[str, Any] | None:
                 "parallel": False,
                 "system": len(stage.agents) == 0,
             })
-    # A workflow "produces stories" if it has a stage that runs user_story_author.
+    # A workflow "produces stories" if it has a stage that runs business_analyst.
     produces_stories = any(
-        "user_story_author" in s["agents"] for s in stages
+        "business_analyst" in s["agents"] for s in stages
     )
     return {
         "id": wf.workflow_id,

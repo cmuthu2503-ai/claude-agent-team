@@ -9,12 +9,12 @@ workflows:
     stages:
 
       requirements:
-        agents: [prd_specialist]
+        agents: [business_analyst]
         outputs: [prd_document]
         next: [story_creation]
 
       story_creation:
-        agents: [user_story_author]
+        agents: [business_analyst]
         inputs: [prd_document]
         outputs: [user_stories]
         next: [development]
@@ -107,7 +107,7 @@ workflows:
     stages:
 
       triage:
-        agents: [prd_specialist]
+        agents: [business_analyst]
         outputs: [bug_analysis]
         next: [fix]
 
@@ -168,12 +168,12 @@ workflows:
     stages:
 
       draft:
-        agents: [prd_specialist]
+        agents: [business_analyst]
         outputs: [prd_document]
         next: [stories]
 
       stories:
-        agents: [user_story_author]
+        agents: [business_analyst]
         inputs: [prd_document]
         outputs: [user_stories]
 

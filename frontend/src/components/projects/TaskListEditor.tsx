@@ -434,7 +434,7 @@ export function TaskListEditor({ projectId, onFinalized }: Props) {
             Task List
           </div>
           <p style={{ margin: 0, fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-            No tasks yet. Click below to ask <code>user_story_author</code> to break the finalized PRD into a flat list of buildable tasks. You'll be able to edit each row before finalizing.
+            No tasks yet. Click below to ask <code>business_analyst</code> to break the finalized PRD into a flat list of buildable tasks. You'll be able to edit each row before finalizing.
           </p>
           <div>
             <button type="button" onClick={generate} disabled={busy === "generating"} style={primaryBtn(busy === "generating")}>

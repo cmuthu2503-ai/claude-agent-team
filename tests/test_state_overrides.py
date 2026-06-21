@@ -41,7 +41,7 @@ async def test_multiple_overrides_coexist(store):
         ("backend_specialist", "claude-haiku-4-7"),
         ("tester_specialist",  "claude-sonnet-4-7"),
         ("frontend_specialist", "claude-opus-4-7"),
-        ("prd_specialist",     "claude-haiku-4-7"),
+        ("business_analyst",     "claude-haiku-4-7"),
         ("devops_specialist",  "claude-sonnet-4-7"),
     ]
     for agent_id, model_id in pairs:

@@ -281,7 +281,7 @@ def delete_host_file(project_name: str, filename: str) -> HostWriteResult:
 #     **Status**: Backlog · **Priority**: high · **Agent**: devops_specialist
 #
 #     <description body, including "**Rules**" line + "**Sub-tasks**" bullets
-#      as emitted by the user_story_author prompt>
+#      as emitted by the business_analyst prompt>
 #
 # Phase grouping picks up the "Phase N: <theme>" prefix in each task's
 # title (which the prompt asks the agent to produce). Tasks without

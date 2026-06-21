@@ -2,7 +2,7 @@
 
 Pins:
   - Code-writing agents get the lessons block prepended.
-  - Non-code agents (PRD, user_story_author, etc.) do NOT — keeps their
+  - Non-code agents (PRD, business_analyst, etc.) do NOT — keeps their
     context budget lean.
   - Missing doc soft-fails to no-op; agent still works.
   - Doc content over 30KB is truncated with a marker so the prompt
@@ -92,11 +92,11 @@ def test_devops_specialist_gets_lessons():
 # ── Non-code agents don't get lessons (context budget preserved) ─────────────
 
 
-def test_prd_specialist_does_NOT_get_lessons():
+def test_business_analyst_does_NOT_get_lessons():
     """PRD specialist writes markdown, not code. The technical drop-guard /
     file-write lessons would just be noise in its context. The agent's
     own YAML carries its specific guidance."""
-    agent = _make_agent("prd_specialist")
+    agent = _make_agent("business_analyst")
     prompt = agent._build_system_prompt()
     assert "CROSS-AGENT LESSONS LEARNED" not in prompt
     # Static prompt + date still present
@@ -104,8 +104,8 @@ def test_prd_specialist_does_NOT_get_lessons():
     assert "CURRENT DATE:" in prompt
 
 
-def test_user_story_author_does_NOT_get_lessons():
-    agent = _make_agent("user_story_author")
+def test_business_analyst_does_NOT_get_lessons():
+    agent = _make_agent("business_analyst")
     prompt = agent._build_system_prompt()
     assert "CROSS-AGENT LESSONS LEARNED" not in prompt
 

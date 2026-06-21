@@ -30,7 +30,7 @@ def aggregator():
 def test_valid_delegation(dispatcher):
     # Current per-team delegation graph (config/agents/*.yaml can_delegate_to):
     # code_reviewer leads development and delegates to BE/FE/architecture;
-    # devops_specialist delegates to tester; prd_specialist to user_story_author.
+    # devops_specialist delegates to tester; business_analyst to business_analyst.
     assert dispatcher.validate_delegation("code_reviewer", "backend_specialist") is True
     assert dispatcher.validate_delegation("code_reviewer", "frontend_specialist") is True
     assert dispatcher.validate_delegation("devops_specialist", "tester_specialist") is True
@@ -38,7 +38,7 @@ def test_valid_delegation(dispatcher):
 
 def test_invalid_delegation(dispatcher):
     assert dispatcher.validate_delegation("engineering_lead", "backend_specialist") is False
-    assert dispatcher.validate_delegation("backend_specialist", "prd_specialist") is False
+    assert dispatcher.validate_delegation("backend_specialist", "business_analyst") is False
 
 
 def test_dispatch_valid(dispatcher):

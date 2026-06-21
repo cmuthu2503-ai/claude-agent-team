@@ -13,7 +13,7 @@ Steps:
   6. PATCH /prd { content: ... } — save-draft path works.
   7. PATCH /prd { status: 'finalized' } — finalize succeeds and stamps
      finalized_at + finalized_by.
-  8. POST /tasks/generate — user_story_author returns structured tasks; rows
+  8. POST /tasks/generate — business_analyst returns structured tasks; rows
      persisted with list_status=draft, list_version=1.
   9. PATCH /tasks/{task_id} — inline edit of title + priority round-trips.
  10. POST /tasks/finalize — atomic flip; rows marked list_status=finalized.

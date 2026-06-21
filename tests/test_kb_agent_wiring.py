@@ -16,7 +16,7 @@ from src.tools.registry import ToolRegistry
 _KNOWLEDGE_TOOLS = {"knowledge_search", "knowledge_get", "knowledge_cite", "record_decision"}
 _REASONING_AGENTS = [
     "research_specialist", "content_creator",
-    "architecture_reviewer", "code_reviewer", "prd_specialist",
+    "architecture_reviewer", "code_reviewer", "business_analyst",
 ]
 
 
@@ -32,7 +32,7 @@ def test_new_agents_have_expected_retrieval_modes(cfg):
     # KB-22 adds these three.
     assert modes["architecture_reviewer"] == "agentic"
     assert modes["code_reviewer"] == "agentic"
-    assert modes["prd_specialist"] == "hybrid"
+    assert modes["business_analyst"] == "hybrid"
     # KB-09/17 set these.
     assert modes["research_specialist"] == "hybrid"
     assert modes["content_creator"] == "hybrid"

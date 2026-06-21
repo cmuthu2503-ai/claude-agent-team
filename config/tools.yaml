@@ -8,8 +8,7 @@ tools:
     description: "Create or modify files within the project directory"
     category: core
     available_to:
-      - prd_specialist
-      - user_story_author
+      - business_analyst
       - backend_specialist
       - frontend_specialist
       - devops_specialist
@@ -37,7 +36,7 @@ tools:
     description: "Create issues, manage labels, list PRs, repo operations"
     category: github
     available_to:
-      - user_story_author
+      - business_analyst
       - code_reviewer
       - devops_specialist
 
@@ -203,7 +202,7 @@ tools:
       - research_specialist
       - content_creator
       - architecture_reviewer
-      - prd_specialist
+      - business_analyst
       - code_reviewer
 
   knowledge_get:
@@ -213,7 +212,7 @@ tools:
       - research_specialist
       - content_creator
       - architecture_reviewer
-      - prd_specialist
+      - business_analyst
       - code_reviewer
 
   record_decision:
@@ -223,7 +222,7 @@ tools:
       - research_specialist
       - content_creator
       - architecture_reviewer
-      - prd_specialist
+      - business_analyst
       - code_reviewer
 
   knowledge_cite:
@@ -233,7 +232,7 @@ tools:
       - research_specialist
       - content_creator
       - architecture_reviewer
-      - prd_specialist
+      - business_analyst
       - code_reviewer
 
   recall_memory:
@@ -243,5 +242,5 @@ tools:
       - research_specialist
       - content_creator
       - architecture_reviewer
-      - prd_specialist
+      - business_analyst
       - code_reviewer

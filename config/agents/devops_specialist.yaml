@@ -2,7 +2,7 @@ agent_id: devops_specialist
 display_name: "DevOps Specialist"
 role: "DevOps Specialist & Delivery Lead"
 team: delivery
-reports_to: prd_specialist
+reports_to: business_analyst
 
 model: claude-haiku-4-5
 

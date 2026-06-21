@@ -148,7 +148,7 @@ async def test_record_persists_with_catalog_priced_cost(catalog, state):
     expected = (500 * md.pricing_per_million.input
                 + 1500 * md.pricing_per_million.output) / 1_000_000
     usage = await tracker.record(
-        request_id="req-1", subtask_id="st-1", agent_id="prd_specialist",
+        request_id="req-1", subtask_id="st-1", agent_id="business_analyst",
         model="claude-haiku-4-7", input_tokens=500, output_tokens=1500,
     )
     assert usage.cost_usd == pytest.approx(expected)

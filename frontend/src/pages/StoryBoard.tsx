@@ -67,7 +67,7 @@ const AGENT_STYLES: Record<string, { bg: string; color: string; label: string }>
    its 4 stages, research shows 3, etc.
 
    Per-stage story counts (devCount/reviewCount/etc.) only apply when the
-   workflow also produces story records (i.e. has a user_story_author stage). */
+   workflow also produces story records (i.e. has a business_analyst stage). */
 interface WorkflowStage {
   id: string
   label: string

@@ -102,7 +102,7 @@ class BaseAgent(ABC):
         # REQ-7F2E07 / REQ-5858F5 backend_specialist running out of turns mid-
         # exploration). Default bumped to 15; can be overridden in agent YAML
         # via `max_iterations: N` for code-heavy agents that need more, or
-        # lowered for simple agents like prd_specialist.
+        # lowered for simple agents like business_analyst.
         self.max_iterations = max_iterations
         self._llm_client: Any = None
         self._tool_registry: Any = None

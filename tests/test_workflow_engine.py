@@ -59,7 +59,7 @@ def test_sequential_stage_parsed(workflow_loader):
     wf = workflow_loader.get_workflow("feature_development")
     req_stage = wf.stages["requirements"]
     assert isinstance(req_stage, StageDefinition)
-    assert "prd_specialist" in req_stage.agents
+    assert "business_analyst" in req_stage.agents
 
 
 def test_quality_gates_parsed(workflow_loader):
@@ -128,8 +128,8 @@ async def test_runner_executes_all_stages(workflow_loader, mock_executor):
     runner = WorkflowRunner(executor=mock_executor)
     result = await runner.run(wf, "REQ-TEST", {"description": "test"})
     agents_called = [c["agent_id"] for c in mock_executor.calls]
-    assert "prd_specialist" in agents_called
-    assert "user_story_author" in agents_called
+    assert "business_analyst" in agents_called
+    assert "business_analyst" in agents_called
 
 
 async def test_runner_parallel_execution(workflow_loader, mock_executor):
@@ -146,10 +146,12 @@ async def test_execution_order_respects_dependencies(workflow_loader, mock_execu
     runner = WorkflowRunner(executor=mock_executor)
     await runner.run(wf, "REQ-ORD", {"description": "order test"})
     agents = [c["agent_id"] for c in mock_executor.calls]
-    # PRD must come before user story author
-    prd_idx = agents.index("prd_specialist")
-    us_idx = agents.index("user_story_author")
-    assert prd_idx < us_idx
+    # Planning (business_analyst — runs both the PRD and story-creation stages)
+    # must precede the development specialists.
+    assert "business_analyst" in agents
+    ba_idx = agents.index("business_analyst")
+    assert ba_idx < agents.index("backend_specialist")
+    assert ba_idx < agents.index("frontend_specialist")
 
 
 def test_dependency_resolver(workflow_loader):
@@ -219,7 +221,7 @@ def test_extract_affected_components_only_unknown_returns_none():
 async def test_parallel_skips_backend_when_frontend_only(workflow_loader):
     """If the PRD emits 'frontend', backend_specialist must NOT run in dev stage."""
     mock = MockExecutor(agent_text={
-        "prd_specialist": "## PRD: Neon Theme\n\n**Affected Components:** frontend\n",
+        "business_analyst": "## PRD: Neon Theme\n\n**Affected Components:** frontend\n",
     })
     runner = WorkflowRunner(executor=mock)
     wf = workflow_loader.get_workflow("feature_development")
@@ -232,7 +234,7 @@ async def test_parallel_skips_backend_when_frontend_only(workflow_loader):
 async def test_parallel_skips_frontend_when_backend_only(workflow_loader):
     """Mirror case: backend-only PRD should skip the frontend specialist."""
     mock = MockExecutor(agent_text={
-        "prd_specialist": "## PRD: New Endpoint\n\n**Affected Components:** backend\n",
+        "business_analyst": "## PRD: New Endpoint\n\n**Affected Components:** backend\n",
     })
     runner = WorkflowRunner(executor=mock)
     wf = workflow_loader.get_workflow("feature_development")
@@ -255,7 +257,7 @@ async def test_parallel_runs_both_when_marker_missing(workflow_loader):
 
 async def test_parallel_runs_both_when_marker_lists_both(workflow_loader):
     mock = MockExecutor(agent_text={
-        "prd_specialist": "**Affected Components:** frontend, backend\n",
+        "business_analyst": "**Affected Components:** frontend, backend\n",
     })
     runner = WorkflowRunner(executor=mock)
     wf = workflow_loader.get_workflow("feature_development")
@@ -277,9 +279,9 @@ async def test_bug_fix_review_and_test_runs_regardless_of_affected_components(wo
     to production with no code review and no testing.
     """
     mock = MockExecutor(agent_text={
-        # The triage stage in bug_fix uses prd_specialist; this is where
+        # The triage stage in bug_fix uses business_analyst; this is where
         # affected_components gets extracted.
-        "prd_specialist": (
+        "business_analyst": (
             "## Triage: theme bug\n\n"
             "**Affected Components:** frontend, backend\n\n"
             "### Bug analysis\n..."
@@ -307,7 +309,7 @@ async def test_parallel_skip_only_applies_to_domain_groups(workflow_loader):
     # Use bug_fix again — has groups named 'review' and 'test'. Neither is a
     # domain name, so neither should ever be skipped.
     mock = MockExecutor(agent_text={
-        "prd_specialist": "**Affected Components:** frontend\n",  # only frontend
+        "business_analyst": "**Affected Components:** frontend\n",  # only frontend
     })
     runner = WorkflowRunner(executor=mock)
     wf = workflow_loader.get_workflow("bug_fix")
