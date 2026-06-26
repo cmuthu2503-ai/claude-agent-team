@@ -12,6 +12,7 @@ Confluence space-per-project pattern.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -134,12 +135,23 @@ class IntegrationPublisher:
         creates the JIRA project, and stores the mapping.
         Subsequent calls return the stored key.
         """
-        # Check if we already have a project key stored
+        # Check if we already have a project key stored AND the project exists
         existing = await self._state.get_integration_mapping(
             project_id, _PROJECT_ENTITY, project_id, "jira",
         )
         if existing and existing.external_ref:
-            return existing.external_ref
+            # Verify the JIRA project still exists (not deleted externally)
+            try:
+                def _check():
+                    return self._jira._get_client().get_project(existing.external_ref)
+                if await asyncio.to_thread(_check):
+                    return existing.external_ref
+                else:
+                    logger.info("jira.project_gone_recreating key=%s", existing.external_ref)
+            except Exception:
+                logger.info("jira.project_verify_failed_recreating key=%s", existing.external_ref)
+            # Project is gone — clear stale mapping and create fresh
+            await self._state.delete_integration_mapping(existing.mapping_id)
 
         # Derive key from project slug. JIRA project keys max 10 chars.
         slug = slugify(project_name, separator="")
