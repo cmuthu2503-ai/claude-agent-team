@@ -126,7 +126,7 @@ class JiraCloudClient:
 
             if existing_key:
                 try:
-                    client.update_issue(existing_key, update={
+                    client.update_issue(existing_key, fields={
                         "summary": [{"set": summary}],
                         "description": [{"set": description[:32767]}],
                     })
@@ -175,13 +175,13 @@ class JiraCloudClient:
                 "project": {"key": project_key},
                 "summary": summary,
                 "description": description[:32767],
-                "issuetype": {"name": "Task"},
+                "issuetype": {"name": "Sub-task"},
                 "parent": {"key": parent_epic_key},
             }
 
             if existing_key:
                 try:
-                    client.update_issue(existing_key, update={
+                    client.update_issue(existing_key, fields={
                         "summary": [{"set": summary}],
                         "description": [{"set": description[:32767]}],
                     })
@@ -244,7 +244,7 @@ class JiraCloudClient:
 
             if existing_key:
                 try:
-                    client.update_issue(existing_key, update={
+                    client.update_issue(existing_key, fields={
                         "summary": [{"set": title[:255]}],
                         "description": [{"set": description[:32767]}],
                     })
