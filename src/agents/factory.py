@@ -11,6 +11,7 @@ from src.agents.implementations import (
     CodeReviewerAgent,
     ContentCreatorAgent,
     DevOpsSpecialistAgent,
+    DocumentReviewerAgent,
     FrontendSpecialistAgent,
     ResearchSpecialistAgent,
     TesterSpecialistAgent,
@@ -23,6 +24,7 @@ logger = structlog.get_logger()
 AGENT_CLASS_MAP: dict[str, type[BaseAgent]] = {
     "business_analyst": BusinessAnalystAgent,
     "code_reviewer": CodeReviewerAgent,
+    "document_reviewer": DocumentReviewerAgent,
     "backend_specialist": BackendSpecialistAgent,
     "frontend_specialist": FrontendSpecialistAgent,
     "devops_specialist": DevOpsSpecialistAgent,

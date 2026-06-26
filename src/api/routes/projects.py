@@ -1933,6 +1933,17 @@ async def patch_prd(
             descriptor=f"PRD v{art.version}",
             actor=user.get("username") or user.get("user_id") or "unknown",
         )
+        # ── CJI-03: Publish to Confluence ──
+        pub = getattr(request.app.state, "integration_publisher", None)
+        if pub and pub.confluence_enabled:
+            meta["confluence_push"] = await pub.push_prd(
+                project_id=project_id,
+                project_name=project.name,
+                version=art.version,
+                content=art.content,
+            )
+        else:
+            meta["confluence_push"] = {"skipped": True, "skipped_reason": "confluence_disabled"}
     else:
         art = await state.get_artifact(project_id, ArtifactKind.PRD)
 
@@ -2352,6 +2363,17 @@ async def patch_api_spec(
             descriptor=f"API spec v{art.version}",
             actor=user.get("username") or user.get("user_id") or "unknown",
         )
+        # ── CJI-03: Publish to Confluence ──
+        pub = getattr(request.app.state, "integration_publisher", None)
+        if pub and pub.confluence_enabled:
+            meta["confluence_push"] = await pub.push_api_spec(
+                project_id=project_id,
+                project_name=project.name,
+                version=art.version,
+                content=art.content,
+            )
+        else:
+            meta["confluence_push"] = {"skipped": True, "skipped_reason": "confluence_disabled"}
     else:
         art = await state.get_artifact(project_id, ArtifactKind.API_SPEC)
 
@@ -3990,6 +4012,18 @@ async def finalize_epic_endpoint(
             detail="Cannot finalize an archived epic. Regenerate or restore first.",
         )
     counts = await state.finalize_epic_subtree(epic_id)
+    # ── CJI-06: Publish to JIRA ──
+    pub = getattr(request.app.state, "integration_publisher", None)
+    jira_push = None
+    if pub and pub.jira_enabled:
+        jira_push = await pub.push_epic(
+            project_id=project_id,
+            project_name=project.name,
+            epic_id=epic_id,
+            title=epic.title,
+            description=epic.description or "",
+            acceptance_criteria=epic.acceptance_criteria or "",
+        )
     sync = await _sync_build_plan_to_disk(
         state, project,
         actor=user.get("username") or user.get("user_id") or "unknown",
@@ -4002,7 +4036,7 @@ async def finalize_epic_endpoint(
             "features_finalized": counts["features"],
             "tasks_finalized": counts["tasks"],
         },
-        "meta": {"sync": sync},
+        "meta": {"sync": sync, "jira_push": jira_push.as_dict() if jira_push else {"skipped": True}},
         "error": None,
     }
 
@@ -4036,6 +4070,19 @@ async def finalize_feature_endpoint(
             detail="Cannot finalize an archived feature.",
         )
     counts = await state.finalize_feature_subtree(feature_id)
+    # ── CJI-06: Publish to JIRA ──
+    pub = getattr(request.app.state, "integration_publisher", None)
+    jira_push = None
+    if pub and pub.jira_enabled:
+        jira_push = await pub.push_feature(
+            project_id=project_id,
+            feature_id=feature_id,
+            epic_id=feature.epic_id,
+            title=feature.title,
+            description=feature.description or "",
+            acceptance_criteria=feature.acceptance_criteria or "",
+            depends_on_feature_ids=feature.depends_on if feature.depends_on else None,
+        )
     sync = await _sync_build_plan_to_disk(
         state, project,
         actor=user.get("username") or user.get("user_id") or "unknown",
@@ -4047,7 +4094,7 @@ async def finalize_feature_endpoint(
             "features_finalized": counts["features"],
             "tasks_finalized": counts["tasks"],
         },
-        "meta": {"sync": sync},
+        "meta": {"sync": sync, "jira_push": jira_push.as_dict() if jira_push else {"skipped": True}},
         "error": None,
     }
 

@@ -52,6 +52,11 @@ dependencies = [
     # (Presidio swappable behind src/knowledge/pii.py).
     "pymupdf>=1.24.0",
     "python-docx>=1.1.0",
+    # ── Atlassian Integration (CJI-01) ──
+    # Confluence + JIRA publishing. Uses atlassian-python-api for
+    # Confluence Storage Format conversion (markdown → XHTML) and
+    # JIRA Epic/Story/Sub-task creation + workflow transitions.
+    "atlassian-python-api>=4.0.0",
 ]
 
 [project.optional-dependencies]
