@@ -141,10 +141,19 @@ class IntegrationPublisher:
         if existing and existing.external_ref:
             return existing.external_ref
 
-        # Derive key from project slug
-        slug = slugify(project_name, separator="")
-        derived_key = slug[:10].upper()
-        # JIRA keys must start with a letter and be uppercase alphanumeric
+        # Derive key from project slug.
+        # JIRA project keys are max 10 chars, uppercase alphanumeric.
+        # Strategy: try acronym first (first letter of each word), then
+        # fall back to slug truncation.
+        words = project_name.replace("-", " ").replace("_", " ").split()
+        if len(words) >= 2:
+            acronym = "".join(w[0] for w in words if w).upper()
+            if 2 <= len(acronym) <= 10 and acronym[0].isalpha():
+                derived_key = acronym
+            else:
+                derived_key = slugify(project_name, separator="")[:10].upper()
+        else:
+            derived_key = slugify(project_name, separator="")[:10].upper()
         derived_key = "".join(c for c in derived_key if c.isalnum()).upper()
         if not derived_key or not derived_key[0].isalpha():
             derived_key = "PROJ"
