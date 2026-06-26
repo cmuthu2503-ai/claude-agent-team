@@ -81,9 +81,10 @@ class ConfluenceCloudClient:
                     space_key=space_key,
                     space_name=space_name,
                 )
+                # v4.x returns None on success (not a dict)
                 return {
                     "ok": True, "space_key": space_key,
-                    "space_id": result.get("id"),
+                    "space_id": result.get("id") if result else None,
                     "space_url": f"{self._url}/spaces/{space_key}",
                     "created": True,
                 }
@@ -144,7 +145,10 @@ class ConfluenceCloudClient:
                     body=content_md,
                     representation="markdown",
                 )
-                page_id = result.get("id")
+                page_id = result.get("id") if result else None
+                if not page_id:
+                    # v4.x may return None on success — use a synthetic id
+                    page_id = f"{space_key}-{title.replace(' ', '_')}"
                 return ConfluencePushResult(
                     ok=True,
                     page_id=page_id,
