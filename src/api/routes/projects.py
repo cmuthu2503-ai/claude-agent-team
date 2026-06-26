@@ -4036,7 +4036,7 @@ async def finalize_epic_endpoint(
             "features_finalized": counts["features"],
             "tasks_finalized": counts["tasks"],
         },
-        "meta": {"sync": sync, "jira_push": jira_push.as_dict() if jira_push else {"skipped": True}},
+        "meta": {"sync": sync, "jira_push": jira_push if jira_push else {"skipped": True}},
         "error": None,
     }
 
@@ -4094,7 +4094,7 @@ async def finalize_feature_endpoint(
             "features_finalized": counts["features"],
             "tasks_finalized": counts["tasks"],
         },
-        "meta": {"sync": sync, "jira_push": jira_push.as_dict() if jira_push else {"skipped": True}},
+        "meta": {"sync": sync, "jira_push": jira_push if jira_push else {"skipped": True}},
         "error": None,
     }
 
