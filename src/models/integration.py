@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-EntityType = Literal["prd", "api_spec", "epic", "feature", "task"]
+EntityType = Literal["project", "prd", "api_spec", "epic", "feature", "task"]
 IntegrationName = Literal["confluence", "jira"]
 SyncStatus = Literal["ok", "error", "pending"]
 
