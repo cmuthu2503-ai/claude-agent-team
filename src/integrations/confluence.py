@@ -1,27 +1,26 @@
 """Confluence Cloud integration — space + page management.
 
-Uses ``atlassian-python-api`` under the hood. All external calls are wrapped
-in ``asyncio.to_thread()`` to avoid blocking the FastAPI event loop.
+Converts markdown to Confluence storage format (XHTML) before publishing,
+using Python's ``markdown`` library for the conversion.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
 class ConfluencePushResult:
     """Returned by publish operations. Mirrors HostWriteResult shape."""
-    ok: bool
-    page_id: str | None = None
-    page_url: str | None = None
-    action: str | None = None    # 'created', 'updated', 'skipped'
-    error: str | None = None
-    skipped_reason: str | None = None
+    def __init__(self, ok, page_id=None, page_url=None, action=None, error=None, skipped_reason=None):
+        self.ok = ok
+        self.page_id = page_id
+        self.page_url = page_url
+        self.action = action
+        self.error = error
+        self.skipped_reason = skipped_reason
 
     def as_dict(self) -> dict:
         return {
@@ -32,6 +31,27 @@ class ConfluencePushResult:
             "error": self.error,
             "skipped_reason": self.skipped_reason,
         }
+
+
+def _md_to_storage_format(md_content: str) -> str:
+    """Convert markdown to Confluence Storage Format (XHTML).
+
+    Confluence's wiki representation is NOT markdown — it's a legacy
+    wiki markup. Python's ``markdown`` library converts markdown to
+    clean HTML, which we wrap in the storage-format envelope that
+    Confluence's REST API accepts with ``representation=\"storage\"``.
+    """
+    from markdown import markdown
+
+    html_body = markdown(
+        md_content,
+        extensions=["tables", "fenced_code", "codehilite", "toc", "nl2br"],
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<!DOCTYPE ac:confluence SYSTEM "confluence.dtd">'
+        f"<ac:confluence>{html_body}</ac:confluence>"
+    )
 
 
 class ConfluenceCloudClient:
@@ -56,12 +76,7 @@ class ConfluenceCloudClient:
         return self._client
 
     async def ensure_space(self, space_key: str, space_name: str) -> dict:
-        """Create or retrieve a Confluence space.
-
-        Returns:
-            {ok: bool, space_key: str, space_id: str | None,
-             space_url: str | None, created: bool, error: str | None}
-        """
+        """Create or retrieve a Confluence space."""
         def _run():
             client = self._get_client()
             try:
@@ -74,14 +89,12 @@ class ConfluenceCloudClient:
                         "created": False,
                     }
             except Exception:
-                pass  # Space doesn't exist — create it
-
+                pass
             try:
                 result = client.create_space(
                     space_key=space_key,
                     space_name=space_name,
                 )
-                # v4.x returns None on success (not a dict)
                 return {
                     "ok": True, "space_key": space_key,
                     "space_id": result.get("id") if result else None,
@@ -91,7 +104,6 @@ class ConfluenceCloudClient:
             except Exception as e:
                 logger.warning("confluence.create_space_failed space_key=%s error=%s", space_key, e)
                 return {"ok": False, "space_key": space_key, "error": str(e)}
-
         return await asyncio.to_thread(_run)
 
     async def upsert_page(
@@ -101,24 +113,21 @@ class ConfluenceCloudClient:
         content_md: str,
         existing_page_id: str | None = None,
     ) -> ConfluencePushResult:
-        """Create or update a Confluence page with markdown content.
+        """Create or update a Confluence page.
 
-        Args:
-            space_key: Confluence space key (e.g., 'PROJ').
-            title: Page title (e.g., 'PRD v1').
-            content_md: Markdown content to publish.
-            existing_page_id: If set, update this page instead of creating.
-        """
+        Converts markdown to Confluence Storage Format (XHTML) before
+        publishing, so the content renders correctly in Confluence."""
         def _run() -> ConfluencePushResult:
             client = self._get_client()
+            body = _md_to_storage_format(content_md)
 
             if existing_page_id:
                 try:
                     client.update_page(
                         page_id=existing_page_id,
                         title=title,
-                        body=content_md,
-                        representation="wiki",
+                        body=body,
+                        representation="storage",
                         minor_edit=False,
                     )
                     return ConfluencePushResult(
@@ -128,26 +137,21 @@ class ConfluenceCloudClient:
                         action="updated",
                     )
                 except Exception as e:
-                    logger.warning(
-                        "confluence.update_page_failed page_id=%s error=%s",
-                        existing_page_id, e,
-                    )
+                    logger.warning("confluence.update_page_failed page_id=%s error=%s", existing_page_id, e)
                     return ConfluencePushResult(
                         ok=False, action="updated",
                         error=f"update_page: {e}",
                     )
 
-            # Create new page
             try:
                 result = client.create_page(
                     space=space_key,
                     title=title,
-                    body=content_md,
-                    representation="wiki",
+                    body=body,
+                    representation="storage",
                 )
                 page_id = result.get("id") if result else None
                 if not page_id:
-                    # v4.x may return None on success — use a synthetic id
                     page_id = f"{space_key}-{title.replace(' ', '_')}"
                 return ConfluencePushResult(
                     ok=True,
@@ -156,10 +160,7 @@ class ConfluenceCloudClient:
                     action="created",
                 )
             except Exception as e:
-                logger.warning(
-                    "confluence.create_page_failed space=%s title=%s error=%s",
-                    space_key, title, e,
-                )
+                logger.warning("confluence.create_page_failed space=%s title=%s error=%s", space_key, title, e)
                 return ConfluencePushResult(
                     ok=False, action="created",
                     error=f"create_page: {e}",
@@ -169,10 +170,7 @@ class ConfluenceCloudClient:
 
 
 def create_confluence_client(config: dict | None = None) -> ConfluenceCloudClient | None:
-    """Build a ConfluenceCloudClient from environment + config.
-
-    Returns None when CONFLUENCE_ENABLED is not 'true' or credentials are missing.
-    """
+    """Build a ConfluenceCloudClient from environment + config."""
     import os
 
     enabled = os.getenv("CONFLUENCE_ENABLED", "").strip().lower()
@@ -183,7 +181,6 @@ def create_confluence_client(config: dict | None = None) -> ConfluenceCloudClien
     email = os.getenv("CONFLUENCE_EMAIL", "").strip()
     token = os.getenv("CONFLUENCE_API_TOKEN", "").strip()
 
-    # Fall back to config file
     if config:
         cf = config.get("integrations", {}).get("confluence", {})
         if not url:
@@ -191,7 +188,6 @@ def create_confluence_client(config: dict | None = None) -> ConfluenceCloudClien
         if not email:
             email = cf.get("email", "")
 
-    # Try Docker secret for token
     if not token:
         try:
             from src.utils.secrets import read_secret
