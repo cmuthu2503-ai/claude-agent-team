@@ -86,19 +86,21 @@ class JiraCloudClient:
     # ── Project creation ──────────────────────────────────────
 
     async def create_project(self, key: str, name: str) -> JiraPushResult:
-        """Auto-create a JIRA project via the REST API v3 raw JSON method.
-
-        ``atlassian-python-api`` v4.x dropped ``create_project()``; we use
-        ``create_project_from_raw_json`` with the standard Scrum template body.
-        """
+        """Auto-create a JIRA project via the REST API v3."""
         def _run() -> JiraPushResult:
             client = self._get_client()
+            # Get account ID for lead assignment
+            try:
+                me = client.myself()
+                lead_id = me.get("accountId", "")
+            except Exception:
+                lead_id = ""
             body = {
                 "key": key,
                 "name": name,
                 "projectTypeKey": "software",
-                "templateKey": "com.pyxis.greenhopper.jira:gh-simplified-scrum-classic",
-                "leadAccountId": "",  # will be auto-assigned for single-user instances
+                "templateKey": "com.pyxis.greenhopper.jira:gh-simplified-kanban-classic",
+                "leadAccountId": lead_id,
             }
             try:
                 result = client.create_project_from_raw_json(body)
@@ -181,7 +183,11 @@ class JiraCloudClient:
         depends_on: list[str] | None = None,
         existing_key: str | None = None,
     ) -> JiraPushResult:
-        """Create or update a JIRA Story under a parent Epic."""
+        """Create or update a JIRA Story under a parent Epic.
+
+        Uses the ``parent`` field which works for both Next-Gen (team-managed)
+        and Classic (company-managed) JIRA projects. The Epic Link custom field
+        approach is Classic-only; parent is universal."""
         def _run() -> JiraPushResult:
             client = self._get_client()
             fields = {
@@ -189,18 +195,8 @@ class JiraCloudClient:
                 "summary": title[:255],
                 "description": description[:32767],
                 "issuetype": {"name": "Story"},
+                "parent": {"key": parent_epic_key},
             }
-            try:
-                epic_link_id = None
-                all_fields = client.get_all_fields()
-                for f in all_fields:
-                    if f.get("name", "").lower() == "epic link":
-                        epic_link_id = f["id"]
-                        break
-            except Exception:
-                epic_link_id = "customfield_10014"
-            if epic_link_id:
-                fields[epic_link_id] = parent_epic_key
 
             if existing_key:
                 try:
