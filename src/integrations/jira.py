@@ -1,7 +1,8 @@
 """JIRA Cloud integration — Epic, Story, Sub-task management + status sync.
 
-Uses ``atlassian-python-api`` v4.x under the hood. All external calls are
-wrapped in ``asyncio.to_thread()`` to avoid blocking the FastAPI event loop.
+Uses ``atlassian-python-api`` v4.x. Adapts to JIRA Free tier constraints:
+Epic and Story issue types are premium; we use Task with [EPIC]/[Feature] title
+prefixes and the ``parent`` field for hierarchy. Sub-tasks work natively.
 """
 
 from __future__ import annotations
@@ -15,11 +16,11 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class JiraPushResult:
-    """Returned by JIRA issue operations. Mirrors HostWriteResult shape."""
+    """Returned by JIRA issue operations."""
     ok: bool
     issue_key: str | None = None
     issue_url: str | None = None
-    action: str | None = None    # 'created', 'updated', 'skipped', 'transitioned'
+    action: str | None = None
     error: str | None = None
     skipped_reason: str | None = None
 
@@ -35,7 +36,12 @@ class JiraPushResult:
 
 
 class JiraCloudClient:
-    """Async-safe wrapper around atlassian.Jira (v4.x)."""
+    """Async-safe wrapper around atlassian.Jira (v4.x).
+
+    Adapts to JIRA Free tier: uses ``Task`` for Epics/Features with
+    title prefix convention, and ``Sub-task`` for atomic tasks.
+    Hierarchy is preserved via ``parent`` linking.
+    """
 
     def __init__(self, url: str, email: str, api_token: str, timeout: int = 30) -> None:
         self._url = url.rstrip("/")
@@ -43,8 +49,6 @@ class JiraCloudClient:
         self._token = api_token
         self._timeout = timeout
         self._client = None
-        self._account_id: str | None = None  # cached on first use
-        self._epic_link_field_id: str | None = None
 
     def _get_client(self):
         if self._client is None:
@@ -57,39 +61,12 @@ class JiraCloudClient:
             )
         return self._client
 
-    async def _get_account_id(self) -> str:
-        """Get the Atlassian account ID for the authenticated user."""
-        if self._account_id:
-            return self._account_id
-        def _run():
-            client = self._get_client()
-            me = client.myself()
-            return me.get("accountId", "")
-        self._account_id = await asyncio.to_thread(_run)
-        return self._account_id
-
-    async def _discover_epic_link_id(self) -> str:
-        """Discover the Epic Link custom field ID for this JIRA instance."""
-        if self._epic_link_field_id:
-            return self._epic_link_field_id
-        def _run():
-            client = self._get_client()
-            fields = client.get_all_fields()
-            for f in fields:
-                if f.get("name", "").lower() == "epic link":
-                    return f["id"]
-            logger.warning("epic_link_field_not_found; falling back to customfield_10014")
-            return "customfield_10014"
-        self._epic_link_field_id = await asyncio.to_thread(_run)
-        return self._epic_link_field_id
-
     # ── Project creation ──────────────────────────────────────
 
     async def create_project(self, key: str, name: str) -> JiraPushResult:
-        """Auto-create a JIRA project via the REST API v3."""
+        """Auto-create a JIRA project (Kanban template)."""
         def _run() -> JiraPushResult:
             client = self._get_client()
-            # Get account ID for lead assignment
             try:
                 me = client.myself()
                 lead_id = me.get("accountId", "")
@@ -123,7 +100,7 @@ class JiraCloudClient:
 
         return await asyncio.to_thread(_run)
 
-    # ── Epic ──────────────────────────────────────────────────
+    # ── Epic (as Task with [EPIC] prefix) ─────────────────────
 
     async def upsert_epic(
         self,
@@ -132,21 +109,25 @@ class JiraCloudClient:
         description: str,
         existing_key: str | None = None,
     ) -> JiraPushResult:
-        """Create or update a JIRA Epic issue."""
+        """Create/update a top-level Task representing a platform Epic.
+
+        JIRA Free tier lacks the Epic issue type. We use a Task with
+        ``[EPIC]`` title prefix. Features (also Tasks) link to this
+        via ``parent``."""
         def _run() -> JiraPushResult:
             client = self._get_client()
+            summary = f"[EPIC] {title}"[:255]
             fields = {
                 "project": {"key": project_key},
-                "summary": title[:255],
+                "summary": summary,
                 "description": description[:32767],
-                "issuetype": {"name": "Epic"},
+                "issuetype": {"name": "Task"},
             }
-            fields["customfield_10011"] = title[:255]
 
             if existing_key:
                 try:
                     client.update_issue(existing_key, update={
-                        "summary": [{"set": title[:255]}],
+                        "summary": [{"set": summary}],
                         "description": [{"set": description[:32767]}],
                     })
                     return JiraPushResult(
@@ -167,12 +148,12 @@ class JiraCloudClient:
                     action="created",
                 )
             except Exception as e:
-                logger.warning("jira.create_epic_failed project=%s title=%s error=%s", project_key, title, e)
+                logger.warning("jira.create_epic_task_failed project=%s error=%s", project_key, e)
                 return JiraPushResult(ok=False, action="created", error=str(e))
 
         return await asyncio.to_thread(_run)
 
-    # ── Story ─────────────────────────────────────────────────
+    # ── Feature (as Task with parent link) ─────────────────────
 
     async def upsert_story(
         self,
@@ -183,25 +164,25 @@ class JiraCloudClient:
         depends_on: list[str] | None = None,
         existing_key: str | None = None,
     ) -> JiraPushResult:
-        """Create or update a JIRA Story under a parent Epic.
+        """Create/update a Task representing a platform Feature.
 
-        Uses the ``parent`` field which works for both Next-Gen (team-managed)
-        and Classic (company-managed) JIRA projects. The Epic Link custom field
-        approach is Classic-only; parent is universal."""
+        Linked to the parent Epic Task via ``parent``. Uses ``[Feature]``
+        title prefix for visual grouping in the JIRA board."""
         def _run() -> JiraPushResult:
             client = self._get_client()
+            summary = f"[Feature] {title}"[:255]
             fields = {
                 "project": {"key": project_key},
-                "summary": title[:255],
+                "summary": summary,
                 "description": description[:32767],
-                "issuetype": {"name": "Story"},
+                "issuetype": {"name": "Task"},
                 "parent": {"key": parent_epic_key},
             }
 
             if existing_key:
                 try:
                     client.update_issue(existing_key, update={
-                        "summary": [{"set": title[:255]}],
+                        "summary": [{"set": summary}],
                         "description": [{"set": description[:32767]}],
                     })
                     return JiraPushResult(
@@ -210,7 +191,7 @@ class JiraCloudClient:
                         action="updated",
                     )
                 except Exception as e:
-                    logger.warning("jira.update_story_failed key=%s error=%s", existing_key, e)
+                    logger.warning("jira.update_feature_failed key=%s error=%s", existing_key, e)
                     return JiraPushResult(ok=False, action="updated", error=str(e))
 
             try:
@@ -224,20 +205,20 @@ class JiraCloudClient:
                                 "inwardIssue": {"key": dep_key},
                                 "outwardIssue": {"key": key},
                             })
-                        except Exception as link_err:
-                            logger.warning("jira.link_failed key=%s dep=%s error=%s", key, dep_key, link_err)
+                        except Exception:
+                            pass
                 return JiraPushResult(
                     ok=True, issue_key=key,
                     issue_url=f"{self._url}/browse/{key}",
                     action="created",
                 )
             except Exception as e:
-                logger.warning("jira.create_story_failed project=%s title=%s error=%s", project_key, title, e)
+                logger.warning("jira.create_feature_task_failed project=%s error=%s", project_key, e)
                 return JiraPushResult(ok=False, action="created", error=str(e))
 
         return await asyncio.to_thread(_run)
 
-    # ── Sub-task ──────────────────────────────────────────────
+    # ── Atomic Task (as Sub-task) ──────────────────────────────
 
     async def upsert_subtask(
         self,
@@ -248,7 +229,9 @@ class JiraCloudClient:
         depends_on: list[str] | None = None,
         existing_key: str | None = None,
     ) -> JiraPushResult:
-        """Create or update a JIRA Sub-task under a parent Story."""
+        """Create/update a Sub-task representing a platform atomic task.
+
+        Linked to the parent Feature Task via ``parent``."""
         def _run() -> JiraPushResult:
             client = self._get_client()
             fields = {
@@ -300,7 +283,7 @@ class JiraCloudClient:
     # ── Transitions ───────────────────────────────────────────
 
     async def transition_issue(self, issue_key: str, target_status: str) -> JiraPushResult:
-        """Transition a JIRA issue by status NAME (v4.x API is name-based)."""
+        """Transition a JIRA issue by status name."""
         def _run() -> JiraPushResult:
             client = self._get_client()
             try:
