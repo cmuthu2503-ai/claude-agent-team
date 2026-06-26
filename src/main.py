@@ -14,6 +14,7 @@ from src.api.routes import (
     agents,
     auth,
     cost,
+    council,
     documents,
     knowledge,
     lessons,
@@ -517,6 +518,7 @@ app.include_router(users.router)
 app.include_router(documents.router)
 app.include_router(projects.router)
 app.include_router(cost.router)
+app.include_router(council.router)
 app.include_router(prompts.router)
 app.include_router(lessons.router)
 app.include_router(ops.router)
