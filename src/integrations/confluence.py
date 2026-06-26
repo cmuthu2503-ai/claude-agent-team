@@ -80,7 +80,6 @@ class ConfluenceCloudClient:
                 result = client.create_space(
                     space_key=space_key,
                     space_name=space_name,
-                    description=f"Documentation space for {space_name} — managed by Agent Team Platform.",
                 )
                 return {
                     "ok": True, "space_key": space_key,
