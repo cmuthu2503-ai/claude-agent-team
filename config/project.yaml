@@ -137,3 +137,29 @@ knowledge_base:
   # user (their own curator) skips the pending → approve gate. Default true here
   # for the single-user deploy; set false to restore the team curation gate.
   personal_auto_approve: true
+
+# ── Atlassian Integration (CJI-01) ────────────────────
+# Confluence & JIRA publishing — see docs/prd-confluence-jira-integration.md.
+# Publishing is opt-in: set enabled=true and provide credentials.
+# Credentials can also come from env vars (CONFLUENCE_URL, JIRA_URL, etc.)
+# and Docker secrets (confluence_api_token, jira_api_token).
+integrations:
+  confluence:
+    enabled: false
+    url: ""                                 # e.g. https://your-domain.atlassian.net/wiki
+    email: ""
+    api_token_ref: "confluence_api_token"    # Docker secret name or CONFLUENCE_API_TOKEN env
+    space_key_template: "{slug}"             # {slug} = python-slugify(project_name)
+  jira:
+    enabled: false
+    url: ""                                  # e.g. https://your-domain.atlassian.net
+    email: ""
+    api_token_ref: "jira_api_token"
+    project_key: ""                          # default JIRA project key (overridable per project)
+    status_map:                              # platform task_status → JIRA transition name
+      in_progress: "In Progress"
+      review: "In Review"
+      testing: "In Testing"
+      deployed: "Done"
+      failed: "To Do"
+      cancelled: "Cancelled"

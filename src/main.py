@@ -160,6 +160,43 @@ async def lifespan(app: FastAPI):
     # going through the workflow runner.
     app.state.agent_executor = agent_executor
 
+    # CJI-01 — Integration publisher (Confluence + JIRA).
+    # Initialized AFTER state (the publisher reads/writes integration_mappings)
+    # and AFTER config (reads integration credentials). Both clients are optional
+    # — the publisher gracefully skips when credentials are absent.
+    from src.integrations.confluence import create_confluence_client
+    from src.integrations.jira import create_jira_client
+    from src.integrations.publisher import IntegrationPublisher
+
+    _cfg = config.project if config else {}
+    confluence_client = create_confluence_client(_cfg)
+    jira_client = create_jira_client(_cfg)
+    integration_publisher = IntegrationPublisher(
+        state=state,
+        confluence=confluence_client,
+        jira=jira_client,
+    )
+    app.state.integration_publisher = integration_publisher
+    logger.info(
+        "integration_publisher_initialized",
+        confluence=confluence_client is not None,
+        jira=jira_client is not None,
+    )
+
+    # CJI-07 — JIRA status sync handler.
+    # Listens for project.task_status.changed events and transitions the
+    # corresponding JIRA issue. Registered ONLY when a JIRA client exists.
+    if jira_client:
+        from src.integrations.status_sync import JiraStatusSyncHandler
+        jira_status_map = (
+            _cfg.get("integrations", {}).get("jira", {}).get("status_map", {})
+        )
+        events.on(JiraStatusSyncHandler(
+            state, jira_client,
+            jira_status_map if jira_status_map else None,
+        ))
+        logger.info("jira_status_sync_handler_registered")
+
     # HAI-24 — the approval gate's action registry. Gated action handlers are
     # registered into this by the P3 lifecycle tasks; the confirm endpoint
     # (HAI-26) executes a confirmed proposal through it.
