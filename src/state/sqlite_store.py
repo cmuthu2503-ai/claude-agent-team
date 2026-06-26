@@ -512,6 +512,30 @@ CREATE TABLE IF NOT EXISTS build_session_messages (
 CREATE INDEX IF NOT EXISTS idx_msgs_project_time
     ON build_session_messages(project_id, created_at);
 
+-- ── Integration Mappings (CJI-02) ──────────────────────────────
+-- Tracks Confluence page IDs and JIRA issue keys linked to platform
+-- entities. One row per (entity_type, entity_id, integration).
+-- UNIQUE constraint prevents duplicate mappings for the same entity.
+CREATE TABLE IF NOT EXISTS integration_mappings (
+    mapping_id      TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL,
+    entity_type     TEXT NOT NULL,
+    entity_id       TEXT NOT NULL,
+    integration     TEXT NOT NULL,
+    external_ref    TEXT NOT NULL,
+    external_url    TEXT DEFAULT '',
+    last_synced_at  TEXT,
+    sync_status     TEXT DEFAULT 'ok',
+    sync_error      TEXT,
+    jira_project_key TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT,
+
+    UNIQUE(project_id, entity_type, entity_id, integration)
+);
+CREATE INDEX IF NOT EXISTS idx_integration_mappings_lookup
+    ON integration_mappings(entity_type, entity_id, integration);
+
 -- Prompt Studio
 CREATE TABLE IF NOT EXISTS prompt_sessions (
     session_id TEXT PRIMARY KEY,
@@ -4453,6 +4477,91 @@ class SQLiteStateStore(StateStore):
             f"UPDATE proposals SET {', '.join(sets)} "
             f"WHERE proposal_id = ? AND status = ?",
             tuple(params),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+    # ── Integration Mappings (CJI-02) ──────────────────────────
+
+    def _row_to_integration_mapping(self, row) -> "IntegrationMapping":
+        from src.models.integration import IntegrationMapping
+        def _s(key, default=""):
+            try:
+                v = row[key]
+                return v if v is not None else default
+            except (KeyError, IndexError):
+                return default
+        return IntegrationMapping(
+            mapping_id=row["mapping_id"],
+            project_id=row["project_id"],
+            entity_type=row["entity_type"],
+            entity_id=row["entity_id"],
+            integration=row["integration"],
+            external_ref=row["external_ref"],
+            external_url=_s("external_url"),
+            last_synced_at=(
+                datetime.fromisoformat(row["last_synced_at"])
+                if _s("last_synced_at") else None
+            ),
+            sync_status=_s("sync_status", "ok"),
+            sync_error=_s("sync_error") or None,
+            jira_project_key=_s("jira_project_key") or None,
+            created_at=(
+                datetime.fromisoformat(row["created_at"])
+                if _s("created_at") else datetime.utcnow()
+            ),
+            updated_at=(
+                datetime.fromisoformat(row["updated_at"])
+                if _s("updated_at") else None
+            ),
+        )
+
+    async def upsert_integration_mapping(
+        self, mapping: "IntegrationMapping",
+    ) -> "IntegrationMapping":
+        """Insert or replace an integration mapping. Uses the UNIQUE
+        constraint on (project_id, entity_type, entity_id, integration)
+        so re-publishing the same entity replaces the row atomically."""
+        db = await self._get_db()
+        mapping.updated_at = datetime.utcnow()
+        await db.execute("""
+            INSERT OR REPLACE INTO integration_mappings
+                (mapping_id, project_id, entity_type, entity_id, integration,
+                 external_ref, external_url, last_synced_at, sync_status,
+                 sync_error, jira_project_key, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            mapping.mapping_id, mapping.project_id, mapping.entity_type,
+            mapping.entity_id, mapping.integration, mapping.external_ref,
+            mapping.external_url,
+            mapping.last_synced_at.isoformat() if mapping.last_synced_at else None,
+            mapping.sync_status, mapping.sync_error, mapping.jira_project_key,
+            mapping.created_at.isoformat() if mapping.created_at else datetime.utcnow().isoformat(),
+            mapping.updated_at.isoformat() if mapping.updated_at else None,
+        ))
+        await db.commit()
+        return mapping
+
+    async def get_integration_mapping(
+        self, project_id: str, entity_type: str,
+        entity_id: str, integration: str,
+    ) -> "IntegrationMapping | None":
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM integration_mappings "
+            "WHERE project_id=? AND entity_type=? AND entity_id=? AND integration=?",
+            (project_id, entity_type, entity_id, integration),
+        ) as cur:
+            row = await cur.fetchone()
+            if row is None:
+                return None
+            return self._row_to_integration_mapping(row)
+
+    async def delete_integration_mapping(self, mapping_id: str) -> bool:
+        db = await self._get_db()
+        cur = await db.execute(
+            "DELETE FROM integration_mappings WHERE mapping_id=?",
+            (mapping_id,),
         )
         await db.commit()
         return cur.rowcount > 0

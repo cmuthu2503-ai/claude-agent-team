@@ -5,6 +5,7 @@ import { Navbar } from "./components/layout/Navbar"
 import { Sidebar } from "./components/layout/Sidebar"
 import { CyberpunkOverlay } from "./components/layout/CyberpunkOverlay"
 import { LoginPage } from "./pages/Login"
+import { AgentCouncilPage } from "./pages/AgentCouncil"
 import { CommandCenterPage } from "./pages/CommandCenter"
 import { RequestDetailPage } from "./pages/RequestDetail"
 import { StoryBoardPage } from "./pages/StoryBoard"
@@ -66,6 +67,7 @@ function App() {
                 <Layout>
                   <Routes>
                     <Route path="/" element={<CommandCenterPage />} />
+                    <Route path="/council" element={<AgentCouncilPage />} />
                     <Route path="/projects" element={<ProjectsPage />} />
                     <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
                     <Route path="/request/:requestId" element={<RequestDetailPage />} />

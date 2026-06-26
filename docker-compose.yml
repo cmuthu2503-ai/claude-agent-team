@@ -103,6 +103,18 @@ services:
       # KB-13a — local embedding model cache dir (persisted on the
       # agent-team-fastembed volume).
       - FASTEMBED_CACHE_PATH=/app/.fastembed_cache
+      # ── Atlassian Integration (CJI-01) ────────────────────
+      # Confluence & JIRA publishing. Optional — leave unset to skip.
+      # Credentials can also come from Docker secrets when deployed
+      # (see secrets/README.md and the docker-compose.secrets.yml overlay).
+      - CONFLUENCE_ENABLED=${CONFLUENCE_ENABLED:-}
+      - CONFLUENCE_URL=${CONFLUENCE_URL:-}
+      - CONFLUENCE_EMAIL=${CONFLUENCE_EMAIL:-}
+      - CONFLUENCE_API_TOKEN=${CONFLUENCE_API_TOKEN:-}
+      - JIRA_ENABLED=${JIRA_ENABLED:-}
+      - JIRA_URL=${JIRA_URL:-}
+      - JIRA_EMAIL=${JIRA_EMAIL:-}
+      - JIRA_API_TOKEN=${JIRA_API_TOKEN:-}
     networks:
       - dev-net
     # KB-01 — wait for Postgres to accept connections before boot. The backend

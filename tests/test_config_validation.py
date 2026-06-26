@@ -15,7 +15,7 @@ def config():
 
 
 def test_all_agents_loaded(config):
-    assert len(config.agents) == 14
+    assert len(config.agents) == 15
 
 
 def test_all_teams_loaded(config):

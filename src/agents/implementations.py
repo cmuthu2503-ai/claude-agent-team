@@ -95,3 +95,17 @@ class ContentCreatorAgent(BaseAgent):
 
     def _extract_artifacts(self, text: str) -> list[str]:
         return []
+
+
+class DocumentReviewerAgent(BaseAgent):
+    """Reviews document quality — PRDs, specs, guides, proposals.
+
+    Used by the Agent Council for ad-hoc document quality reviews.
+    Operates via single_call() — one-shot LLM review, no tool-use loop.
+    """
+
+    def _parse_output(self, text: str) -> dict[str, Any]:
+        return {"review_report": text}
+
+    def _extract_artifacts(self, text: str) -> list[str]:
+        return []
