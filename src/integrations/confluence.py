@@ -118,7 +118,7 @@ class ConfluenceCloudClient:
                         page_id=existing_page_id,
                         title=title,
                         body=content_md,
-                        representation="markdown",
+                        representation="wiki",
                         minor_edit=False,
                     )
                     return ConfluencePushResult(
@@ -143,7 +143,7 @@ class ConfluenceCloudClient:
                     space=space_key,
                     title=title,
                     body=content_md,
-                    representation="markdown",
+                    representation="wiki",
                 )
                 page_id = result.get("id") if result else None
                 if not page_id:
