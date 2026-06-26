@@ -96,7 +96,7 @@ else: results["jr_update"] = "SKIP"
 if ek:
     try:
         ts2 = jr.get_issue_transitions(ek)
-        if ts2: jr.issue_transition(ek, ts2[0]["name"]); results["jr_transition"] = "OK"
+        if ts2: jr.issue_transition(ek, str(ts2[0]["id"])); results["jr_transition"] = "OK"
         else: results["jr_transition"] = "OK (no transitions)"
     except Exception as e: results["jr_transition"] = str(e)[:80]
 else: results["jr_transition"] = "SKIP"

@@ -155,12 +155,24 @@ class JiraCloudClient:
         return await asyncio.to_thread(_run)
 
     # Transition
-
     async def transition_issue(self, issue_key: str, target_status: str) -> JiraPushResult:
+        """Transition by discovering available transitions and using the ID."""
         def _run() -> JiraPushResult:
             client = self._get_client()
             try:
-                client.issue_transition(issue_key, target_status)
+                transitions = client.get_issue_transitions(issue_key)
+                tid = None
+                for t in transitions:
+                    if t.get("name", "").lower() == target_status.lower():
+                        tid = t["id"]
+                        break
+                if tid is None:
+                    available = [t.get("name") for t in transitions]
+                    return JiraPushResult(
+                        ok=False, issue_key=issue_key, action="transitioned",
+                        error=f"No transition to '{target_status}'. Available: {available}",
+                    )
+                client.issue_transition(issue_key, str(tid))
                 return JiraPushResult(ok=True, issue_key=issue_key, issue_url=f"{self._url}/browse/{issue_key}", action="transitioned")
             except Exception as e:
                 logger.warning("jira.transition_failed key=%s target=%s error=%s", issue_key, target_status, e)
