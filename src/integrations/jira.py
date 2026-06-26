@@ -1,7 +1,7 @@
 """JIRA Cloud integration — Epic, Story, Sub-task management + status sync.
 
-Uses ``atlassian-python-api`` under the hood. All external calls are wrapped
-in ``asyncio.to_thread()`` to avoid blocking the FastAPI event loop.
+Uses ``atlassian-python-api`` v4.x under the hood. All external calls are
+wrapped in ``asyncio.to_thread()`` to avoid blocking the FastAPI event loop.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ class JiraPushResult:
 
 
 class JiraCloudClient:
-    """Async-safe wrapper around atlassian.Jira."""
+    """Async-safe wrapper around atlassian.Jira (v4.x)."""
 
     def __init__(self, url: str, email: str, api_token: str, timeout: int = 30) -> None:
         self._url = url.rstrip("/")
@@ -43,6 +43,7 @@ class JiraCloudClient:
         self._token = api_token
         self._timeout = timeout
         self._client = None
+        self._account_id: str | None = None  # cached on first use
         self._epic_link_field_id: str | None = None
 
     def _get_client(self):
@@ -56,43 +57,51 @@ class JiraCloudClient:
             )
         return self._client
 
+    async def _get_account_id(self) -> str:
+        """Get the Atlassian account ID for the authenticated user."""
+        if self._account_id:
+            return self._account_id
+        def _run():
+            client = self._get_client()
+            me = client.myself()
+            return me.get("accountId", "")
+        self._account_id = await asyncio.to_thread(_run)
+        return self._account_id
+
     async def _discover_epic_link_id(self) -> str:
         """Discover the Epic Link custom field ID for this JIRA instance."""
         if self._epic_link_field_id:
             return self._epic_link_field_id
-
         def _run():
             client = self._get_client()
             fields = client.get_all_fields()
             for f in fields:
                 if f.get("name", "").lower() == "epic link":
                     return f["id"]
-            # Common default across JIRA Cloud instances
             logger.warning("epic_link_field_not_found; falling back to customfield_10014")
             return "customfield_10014"
-
         self._epic_link_field_id = await asyncio.to_thread(_run)
         return self._epic_link_field_id
 
+    # ── Project creation ──────────────────────────────────────
+
     async def create_project(self, key: str, name: str) -> JiraPushResult:
-        """Auto-create a JIRA project for a platform project.
+        """Auto-create a JIRA project via the REST API v3 raw JSON method.
 
-        Called on first Epic finalize when no JIRA project exists for this
-        platform project yet. Uses the Scrum template by default.
-
-        Args:
-            key: Derived project key (e.g., 'MYSAAS' from 'my-saas-app').
-            name: Platform project name (becomes JIRA project name).
+        ``atlassian-python-api`` v4.x dropped ``create_project()``; we use
+        ``create_project_from_raw_json`` with the standard Scrum template body.
         """
         def _run() -> JiraPushResult:
             client = self._get_client()
+            body = {
+                "key": key,
+                "name": name,
+                "projectTypeKey": "software",
+                "templateKey": "com.pyxis.greenhopper.jira:gh-simplified-scrum-classic",
+                "leadAccountId": "",  # will be auto-assigned for single-user instances
+            }
             try:
-                result = client.create_project(
-                    key=key,
-                    name=name,
-                    project_type_key="software",
-                    template_key="com.pyxis.greenhopper.jira:gh-simplified-scrum-classic",
-                )
+                result = client.create_project_from_raw_json(body)
                 project_key = result.get("key", key)
                 return JiraPushResult(
                     ok=True, issue_key=project_key,
@@ -101,7 +110,6 @@ class JiraCloudClient:
                 )
             except Exception as e:
                 err = str(e)
-                # If project already exists (race), treat as success
                 if "already exists" in err.lower() or "duplicate" in err.lower():
                     return JiraPushResult(
                         ok=True, issue_key=key,
@@ -113,6 +121,8 @@ class JiraCloudClient:
 
         return await asyncio.to_thread(_run)
 
+    # ── Epic ──────────────────────────────────────────────────
+
     async def upsert_epic(
         self,
         project_key: str,
@@ -120,14 +130,7 @@ class JiraCloudClient:
         description: str,
         existing_key: str | None = None,
     ) -> JiraPushResult:
-        """Create or update a JIRA Epic issue.
-
-        Args:
-            project_key: JIRA project key (e.g., 'PROJ').
-            title: Epic name (becomes issue summary).
-            description: Epic description.
-            existing_key: If set, update this issue instead of creating.
-        """
+        """Create or update a JIRA Epic issue."""
         def _run() -> JiraPushResult:
             client = self._get_client()
             fields = {
@@ -136,13 +139,13 @@ class JiraCloudClient:
                 "description": description[:32767],
                 "issuetype": {"name": "Epic"},
             }
-            fields["customfield_10011"] = title[:255]  # Epic Name field (standard ID)
+            fields["customfield_10011"] = title[:255]
 
             if existing_key:
                 try:
-                    client.update_issue(existing_key, fields={
-                        "summary": title[:255],
-                        "description": description[:32767],
+                    client.update_issue(existing_key, update={
+                        "summary": [{"set": title[:255]}],
+                        "description": [{"set": description[:32767]}],
                     })
                     return JiraPushResult(
                         ok=True, issue_key=existing_key,
@@ -167,6 +170,8 @@ class JiraCloudClient:
 
         return await asyncio.to_thread(_run)
 
+    # ── Story ─────────────────────────────────────────────────
+
     async def upsert_story(
         self,
         project_key: str,
@@ -185,7 +190,6 @@ class JiraCloudClient:
                 "description": description[:32767],
                 "issuetype": {"name": "Story"},
             }
-            # Epic Link via custom field
             try:
                 epic_link_id = None
                 all_fields = client.get_all_fields()
@@ -200,9 +204,9 @@ class JiraCloudClient:
 
             if existing_key:
                 try:
-                    client.update_issue(existing_key, fields={
-                        "summary": title[:255],
-                        "description": description[:32767],
+                    client.update_issue(existing_key, update={
+                        "summary": [{"set": title[:255]}],
+                        "description": [{"set": description[:32767]}],
                     })
                     return JiraPushResult(
                         ok=True, issue_key=existing_key,
@@ -219,9 +223,13 @@ class JiraCloudClient:
                 if depends_on:
                     for dep_key in depends_on:
                         try:
-                            client.create_issue_link("depends on", key, dep_key)
+                            client.create_issue_link(data={
+                                "type": {"name": "Blocks"},
+                                "inwardIssue": {"key": dep_key},
+                                "outwardIssue": {"key": key},
+                            })
                         except Exception as link_err:
-                            logger.warning("jira.link_failed inward=%s outward=%s error=%s", key, dep_key, link_err)
+                            logger.warning("jira.link_failed key=%s dep=%s error=%s", key, dep_key, link_err)
                 return JiraPushResult(
                     ok=True, issue_key=key,
                     issue_url=f"{self._url}/browse/{key}",
@@ -232,6 +240,8 @@ class JiraCloudClient:
                 return JiraPushResult(ok=False, action="created", error=str(e))
 
         return await asyncio.to_thread(_run)
+
+    # ── Sub-task ──────────────────────────────────────────────
 
     async def upsert_subtask(
         self,
@@ -255,9 +265,9 @@ class JiraCloudClient:
 
             if existing_key:
                 try:
-                    client.update_issue(existing_key, fields={
-                        "summary": title[:255],
-                        "description": description[:32767],
+                    client.update_issue(existing_key, update={
+                        "summary": [{"set": title[:255]}],
+                        "description": [{"set": description[:32767]}],
                     })
                     return JiraPushResult(
                         ok=True, issue_key=existing_key,
@@ -273,7 +283,11 @@ class JiraCloudClient:
                 if depends_on:
                     for dep_key in depends_on:
                         try:
-                            client.create_issue_link("depends on", key, dep_key)
+                            client.create_issue_link(data={
+                                "type": {"name": "Blocks"},
+                                "inwardIssue": {"key": dep_key},
+                                "outwardIssue": {"key": key},
+                            })
                         except Exception:
                             pass
                 return JiraPushResult(
@@ -287,29 +301,14 @@ class JiraCloudClient:
 
         return await asyncio.to_thread(_run)
 
-    async def transition_issue(self, issue_key: str, target_status: str) -> JiraPushResult:
-        """Transition a JIRA issue to a target status.
+    # ── Transitions ───────────────────────────────────────────
 
-        Discovers available transitions and selects the one whose name
-        matches ``target_status`` (case-insensitive).
-        """
+    async def transition_issue(self, issue_key: str, target_status: str) -> JiraPushResult:
+        """Transition a JIRA issue by status NAME (v4.x API is name-based)."""
         def _run() -> JiraPushResult:
             client = self._get_client()
             try:
-                transitions = client.get_issue_transitions(issue_key)
-                transition_id = None
-                for t in transitions:
-                    if t.get("name", "").lower() == target_status.lower():
-                        transition_id = t["id"]
-                        break
-                if transition_id is None:
-                    available = [t.get("name") for t in transitions]
-                    return JiraPushResult(
-                        ok=False, issue_key=issue_key,
-                        action="transitioned",
-                        error=f"No transition to '{target_status}'. Available: {available}",
-                    )
-                client.issue_transition(issue_key, transition_id)
+                client.issue_transition(issue_key, target_status)
                 return JiraPushResult(
                     ok=True, issue_key=issue_key,
                     issue_url=f"{self._url}/browse/{issue_key}",
