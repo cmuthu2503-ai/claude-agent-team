@@ -62,7 +62,6 @@ class JiraCloudClient:
             body = {
                 "key": key, "name": name,
                 "projectTypeKey": "software",
-                "templateKey": "com.pyxis.greenhopper.jira:gh-simplified-kanban-classic",
                 "leadAccountId": lead_id,
             }
             try:
