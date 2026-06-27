@@ -191,14 +191,6 @@ class IntegrationPublisher:
             project_key=pk, title=title, description=desc,
             existing_key=existing_key,
         )
-        # If project was asynchronously deleted, it was recreated inside
-        # upsert_epic. Retry once with the fresh project.
-        if not result.ok and "project_recreated_retry" in (result.error or ""):
-            logger.info("jira.epic_retry_after_recreate project=%s epic=%s", pk, epic_id)
-            result = await self._jira.upsert_epic(
-                project_key=pk, title=title, description=desc,
-                existing_key=existing_key,
-            )
         if result.ok:
             await self._state.upsert_integration_mapping(IntegrationMapping(
                 mapping_id=f"map-{uuid.uuid4().hex[:8]}",
