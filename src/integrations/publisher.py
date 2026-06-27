@@ -12,7 +12,6 @@ Confluence space-per-project pattern.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from typing import Any
@@ -135,24 +134,6 @@ class IntegrationPublisher:
         creates the JIRA project, and stores the mapping.
         Subsequent calls return the stored key.
         """
-        # Check if we already have a project key stored AND the project exists
-        existing = await self._state.get_integration_mapping(
-            project_id, _PROJECT_ENTITY, project_id, "jira",
-        )
-        if existing and existing.external_ref:
-            # Verify the JIRA project still exists (not deleted externally)
-            try:
-                def _check():
-                    return self._jira._get_client().get_project(existing.external_ref)
-                if await asyncio.to_thread(_check):
-                    return existing.external_ref
-                else:
-                    logger.info("jira.project_gone_recreating key=%s", existing.external_ref)
-            except Exception:
-                logger.info("jira.project_verify_failed_recreating key=%s", existing.external_ref)
-            # Project is gone — clear stale mapping and create fresh
-            await self._state.delete_integration_mapping(existing.mapping_id)
-
         # Derive key from project slug. JIRA project keys max 10 chars.
         slug = slugify(project_name, separator="")
         derived_key = slug[:10].upper()
@@ -160,29 +141,30 @@ class IntegrationPublisher:
         if not derived_key or not derived_key[0].isalpha():
             derived_key = "PROJ"
 
+        # Try to create. Idempotent — if project already exists, returns
+        # existing_project action. If deleted externally, recreates it.
         result = await self._jira.create_project(derived_key, project_name)
-        if not result.ok:
+        if result.ok:
+            # Always refresh the mapping with the fresh key
+            await self._state.upsert_integration_mapping(IntegrationMapping(
+                mapping_id=f"map-{uuid.uuid4().hex[:8]}",
+                project_id=project_id, entity_type=_PROJECT_ENTITY,
+                entity_id=project_id, integration="jira",
+                external_ref=result.issue_key or derived_key,
+                external_url=result.issue_url or "",
+                jira_project_key=result.issue_key or derived_key, sync_status="ok",
+            ))
+            logger.info(
+                "jira_project_auto_created platform_project=%s jira_key=%s slug=%s",
+                project_id, result.issue_key or derived_key, derived_key,
+            )
+            return result.issue_key or derived_key
+        else:
             logger.warning(
                 "jira_auto_create_project_failed project=%s key=%s error=%s",
                 project_id, derived_key, result.error,
             )
             return None
-
-        jira_key = result.issue_key or derived_key
-        # Store the mapping so subsequent calls reuse it
-        await self._state.upsert_integration_mapping(IntegrationMapping(
-            mapping_id=f"map-{uuid.uuid4().hex[:8]}",
-            project_id=project_id, entity_type=_PROJECT_ENTITY,
-            entity_id=project_id, integration="jira",
-            external_ref=jira_key,
-            external_url=f"https://cmuthu2503.atlassian.net/projects/{jira_key}",
-            jira_project_key=jira_key, sync_status="ok",
-        ))
-        logger.info(
-            "jira_project_auto_created platform_project=%s jira_key=%s slug=%s",
-            project_id, jira_key, derived_key,
-        )
-        return jira_key
 
     async def push_epic(
         self, project_id: str, project_name: str, epic_id: str,
