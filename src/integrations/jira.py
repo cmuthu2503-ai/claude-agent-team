@@ -95,6 +95,24 @@ class JiraCloudClient:
                 key = result.get("key")
                 return JiraPushResult(ok=True, issue_key=key, issue_url=f"{self._url}/browse/{key}", action="created")
             except Exception as e:
+                err = str(e)
+                # JIRA async deletion: project appears to exist but isn't ready.
+                # Re-create the project and retry once.
+                if "doesn't exist" in err.lower() or "not found" in err.lower():
+                    logger.info("jira.project_gone_recreating project=%s", project_key)
+                    try:
+                        me = client.myself()
+                        client.create_project_from_raw_json({
+                            "key": project_key, "name": project_key,
+                            "projectTypeKey": "software",
+                            "leadAccountId": me.get("accountId", ""),
+                        })
+                    except Exception as pe:
+                        if "already exists" in str(pe).lower():
+                            pass  # project already being recreated, retry once
+                        else:
+                            logger.warning("jira.recreate_project_failed key=%s error=%s", project_key, pe)
+                    return JiraPushResult(ok=False, action="created", error=f"project_recreated_retry: {err}")
                 logger.warning("jira.create_epic_failed project=%s error=%s", project_key, e)
                 return JiraPushResult(ok=False, action="created", error=str(e))
         return await asyncio.to_thread(_run)

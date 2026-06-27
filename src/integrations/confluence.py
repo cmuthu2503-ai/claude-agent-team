@@ -137,11 +137,16 @@ class ConfluenceCloudClient:
                         action="updated",
                     )
                 except Exception as e:
-                    logger.warning("confluence.update_page_failed page_id=%s error=%s", existing_page_id, e)
-                    return ConfluencePushResult(
-                        ok=False, action="updated",
-                        error=f"update_page: {e}",
-                    )
+                    err = str(e)
+                    # If page was deleted, fall through to create a new one
+                    if "no content" in err.lower() or "not found" in err.lower():
+                        logger.info("confluence.page_deleted_falling_back_to_create page_id=%s", existing_page_id)
+                    else:
+                        logger.warning("confluence.update_page_failed page_id=%s error=%s", existing_page_id, e)
+                        return ConfluencePushResult(
+                            ok=False, action="updated",
+                            error=f"update_page: {e}",
+                        )
 
             try:
                 result = client.create_page(
